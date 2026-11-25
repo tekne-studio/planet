@@ -107,20 +107,24 @@ func TestARunnerThatKeepsTheContractOfAJudgeIsHosted(t *testing.T) {
 
 // Every way a runner can fail a judgement refuses the file with a code of
 // the judge's own, within the deadline and the memory's ceiling, and the
-// next judgement runs on a fresh instance.
+// next judgement runs on a fresh instance. Only the check without end is
+// given a short deadline, since the deadline is what ends it: one that
+// traps ends by itself, and under the judge's own deadline a slow machine
+// never turns its trap into a late one.
 func TestARunnerThatFailsAJudgementRefusesTheFile(t *testing.T) {
-	const within = 200 * time.Millisecond
+	const short = 200 * time.Millisecond
 	forever := []byte{0x03, 0x40, 0x0c, 0x00, 0x0b} // loop; br 0; end
 	growing := []byte{0x03, 0x40, 0x41, 0x01, 0x40, 0x00, 0x41, 0x7f, 0x47, 0x0d, 0x00, 0x0b, 0x00}
 	for _, c := range []struct {
-		what  string
-		check []byte
-		file  []byte
-		out   []byte
-		code  string
+		what   string
+		check  []byte
+		file   []byte
+		out    []byte
+		within time.Duration
+		code   string
 	}{
 		// Its check on a file of 0xff, and keeps any other.
-		{what: "a check without end", check: w.Join(firstIsFF, []byte{0x04, 0x40}, forever, []byte{0x0b}, w.I32(0)), code: Late},
+		{what: "a check without end", check: w.Join(firstIsFF, []byte{0x04, 0x40}, forever, []byte{0x0b}, w.I32(0)), within: short, code: Late},
 		{what: "a check that asks the engine for a game", check: w.Join(firstIsFF, []byte{0x04, 0x7f}, w.I32(0), w.I32(0), []byte{0x10, 0x00, 0x05}, w.I32(0), []byte{0x0b}), code: Trapped},
 		{what: "a check that traps", check: w.Join(firstIsFF, []byte{0x04, 0x40, 0x00, 0x0b}, w.I32(0)), code: Trapped},
 		// Grows a page at a time until it is told no, and then traps, as
@@ -132,6 +136,10 @@ func TestARunnerThatFailsAJudgementRefusesTheFile(t *testing.T) {
 		runner.check = c.check
 		if c.out != nil {
 			runner.out = c.out
+		}
+		within := deadline
+		if c.within != 0 {
+			within = c.within
 		}
 		j := hosted(t, runner, within)
 		began := time.Now()
