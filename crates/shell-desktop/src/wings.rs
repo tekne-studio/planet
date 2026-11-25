@@ -1,10 +1,11 @@
 //! Pictures of a horse's wings, with a fixed clock and seed: how a wing
 //! is looked at. `bun run shot --wings out/wings` writes, for the look
-//! `--look` born with wings in each coat a pegasus wears, a sheet of each: the
-//! wings opening at the top of its spring off the ground, a beat in eight seen from
-//! its side, from over it and from under it, a glide, and a landing as
-//! they fold away. `--yaw`, `--against-sun` and `--clock` aim the eye as
-//! for `--animals`.
+//! `--look` born with wings in each coat a pegasus wears, a sheet of each:
+//! the wings opening at the top of its spring off the ground and folding
+//! away as it lands, every frame at 60 a second, seen from its side, from
+//! behind it and from over it; a beat in eight seen from its side, from
+//! over it and from under it; and a glide. `--yaw`, `--against-sun` and
+//! `--clock` aim the eye as for `--animals`.
 
 use std::path::Path;
 
@@ -15,8 +16,11 @@ use render::write_png;
 
 use crate::animals::{Land, View, flattest, looking, side_by_side};
 
-/// Pictures in a sheet.
+/// Pictures in a sheet of a beat or a glide.
 const STEPS: usize = 8;
+/// Opening and folding are drawn every frame of 60 a second, from the
+/// frame before they start to the frame after they end.
+const FRAME_S: f64 = 1.0 / 60.0;
 /// The steps it is stepped in between pictures, seconds.
 const TICK_S: f64 = 1.0 / 240.0;
 /// How far from the animal the eye stands, metres: far enough for a span
@@ -26,10 +30,9 @@ const AWAY_M: f64 = 6.0;
 const OVER_M: f64 = 6.0;
 const ASIDE_M: f64 = 2.0;
 /// Taking off: how high it climbs from the top of its spring, metres,
-/// over how long, seconds, and how long the sheet covers from the press.
+/// over how long, seconds.
 const RISE_M: f64 = 3.0;
 const RISE_S: f64 = 1.4;
-const OPEN_S: f64 = 0.7;
 /// Flying: how fast, metres a second, how fast it climbs as it beats, and
 /// how high it flies, metres.
 const FLY_MPS: f64 = 18.0;
@@ -54,9 +57,13 @@ struct Flight<'a> {
     at: &'a dyn Fn(f64) -> (f64, f64),
     /// Whether its wings are out at a time.
     out: &'a dyn Fn(f64) -> bool,
-    /// When the pictures start and how long they cover, seconds.
+    /// When the pictures start and how long they cover, seconds, and how
+    /// many there are.
     from_s: f64,
     span_s: f64,
+    steps: usize,
+    /// The eyes it is seen from, by name.
+    seen: &'a [&'a str],
     /// How far the eye is raised over its place, metres: near the ground,
     /// over the grass.
     raised_m: f64,
@@ -97,6 +104,7 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
     let toward_eye = DQuat::from_axis_angle(up, -view.yaw_deg.to_radians()) * side;
     let eyes = [
         ("", toward_eye * AWAY_M),
+        ("-behind", -heading * AWAY_M + up * ASIDE_M),
         ("-above", up * OVER_M + toward_eye * ASIDE_M),
         ("-below", -up * OVER_M + toward_eye * ASIDE_M),
     ];
@@ -113,7 +121,8 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
 
     // Its kind's spring off the ground, as a rider's way springs it, then
     // a climb eased in.
-    let spring = client::Spring::from(HORSE.wings.ok_or("a horse has no wings")?.flight.spring);
+    let winged = HORSE.wings.ok_or("a horse has no wings")?;
+    let spring = client::Spring::from(winged.flight.spring);
     let rise = |t: f64| {
         let sprung = spring.height_at(t - SETTLE_S, spring.height_m);
         let s = ((t - SETTLE_S - spring.top_s()) / RISE_S).clamp(0.0, 1.0);
@@ -132,16 +141,28 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
     let off_the_ground = |t: f64| t >= SETTLE_S;
     let until_down = |t: f64| t < lands_s;
     // One beat at the speed it flies, as the wing beats it at labour.
-    let (slow_hz, fast_hz) = HORSE.wings.map(|w| w.wing.beat_hz).unwrap_or((1.0, 1.0));
+    let (slow_hz, fast_hz) = winged.wing.beat_hz;
     let beat_s = 2.0 / (slow_hz + fast_hz);
+    // Every frame from the one before they start to the one after they end.
+    let framed = |s: f64| {
+        (
+            s + 2.0 * FRAME_S,
+            ((s + 2.0 * FRAME_S) / FRAME_S).round() as usize + 1,
+        )
+    };
+    let (open_span_s, open_steps) = framed(winged.wing.open_s);
+    let (fold_span_s, fold_steps) = framed(winged.wing.fold_s);
+    let around = ["", "-behind", "-above"];
     let flights = [
         Flight {
             name: "wings-open",
             speed_mps: 0.0,
             at: &rise,
             out: &off_the_ground,
-            from_s: SETTLE_S,
-            span_s: OPEN_S,
+            from_s: SETTLE_S + spring.top_s() - FRAME_S,
+            span_s: open_span_s,
+            steps: open_steps,
+            seen: &around,
             raised_m: OVER_GRASS_M,
         },
         Flight {
@@ -151,6 +172,8 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
             out: &always,
             from_s: SETTLE_S,
             span_s: beat_s,
+            steps: STEPS,
+            seen: &["", "-above", "-below"],
             raised_m: 0.0,
         },
         Flight {
@@ -160,15 +183,19 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
             out: &always,
             from_s: SETTLE_S,
             span_s: 1.0,
+            steps: STEPS,
+            seen: &[""],
             raised_m: 0.0,
         },
         Flight {
-            name: "wings-land",
+            name: "wings-fold",
             speed_mps: LAND_MPS,
             at: &landing,
             out: &until_down,
-            from_s: lands_s - 0.6,
-            span_s: 2.0,
+            from_s: lands_s - FRAME_S,
+            span_s: fold_span_s,
+            steps: fold_steps,
+            seen: &around,
             raised_m: OVER_GRASS_M,
         },
     ];
@@ -176,12 +203,7 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
         .iter()
         .flat_map(|&coat| flights.iter().map(move |flight| (coat, flight)))
     {
-        // The beat is seen from three sides, the rest from the first.
-        let seen = if flight.name == "wings-beat" {
-            &eyes[..]
-        } else {
-            &eyes[..1]
-        };
+        let seen = (eyes.iter()).filter(|(name, _)| flight.seen.contains(name));
         for (from_name, from) in seen {
             let mut animal = Animal::new(&HORSE, Look::new(&HORSE, view.seed, Some(coat)));
             let start = here.point - heading * (flight.at)(flight.from_s + flight.span_s / 2.0).1;
@@ -201,8 +223,8 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
             };
             let mut t = 0.0;
             let mut pictures = Vec::new();
-            for step in 0..STEPS {
-                let until = flight.from_s + flight.span_s * step as f64 / (STEPS - 1) as f64;
+            for step in 0..flight.steps {
+                let until = flight.from_s + flight.span_s * step as f64 / (flight.steps - 1) as f64;
                 while t + 1e-9 < until {
                     let dt = TICK_S.min(until - t);
                     t += dt;

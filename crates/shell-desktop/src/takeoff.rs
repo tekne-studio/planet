@@ -1,30 +1,47 @@
-//! Pictures of a pegasus taking off under its rider, with a fixed clock and
-//! seed: how a take-off is looked at. `bun run shot --takeoff out/takeoff`
-//! mounts the nearest pegasus and, on the flattest ground near and on a
-//! slope of about 17 degrees facing up it, from a standing start and from
-//! a trot, presses the walk and fly key as a person does, holds forward
-//! from then on, and draws every other frame from the press until it flies
-//! level: from its side, the sun behind the eye, and from behind its
-//! rider. The eye goes along with it over the ground and keeps its height,
-//! so the climb is seen. Each frame is `<ground>-<start>/<view>-<ms>.png`,
-//! and `takeoff.json` lists them with how high the body was over where it
-//! pressed.
+//! Pictures of a pegasus taking off under its rider, and landing, with a
+//! fixed clock and seed: how a take-off is looked at. `bun run shot
+//! --takeoff out/takeoff` mounts the nearest pegasus and, on the flattest
+//! ground near and on a slope of about 17 degrees facing up it, from a
+//! standing start and from a trot, presses the walk and fly key as a
+//! person does, holds forward from then on, and draws frames from the
+//! press until it flies level: every other one to the top of its spring,
+//! every one as its wings open, then every sixth. Then it lands it and
+//! draws every frame as its wings fold away, from the last aloft. Each is
+//! seen from its side, the sun behind the eye, from behind its rider and
+//! from over it. The eye goes along with it over the ground; from its side
+//! it keeps its height, so the climb is seen, and from behind and over it
+//! it rises with it, so the wings are. Each frame is
+//! `<ground>-<start>/<view>-<ms>.png` taking off and
+//! `<ground>-<start>/fold-<view>-<ms>.png` landing, and `takeoff.json`
+//! lists them with how high the body was over where it pressed, or over
+//! the ground under it.
 
 use std::fmt::Write as _;
 use std::path::Path;
 
 use client::{Client, Input, Key};
-use gaia::fauna::Ground;
+use gaia::fauna::{Ground, horse::HORSE};
 use glam::DVec3;
 use render::write_png;
 
 use crate::animals::{Land, flattest, looking};
 use crate::shot::drawn;
 
-/// The frames drawn, counted at 60 a second from the press: every other
-/// one through the first second, then every sixth to 1.8 s.
-fn frames() -> impl Iterator<Item = u32> {
-    (0..=60).step_by(2).chain((66..=108).step_by(6))
+/// Frames a second.
+const FPS: f64 = 60.0;
+/// The last frame drawn taking off, counted from the press: 1.8 s.
+const LAST: u32 = 108;
+/// The frames drawn taking off, counted at 60 a second from the press:
+/// every other one to the top of the spring, `top_s` from the press,
+/// every one as the wings open over `open_s` and the one after, then
+/// every sixth.
+fn frames(top_s: f64, open_s: f64) -> impl Iterator<Item = u32> {
+    let top = (top_s * FPS).round() as u32;
+    let open = top + (open_s * FPS).round() as u32 + 1;
+    (0..top)
+        .step_by(2)
+        .chain(top..=open)
+        .chain((open + 1..=LAST).filter(|frame| frame % 6 == 0))
 }
 /// The slope looked for, rise per metre: about 17 degrees.
 const SLOPE: f64 = 0.306;
@@ -34,12 +51,17 @@ const LOOK_M: f64 = 400.0;
 const LOOKS: i32 = 20;
 const RUN_M: f64 = 8.0;
 /// From its side, how far away the eye stands, how high over the ground
-/// where it pressed, and how high it looks at; from behind, the same.
+/// where it pressed, and how high it looks at; from behind and from over
+/// it, the same.
 const SIDE: [f64; 3] = [5.5, 1.4, 1.6];
 const BEHIND: [f64; 3] = [5.0, 2.4, 1.6];
+const ABOVE: [f64; 3] = [1.5, 7.0, 1.6];
 /// How long it stands, and trots, before the press, seconds.
 const SETTLE_S: f64 = 1.0;
 const TROT_S: f64 = 2.5;
+/// Landing, how near the ground it is drawn from, metres: the last of
+/// these aloft is the first frame of the fold.
+const NEAR_M: f64 = 1.0;
 
 /// Writes the frames into `dir`.
 pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String> {
@@ -64,6 +86,10 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
     let flat = flattest(&land, here);
     let (slope, uphill) = sloped(&land, here);
     let grid = generator.sphere().blocks();
+    let winged = HORSE.wings.ok_or("a horse has no wings")?;
+    let spring = winged.flight.spring;
+    let (top_s, open_s) = (spring.gather_s + spring.rise_s, winged.wing.open_s);
+    let folds = (winged.wing.fold_s * FPS).round() as u32 + 1;
     let (mut headless, base) = drawn(client, size)?;
     let sun = base.sun_direction.as_dvec3();
     let mut listed = String::from("[\n");
@@ -105,8 +131,18 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
             std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
             input.key(Key::ToggleMode, true);
             input.key(Key::Forward, true);
+            let views = [
+                ("side", SIDE, side),
+                ("behind", BEHIND, -forward),
+                ("above", ABOVE, side),
+            ];
+            // Over it, the eye looks down with the way it goes up.
+            let eye_up = |view: &str| match view {
+                "above" => forward,
+                _ => up,
+            };
             let mut ticked = 0;
-            for frame in frames() {
+            for frame in frames(top_s, open_s) {
                 while ticked <= frame {
                     tick(client, &mut input, 0.0);
                     input.key(Key::ToggleMode, false);
@@ -117,12 +153,14 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
                 let along = at - up * (at - pressed).dot(up);
                 let over_m = (at - pressed).dot(up);
                 let ms = frame * 1000 / 60;
-                for (view, [away, eye, look], from) in
-                    [("side", SIDE, side), ("behind", BEHIND, -forward)]
-                {
+                for (view, [away, eye, look], from) in views {
+                    let along = match view {
+                        "side" => along,
+                        _ => at,
+                    };
                     let target = along + up * look;
                     let eye = along + from * away + up * eye;
-                    let picture = picture(client, &mut headless, eye, target, up);
+                    let picture = picture(client, &mut headless, eye, target, eye_up(view));
                     let out = folder.join(format!("{view}-{ms:04}.png"));
                     write_png(&out, size[0], size[1], &picture)?;
                 }
@@ -137,13 +175,50 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
                     log::warn!("{ground} {start}: {message}");
                 }
             }
-            // Landed again for the next.
+            // Landed again for the next, its wings drawn folding away from
+            // the last frame aloft, the eye along with it over the ground
+            // under it.
             client.command_json(r#"{"type":"set_mode","mode":"ride.horse"}"#);
+            let seen = |client: &mut Client, headless: &mut render::Headless| {
+                let at = client.host("ride").body().position;
+                let under = land.under(at).point;
+                let pictures = views.map(|(view, [away, eye, look], from)| {
+                    let target = under + up * look;
+                    let eye = under + from * away + up * eye;
+                    picture(client, headless, eye, target, eye_up(view))
+                });
+                ((at - under).dot(up), pictures)
+            };
+            let mut last = None;
             for _ in 0..900 {
                 tick(client, &mut input, 0.0);
                 if !client.host("ride").aloft() {
                     break;
                 }
+                let at = client.host("ride").body().position;
+                if (at - land.under(at).point).dot(up) < NEAR_M {
+                    last = Some(seen(client, &mut headless));
+                }
+            }
+            for frame in 0..=folds {
+                let (over_m, pictures) = match (frame, last.take()) {
+                    (0, Some(last)) => last,
+                    _ => {
+                        if frame > 0 {
+                            tick(client, &mut input, 0.0);
+                        }
+                        seen(client, &mut headless)
+                    }
+                };
+                let ms = frame * 1000 / 60;
+                for ((view, ..), picture) in views.iter().zip(pictures) {
+                    let out = folder.join(format!("fold-{view}-{ms:04}.png"));
+                    write_png(&out, size[0], size[1], &picture)?;
+                }
+                let _ = writeln!(
+                    listed,
+                    r#"  {{"ground":"{ground}","start":"{start}","fold_ms":{ms},"over_m":{over_m:.3}}},"#
+                );
             }
             tick(client, &mut input, SETTLE_S);
             log::info!("{ground} {start} -> {}", folder.display());
