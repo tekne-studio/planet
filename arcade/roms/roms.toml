@@ -10,5 +10,5 @@ licence = "MIT"
 
 [[rom]]
 name = "kings"
-sha256 = "82c0812141585c1bf18b89c06b2d803f111f23fdb5a8fbd3f5868589a7f8b2ec"
+sha256 = "fa33b1f285a2a8b1d8ffe228e4be59dd6cbd37fcb80a0d50a0fcf2d7cb0cb9a0"
 rights = "reserved"
