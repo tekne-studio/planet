@@ -1645,9 +1645,12 @@ mod tests {
                         // A calm trail moves a few hundredths of a radian a
                         // frame at 30 fps, never a snap.
                         let most = 1.2 * dt;
-                        // Its wings grow out first, a third of a second.
+                        // Its wings open first, and the trail eases in
+                        // with them.
+                        let wing = HORSE.wings.expect("a horse has wings").wing;
+                        let opening = (wing.open_s + 0.2) * fps;
                         assert!(
-                            frame < fps as usize / 2 || swing <= most,
+                            (frame as f64) < opening || swing <= most,
                             "{speed_mps} m/s, turning {turn_rps}, {fps} fps, frame \
                              {frame}: the tail swung {swing} rad"
                         );

@@ -2741,7 +2741,7 @@ mod tests {
         let spring = crate::paces::Spring::from(winged.flight.spring);
         let open_s = winged.wing.open_s;
         let beat_s = 1.0 / winged.wing.beat_hz.0;
-        let frames = ((spring.top_s() + beat_s) * 60.0).round() as usize;
+        let frames = ((spring.top_s() + open_s + beat_s) * 60.0).round() as usize;
         let mut pegasi = 0;
         let mut herd = Animals::default();
         world.step(&mut herd, 1e3, spawn, NONE);
@@ -2795,10 +2795,10 @@ mod tests {
             }
             assert_eq!(sprang.len(), 1, "it springs once: {sprang:?}");
             // Opened raised, its first downstroke takes the air within a
-            // beat of the top.
+            // beat of the wings being out, never before the top.
             let first_s = beats.first().copied().unwrap_or(f64::INFINITY);
             assert!(
-                (spring.top_s()..spring.top_s() + beat_s).contains(&first_s),
+                (spring.top_s()..spring.top_s() + open_s + beat_s).contains(&first_s),
                 "first beat at {first_s} s"
             );
             let late_s = sprang[0] - spring.gather_s;

@@ -331,8 +331,10 @@ pub const WING: Wing = Wing {
     ],
     beat_hz: (0.9, 1.8),
     stroke: (0.1, 1.0),
-    open_s: 0.12,
-    fold_s: 0.3,
+    // Slow enough to be watched, a sweep and never a flick; the same to
+    // fold away.
+    open_s: 0.5,
+    fold_s: 0.5,
     heave_m: 0.08,
 };
 
@@ -680,12 +682,12 @@ pub const HORSE: Kind = Kind {
             ceiling_m: scene::CLOUD_TOP_M as f64,
             takeoff_m: 3.0,
             // A gallop's gather and a jump's arc: the press is answered at
-            // once, and the wings are out in under two thirds of a second.
+            // once; the wings take their own time to open after it.
             spring: Spring {
                 gather_s: 0.2,
-                rise_s: 0.3,
-                height_m: 0.6,
-                forward_mps: 1.5,
+                rise_s: 0.5,
+                height_m: 1.8,
+                forward_mps: 3.0,
             },
             land_mps: 2.5,
             land_per_m: 1.0,

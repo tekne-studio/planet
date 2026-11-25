@@ -1,5 +1,5 @@
 //! Wings of boxes: data any flier fills, a [`Wing`], and a pair of them on
-//! an animal, [`Wings`], snapped open as it takes off, beaten as hard as its
+//! an animal, [`Wings`], swept open as it takes off, beaten as hard as its
 //! flight asks, held out to glide and folded away as it lands.
 //!
 //! A wing is three bones from the shoulder, arm, forearm and hand, along a
@@ -148,6 +148,11 @@ impl Wings {
             false => -dt / self.wing.fold_s,
         };
         self.grown = (self.grown + rate).clamp(0.0, 1.0);
+        // Steps of a frame do not sum to one exactly: what is left of a
+        // wing folded away is nothing, so it is drawn no more.
+        if !out && self.grown < 1e-9 {
+            self.grown = 0.0;
+        }
         self.fanned = match out {
             true => (self.fanned + rate / FAN_LEAD).clamp(self.grown, 1.0),
             false => self.grown,
@@ -390,8 +395,10 @@ mod tests {
             }
         }
         let first = first.expect("a first downstroke");
+        // The beat quickens as they open, so the first downstroke falls
+        // within a hard beat of their being out.
         assert!(
-            first < 1.0 / WING.beat_hz.1 * 0.75,
+            first < WING.open_s + 1.0 / WING.beat_hz.1 * 0.75,
             "first strikes at {first:.2} s"
         );
         let beats = wings.beat;
