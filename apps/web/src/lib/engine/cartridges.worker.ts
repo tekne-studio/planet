@@ -8,12 +8,15 @@
  * URL, to show one whose file never came as its stop screen, to close one,
  * to hold buttons on one, the contract's bits, from its next update on, and
  * to hold a game where it is, its player gone, and to run it on from there.
+ * A game opened fed runs only the buttons it is fed, every pad's an update,
+ * at its pace or at once, and holds where they end.
  * It tells it each frame the page drew while a game runs or a screen is
  * still to be said, and the worker ticks its games then, by the emulator's
  * clock: it runs no faster than the page draws, and not at all in a hidden
  * tab. It answers with the size of a game's screen, then each screen that
  * changed, handed over, never copied, what each game played since the last
  * tick, as the chip's processor takes it, and a game that stopped for good.
+ * The size comes with the pads the file plays, read as it opened.
  * Asked to read a game, it answers with its palette and its pixels, what an
  * agent reads. When its emulator breaks, it says why once and stops.
  */
@@ -21,7 +24,8 @@ import { hostEmulator, type Emulator } from './emulator';
 
 /** What the engine asks. */
 type Asked =
-	| { open: number; url: string; seed: number }
+	| { open: number; url: string; seed: number; fed: boolean }
+	| { feed: number; buttons: Uint32Array; atOnce: boolean }
 	| { cover: number; url: string; name: string }
 	| { fail: number }
 	| { close: number }
@@ -32,7 +36,7 @@ type Asked =
 	| { tick: true };
 /** What the worker answers. */
 type Told =
-	| { opened: number; width: number; height: number }
+	| { opened: number; width: number; height: number; plays?: number }
 	| { failed: number; message: string }
 	| { frame: number; rgba: ArrayBuffer }
 	| { stopped: number }
@@ -111,7 +115,11 @@ async function fetched(url: string): Promise<Uint8Array> {
  * Puts `id` on the shelf once the emulator is hosted and its file, if it
  * has one, came: answered with the size of its screen, or why it did not.
  */
-async function shelve(id: number, url: string | null, put: (emulator: Emulator, file: Uint8Array) => void) {
+async function shelve(
+	id: number,
+	url: string | null,
+	put: (emulator: Emulator, file: Uint8Array) => void
+) {
 	opening.add(id);
 	let found: [Emulator, Uint8Array];
 	try {
@@ -124,7 +132,11 @@ async function shelve(id: number, url: string | null, put: (emulator: Emulator, 
 	const [emulator, file] = found;
 	run(() => {
 		put(emulator, file);
-		scope.postMessage({ opened: id, width: emulator.width, height: emulator.height });
+		const plays = url === null ? null : emulator.plays(file);
+		const { width, height } = emulator;
+		scope.postMessage(
+			plays === null ? { opened: id, width, height } : { opened: id, width, height, plays }
+		);
 	});
 }
 
@@ -132,11 +144,35 @@ scope.onmessage = ({ data }) => {
 	if ('tick' in data) {
 		if (hosted) tick(hosted);
 	} else if ('open' in data) {
-		const { open: id, url, seed } = data;
+		const { open: id, url, seed, fed } = data;
 		void shelve(id, url, (emulator, file) => {
-			emulator.open(id, file, seed, performance.now());
+			const now = performance.now();
+			emulator.open(id, file, seed, now);
+			// Fed, it holds from its first update until it is given one.
+			if (fed) emulator.pace(id, 0, now);
 			running.add(id);
 		});
+	} else if ('feed' in data) {
+		const emulator = hosted;
+		const { feed: id, buttons, atOnce } = data;
+		if (emulator && running.has(id))
+			run(() => {
+				if (atOnce) {
+					// Run now, those given before too, and none of it heard:
+					// the game holds after, until it is fed again.
+					emulator.pace(id, 0, ticked);
+					emulator.script(id, buttons);
+					for (let left = emulator.scripted(id) ?? 0; left > 0; left = emulator.scripted(id) ?? 0)
+						if (emulator.step(id, left) === 0) break;
+					emulator.sound(id);
+				} else {
+					// A game that ran out of what it was given holds: it runs
+					// on from now.
+					const ranOut = !emulator.scripted(id);
+					emulator.script(id, buttons);
+					if (ranOut) emulator.pace(id, 1, performance.now());
+				}
+			});
 	} else if ('cover' in data) {
 		const { cover: id, url, name } = data;
 		void shelve(id, url, (emulator, file) => emulator.still(id, file, name, performance.now()));

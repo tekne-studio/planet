@@ -20,6 +20,8 @@ pub enum Answer {
         number: u32,
         width: u32,
         height: u32,
+        /// The pads its file plays, when it was read from one.
+        plays: Option<usize>,
     },
     Failed {
         number: u32,
@@ -128,6 +130,7 @@ mod tests {
             number: 1,
             width: 160,
             height: 120,
+            plays: Some(1),
         }));
         for tick in 0..10_000 {
             for number in [1, 2] {

@@ -72,6 +72,29 @@ impl Pad {
         self.0 & control.0 == control.0
     }
 
+    /// Every control, one bit each: the contract's buttons of one pad.
+    pub const ALL: Pad = Pad(0x7f);
+
+    /// The controls `bits` press, a bit no control has dropped.
+    pub const fn from_bits(bits: u8) -> Pad {
+        Pad(bits & Pad::ALL.0)
+    }
+
+    /// A game's buttons for what the pad presses as the pad at `index` of
+    /// the game, from 0: its bits in that pad's place of an update's word.
+    pub const fn at(self, index: usize) -> u32 {
+        self.buttons() << (arcade::PAD_BITS as usize * index)
+    }
+
+    /// What the pad at `index` presses in an update's word: its own bits
+    /// alone, never another pad's.
+    pub const fn of_pad(word: u32, index: usize) -> Pad {
+        match word.checked_shr(arcade::PAD_BITS * index as u32) {
+            Some(bits) => Pad::from_bits(bits as u8),
+            None => Pad::NONE,
+        }
+    }
+
     /// A control by its name: `left`, `right`, `up`, `down`, `jump`,
     /// `sprint`, `start`.
     pub fn named(name: &str) -> Option<Pad> {

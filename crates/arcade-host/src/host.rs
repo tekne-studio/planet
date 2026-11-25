@@ -246,6 +246,7 @@ struct Exports {
     name: TypedFunc<i32, i32>,
     out: TypedFunc<(), i32>,
     check: TypedFunc<(), i32>,
+    plays: TypedFunc<(), i32>,
     prepare: TypedFunc<(), i32>,
     open: TypedFunc<(i32, i32, i32, f64), ()>,
     open_prepared: TypedFunc<(i32, i32, i32, f64), ()>,
@@ -333,6 +334,7 @@ impl Emulator {
             name: instance.get_typed_func(&store, "name")?,
             out: instance.get_typed_func(&store, "out")?,
             check: instance.get_typed_func(&store, "check")?,
+            plays: instance.get_typed_func(&store, "plays")?,
             prepare: instance.get_typed_func(&store, "prepare")?,
             open: instance.get_typed_func(&store, "open")?,
             open_prepared: instance.get_typed_func(&store, "open_prepared")?,
@@ -506,6 +508,15 @@ impl Emulator {
         self.file(file)?;
         let len = self.runner.check.call(&mut self.store, ())?;
         Ok(self.text_out(len)?.filter(|code| !code.is_empty()))
+    }
+
+    /// The pads `file` plays, for a host to seat as many people before it
+    /// runs it: 1 when it says none; `None` when [`Emulator::check`]
+    /// refuses the file, judged as `check` judges it, in the same one pass.
+    pub fn plays(&mut self, file: &[u8]) -> Result<Option<usize>, Broken> {
+        self.file(file)?;
+        let pads = self.runner.plays.call(&mut self.store, ())?;
+        Ok(usize::try_from(pads).ok())
     }
 
     /// `file` prepared, for a host that keeps prepared bytes by the file's

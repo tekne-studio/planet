@@ -49,6 +49,21 @@ use crate::way::{Way, Ways};
 /// metres: its radius and the band over it where anything stands.
 pub(crate) const MOON_REACH_M: f64 = worldgen::MOON_RADIUS_M + 2000.0;
 
+/// The most bytes a plugin relays at once ([`Host::relay`]): the wire's.
+pub const RELAY_BYTES: usize = protocol::Limit::RelayBytes as usize;
+
+/// Bytes relayed about a plugin's thing, as each holder hears them.
+#[derive(Clone, Copy, Debug)]
+pub struct Relayed<'a> {
+    pub thing: u64,
+    /// The session that sent them.
+    pub session: u32,
+    pub payload: &'a [u8],
+    /// The world's clock when it relayed them, milliseconds: one clock for
+    /// every holder.
+    pub clock_ms: u64,
+}
+
 /// A plugin's client half.
 pub trait Plugin {
     /// The name the wire's envelope and the world's statement say, and the
@@ -66,11 +81,11 @@ pub trait Plugin {
     /// A message of this plugin from the world server.
     fn receive(&mut self, _kind: &str, _payload: &[u8], _host: &mut Host<'_>) {}
 
-    /// Bytes relayed by `session` about the plugin's `thing`, held by this
-    /// client together with it ([`Host::relay`]): this client's own come
-    /// back too, and every holder hears them all in one order, the
-    /// plugin's events among them.
-    fn relayed(&mut self, _thing: u64, _session: u32, _payload: &[u8], _host: &mut Host<'_>) {}
+    /// Bytes relayed about a thing of the plugin's, held by this client
+    /// together with it ([`Host::relay`]): this client's own come back too,
+    /// and every holder hears them all in one order, the plugin's events
+    /// among them.
+    fn relayed(&mut self, _relayed: Relayed<'_>, _host: &mut Host<'_>) {}
 
     /// The session `session` left the world, heard in its place among the
     /// plugin's messages: what it held of the plugin's is let go.
@@ -896,10 +911,45 @@ impl Host<'_> {
 
     /// Holds `pad` down on the game of the cabinet `id` for this frame: its
     /// buttons are the pad's, the stick its arrows. Asked every frame they
-    /// are held; let go the first frame nobody asks.
+    /// are held; let go the first frame nobody asks. A game fed is never
+    /// pressed: it is given every pad's buttons ([`Host::feed_game`]).
     pub fn press_game(&mut self, id: PartId, pad: Pad) {
         if let Some(key) = self.game_of(id) {
             self.lent.carts.press(key, pad);
+        }
+    }
+
+    /// The pads the game of the cabinet `id` plays, once its file was read
+    /// for its cover: a game of more than one is fed.
+    pub fn game_plays(&self, id: PartId) -> Option<usize> {
+        self.game_of(id).and_then(|key| self.lent.carts.plays(key))
+    }
+
+    /// The updates the game of the cabinet `id` was given since it opened,
+    /// fed, while it runs here: `None` until it does, and for a game not
+    /// fed.
+    pub fn game_given(&self, id: PartId) -> Option<u64> {
+        self.game_of(id)
+            .and_then(|key| self.lent.carts.given(key, self.lent.live))
+    }
+
+    /// Gives the game fed of the cabinet `id` its next updates' buttons, an
+    /// update's word each, every pad's: it runs them at its pace, or
+    /// `at_once` with none of their sound, and holds where they end.
+    /// Nothing while [`Host::game_given`] says nothing.
+    pub fn feed_game(&mut self, id: PartId, buttons: &[u32], at_once: bool) {
+        if let Some(key) = self.game_of(id) {
+            self.lent
+                .carts
+                .feed(key, buttons, at_once, self.lent.live);
+        }
+    }
+
+    /// Runs the game fed of the cabinet `id` again from its start: it stops
+    /// as the frame ends, and opens again given nothing while it is played.
+    pub fn restart_game(&mut self, id: PartId) {
+        if let Some(key) = self.game_of(id) {
+            self.lent.carts.restart(key);
         }
     }
 
@@ -1307,8 +1357,13 @@ impl Plugins {
         if let Some(held) = self.find(&relayed.plugin) {
             let before = *lent.pointer;
             let mut host = lent.again().host(held.plugin.name());
-            held.plugin
-                .relayed(relayed.thing, relayed.session, &relayed.payload, &mut host);
+            let relayed = Relayed {
+                thing: relayed.thing,
+                session: relayed.session,
+                payload: &relayed.payload,
+                clock_ms: relayed.clock_ms,
+            };
+            held.plugin.relayed(relayed, &mut host);
             self.handed(before, lent);
         }
     }

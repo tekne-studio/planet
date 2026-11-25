@@ -10,7 +10,9 @@
 //! frame; what a running game played goes to its sound, as the emulator
 //! batched it, a stream the audio opens as the game starts and ends as it
 //! stops. A game held, its player gone, holds in the worker and in its
-//! stream, and runs on in both from where it was; a game that stopped
+//! stream, and runs on in both from where it was; a game fed runs the
+//! buttons it is given, at its pace or at once, and holds where they end;
+//! the pads each file plays come back with its answer; a game that stopped
 //! is said to the engine, one whose file the engine gave up running as its
 //! stop screen, and a cover asked for as a cart that never runs. What the controls
 //! press on a game goes to the worker as its buttons, the pad's bits being
@@ -188,6 +190,7 @@ fn told(message: &JsValue) -> Option<Told<ArrayBuffer>> {
             number,
             width: count("width").unwrap_or(0),
             height: count("height").unwrap_or(0),
+            plays: count("plays").map(|plays| plays as usize),
         }))
     } else if let Some(number) = count("failed") {
         let message = get("message")?.as_string().unwrap_or_default();
@@ -240,6 +243,7 @@ pub fn tick(state: &Rc<RefCell<State>>) {
                 picture,
                 cart,
                 seed,
+                fed,
             } => {
                 let url = resolve(&cart, files);
                 carts.start(client, picture, Pace::Runs, |number| {
@@ -247,6 +251,7 @@ pub fn tick(state: &Rc<RefCell<State>>) {
                         ("open", number.into()),
                         ("url", url.into()),
                         ("seed", seed.into()),
+                        ("fed", fed.into()),
                     ]
                 });
                 if carts.games.number(picture).is_some() {
@@ -290,6 +295,20 @@ pub fn tick(state: &Rc<RefCell<State>>) {
                     let _ = carts.post(&[("read", number.into())]);
                 }
             }
+            Running::Feed {
+                picture,
+                buttons,
+                at_once,
+            } => {
+                if let Some(number) = carts.games.number(picture) {
+                    let buttons = Uint32Array::from(&buttons[..]);
+                    let _ = carts.post(&[
+                        ("feed", number.into()),
+                        ("buttons", buttons.into()),
+                        ("atOnce", at_once.into()),
+                    ]);
+                }
+            }
             Running::Hold(picture) => carts.pace(picture, Pace::Held, audio),
             Running::Resume(picture) => carts.pace(picture, Pace::Runs, audio),
         }
@@ -301,9 +320,13 @@ pub fn tick(state: &Rc<RefCell<State>>) {
                 number,
                 width,
                 height,
+                plays,
             } => {
                 if let Some(game) = carts.games.get_mut(number) {
                     game.size = Some((width, height));
+                    if let Some(plays) = plays {
+                        client.running_plays(game.picture, plays);
+                    }
                     client.running_opened(game.picture, Ok((width, height)));
                 }
             }

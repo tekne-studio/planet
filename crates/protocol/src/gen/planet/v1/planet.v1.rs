@@ -285,7 +285,8 @@ pub struct Stances {
     #[prost(message, repeated, tag="1")]
     pub moved: ::prost::alloc::vec::Vec<Moved>,
 }
-/// A relay, as each holder of the thing hears it: who sent it, and what.
+/// A relay, as each holder of the thing hears it: who sent it, what, and
+/// when the world relayed it.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Relayed {
     #[prost(string, tag="1")]
@@ -296,6 +297,10 @@ pub struct Relayed {
     pub session: u32,
     #[prost(bytes="vec", tag="4")]
     pub payload: ::prost::alloc::vec::Vec<u8>,
+    /// The world's clock when it relayed it, as Welcome's: one clock for every
+    /// holder, so how long a holder has been quiet reads the same on each.
+    #[prost(uint64, tag="5")]
+    pub clock_ms: u64,
 }
 /// Sent instead of Welcome, then the socket closes.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

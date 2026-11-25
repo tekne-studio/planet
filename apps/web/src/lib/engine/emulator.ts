@@ -22,6 +22,8 @@ export interface Emulator {
 	width: number;
 	height: number;
 	check(file: Uint8Array): string;
+	/** The pads `file` plays, 1 when it says none; null when `check` refuses it. */
+	plays(file: Uint8Array): number | null;
 	cover(file: Uint8Array, name: string): { said: Said | null; rgba: Uint8Array<ArrayBuffer> };
 	open(id: number, file: Uint8Array, seed: number, now: number): void;
 	still(id: number, file: Uint8Array, name: string, now: number): void;
@@ -30,6 +32,12 @@ export interface Emulator {
 	press(id: number, buttons: number): void;
 	/** Runs its clock at `pace` times the contract's from `now`; 0 holds it. */
 	pace(id: number, pace: number, now: number): void;
+	/** Plays `buttons`, every pad's in an update's word, after any script it plays. */
+	script(id: number, buttons: ArrayLike<number>): void;
+	/** How many updates of its script are left; null when it plays none. */
+	scripted(id: number): number | null;
+	/** Runs its next `count` updates now, outside its clock, a few hundred a call: how many ran. */
+	step(id: number, count: number): number;
 	tick(now: number): Uint32Array;
 	idle(): boolean;
 	stopped(id: number): boolean;

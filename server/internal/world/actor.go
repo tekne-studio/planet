@@ -261,6 +261,7 @@ func (a *actor) pass(s *session, relay *pb.Relay, now time.Time) {
 		Thing:   relay.GetThing(),
 		Session: s.id,
 		Payload: relay.GetPayload(),
+		ClockMs: uint64(now.UnixMilli()),
 	}}}, func(to *session) bool { return slices.Contains(holders, to.id) })
 }
 

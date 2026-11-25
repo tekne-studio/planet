@@ -62,7 +62,7 @@ pub use animals::{BUILT, Keeping, Near};
 pub use assets::{AssetRequest, Form};
 use assets::{MANIFEST_PATH, Manifest, Purpose, Requests};
 use carts::Carts;
-pub use carts::{GAME_WAITS_AWAY_S, GAME_WAITS_S, Running};
+pub use carts::{GAME_LONGEST, GAME_WAITS_AWAY_S, GAME_WAITS_S, PADS, Running, UPDATES_PER_S};
 pub use cells::{Aim, Cells, Guide, Met, PALETTE, REACH_M, Refusal, Seat, Sight};
 pub use collision::BODY_M;
 use controller::Refused;
@@ -97,7 +97,9 @@ pub use pets::{Pet, Spot};
 use pictures::Pictures;
 pub use pictures::{FULL_SIDE, LOW_SIDE, Moving, Screen, THUMB_SIDE};
 pub use place::Pose;
-pub use plugin::{Eye, Feet, Host, InWay, PartHit, Plugin, Standing, Turn};
+pub use plugin::{
+    Eye, Feet, Host, InWay, PartHit, Plugin, RELAY_BYTES, Relayed, Standing, Turn,
+};
 use plugin::{Lent, Plugins};
 pub use scene::{Effects, Frame, ToneMap};
 pub use seam::{
@@ -1826,6 +1828,14 @@ impl Client {
                 message: format!("cartridge {picture:?}: {message}"),
             });
         }
+    }
+
+    /// The shell read the file of the cover or the game in `picture`, as it
+    /// opened it: it plays `plays` pads. Said before the answer to the open
+    /// ([`Client::running_opened`]): a game of more than one is fed
+    /// ([`Running::Feed`]).
+    pub fn running_plays(&mut self, picture: scene::PictureId, plays: usize) {
+        self.carts.plays_read(picture, plays);
     }
 
     /// The shell says the game in `picture` stopped for good, its screen

@@ -274,12 +274,16 @@ message Stances {
   repeated Moved moved = 1;
 }
 
-// A relay, as each holder of the thing hears it: who sent it, and what.
+// A relay, as each holder of the thing hears it: who sent it, what, and
+// when the world relayed it.
 message Relayed {
   string plugin = 1;
   uint64 thing = 2;
   uint32 session = 3;
   bytes payload = 4;
+  // The world's clock when it relayed it, as Welcome's: one clock for every
+  // holder, so how long a holder has been quiet reads the same on each.
+  uint64 clock_ms = 5;
 }
 
 // Sent instead of Welcome, then the socket closes.

@@ -612,6 +612,10 @@ func relay(plugin string, thing uint64, payload string) *pb.ClientMessage {
 func (c *client) relayed() string {
 	c.t.Helper()
 	r := c.hearUntil(func(m *pb.ServerMessage) bool { return m.GetRelayed() != nil }).GetRelayed()
+	// Stamped by the world's clock, as Welcome is.
+	if late := time.Since(time.UnixMilli(int64(r.ClockMs))); late < 0 || late > time.Minute {
+		c.t.Fatalf("relayed at %d, not by the world's clock", r.ClockMs)
+	}
 	return fmt.Sprintf("%s.%d:%d:%s", r.Plugin, r.Thing, r.Session, r.Payload)
 }
 

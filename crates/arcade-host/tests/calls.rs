@@ -82,3 +82,19 @@ fn a_window_past_the_end_is_cut_where_memory_ends() {
     assert!(past.bytes.is_empty());
     runs_on(&mut emulator, &game);
 }
+
+#[test]
+fn a_file_says_the_pads_it_plays_and_one_refused_none() {
+    let mut emulator = Emulator::hosted(arcade::RUNNER).unwrap();
+    for (name, file) in shipped() {
+        let pads = emulator
+            .plays(&file)
+            .unwrap()
+            .expect("a shipped game plays");
+        assert!((1..=arcade::PADS).contains(&pads), "{name} plays {pads}");
+    }
+    assert_eq!(emulator.plays(&vec![0; arcade::MOST + 1]).unwrap(), None);
+    assert_eq!(emulator.plays(b"no game").unwrap(), None);
+    let (_, game) = shipped().into_iter().next().expect("a shipped game");
+    runs_on(&mut emulator, &game);
+}

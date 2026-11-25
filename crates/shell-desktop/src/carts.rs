@@ -2,7 +2,9 @@
 //! to run into which texture (`client::Running`), and one thread of their
 //! own runs them all through the emulator's native host, its shelf paced by
 //! the emulator's clock, so a game never takes the frame's thread; a game
-//! held, its player gone, holds its clock there, and runs on from it. Each
+//! held, its player gone, holds its clock there, and runs on from it; a
+//! game fed runs the buttons it is given, at its pace or at once, and holds
+//! where they end, and the pads each file plays come back with its answer. Each
 //! file is prepared once and its prepared bytes kept on disk ([`kept`]). Each screen
 //! that changed comes back over a channel, and the newest of each game is
 //! written into the renderer once a frame, and a game that stopped is said
@@ -39,6 +41,13 @@ enum Asked {
         number: u32,
         file: PathBuf,
         seed: u32,
+        fed: bool,
+    },
+    /// Buttons for a game fed, at its pace or at once.
+    Feed {
+        number: u32,
+        buttons: Vec<u32>,
+        at_once: bool,
     },
     /// A cartridge's cover, still, never run.
     Cover {
@@ -58,7 +67,8 @@ enum Asked {
 
 /// What the thread answers.
 enum Told {
-    Opened(u32),
+    /// Opened, with the pads its file plays when it was read from one.
+    Opened(u32, Option<usize>),
     Failed(u32, String),
     Screen(u32, Image),
     Stopped(u32),
@@ -112,6 +122,7 @@ impl Carts {
                     picture,
                     cart,
                     seed,
+                    fed,
                 } => {
                     let Some(file) = crate::assets::locate(&cart) else {
                         client.running_opened(
@@ -120,7 +131,12 @@ impl Carts {
                         );
                         continue;
                     };
-                    self.start(client, picture, |number| Asked::Open { number, file, seed });
+                    self.start(client, picture, |number| Asked::Open {
+                        number,
+                        file,
+                        seed,
+                        fed,
+                    });
                 }
                 Running::Cover {
                     picture,
@@ -158,6 +174,19 @@ impl Carts {
                         let _ = self.ask(Asked::Read(number));
                     }
                 }
+                Running::Feed {
+                    picture,
+                    buttons,
+                    at_once,
+                } => {
+                    if let Some(&number) = self.numbers.get(&picture) {
+                        let _ = self.ask(Asked::Feed {
+                            number,
+                            buttons,
+                            at_once,
+                        });
+                    }
+                }
                 Running::Hold(picture) | Running::Resume(picture) => {
                     let runs = matches!(running, Running::Resume(_));
                     if let Some(&number) = self.numbers.get(&picture) {
@@ -183,9 +212,12 @@ impl Carts {
                             self.screens.insert(number, image);
                         }
                     }
-                    Told::Opened(number) => {
+                    Told::Opened(number, plays) => {
                         if let Some(game) = self.games.get_mut(&number) {
                             game.opened = true;
+                            if let Some(plays) = plays {
+                                client.running_plays(game.picture, plays);
+                            }
                             client.running_opened(game.picture, Ok((WIDTH, HEIGHT)));
                         }
                     }
@@ -311,6 +343,36 @@ fn kept() -> Option<Kept> {
         .ok()
 }
 
+/// Gives the game fed as `number` its next updates' `buttons`: run at its
+/// pace after those given before, its clock running on from `now` when it
+/// ran out of them; or `at_once`, now, those given before too, its clock
+/// held from `ticked` until it is fed again. A script that ran out leaves
+/// the game held, never run by buttons nobody gave it.
+fn feed(
+    emulator: &mut Emulator,
+    number: u32,
+    buttons: &[u32],
+    at_once: bool,
+    (ticked, now): (f64, f64),
+) -> Result<(), Broken> {
+    if at_once {
+        emulator.pace(number, 0.0, ticked)?;
+        emulator.script(number, buttons)?;
+        while let Some(left) = emulator.scripted(number)?.filter(|&left| left > 0) {
+            if emulator.step(number, left)? == 0 {
+                break;
+            }
+        }
+        return Ok(());
+    }
+    let ran_out = emulator.scripted(number)?.is_none_or(|left| left == 0);
+    emulator.script(number, buttons)?;
+    if ran_out {
+        emulator.pace(number, 1.0, now)?;
+    }
+    Ok(())
+}
+
 /// Runs the games asked for, ticking them by the emulator's clock while
 /// any runs or has a screen not yet said, and sleeping while it is idle: a
 /// shelf of covers and stopped games wakes for nothing but the next ask.
@@ -333,7 +395,12 @@ fn run(asked: &Receiver<Asked>, told: &SyncSender<Told>) -> Result<(), Broken> {
                 false => asked.recv_timeout(due.saturating_duration_since(Instant::now())),
             };
             let said = match ask {
-                Ok(Asked::Open { number, file, seed }) => match std::fs::read(&file) {
+                Ok(Asked::Open {
+                    number,
+                    file,
+                    seed,
+                    fed,
+                }) => match std::fs::read(&file) {
                     Ok(bytes) => {
                         let now = now_ms();
                         match &kept {
@@ -342,7 +409,12 @@ fn run(asked: &Receiver<Asked>, told: &SyncSender<Told>) -> Result<(), Broken> {
                             }
                             None => emulator.open(number, &bytes, seed, now, false)?,
                         }
-                        told.send(Told::Opened(number))
+                        // Fed, it holds from its first update until it is
+                        // given one.
+                        if fed {
+                            emulator.pace(number, 0.0, now)?;
+                        }
+                        told.send(Told::Opened(number, emulator.plays(&bytes)?))
                     }
                     Err(error) => {
                         told.send(Told::Failed(number, format!("{}: {error}", file.display())))
@@ -351,7 +423,7 @@ fn run(asked: &Receiver<Asked>, told: &SyncSender<Told>) -> Result<(), Broken> {
                 Ok(Asked::Cover { number, file, name }) => match std::fs::read(&file) {
                     Ok(bytes) => {
                         emulator.still(number, &bytes, &name, now_ms())?;
-                        told.send(Told::Opened(number))
+                        told.send(Told::Opened(number, emulator.plays(&bytes)?))
                     }
                     Err(error) => {
                         told.send(Told::Failed(number, format!("{}: {error}", file.display())))
@@ -359,7 +431,15 @@ fn run(asked: &Receiver<Asked>, told: &SyncSender<Told>) -> Result<(), Broken> {
                 },
                 Ok(Asked::Fail(number)) => {
                     emulator.fail(number, now_ms())?;
-                    told.send(Told::Opened(number))
+                    told.send(Told::Opened(number, None))
+                }
+                Ok(Asked::Feed {
+                    number,
+                    buttons,
+                    at_once,
+                }) => {
+                    feed(&mut emulator, number, &buttons, at_once, (ticked, now_ms()))?;
+                    Ok(())
                 }
                 Ok(Asked::Close(number)) => {
                     emulator.close(number)?;
@@ -415,6 +495,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_game_fed_runs_what_it_is_given_and_holds_where_it_ends() {
+        // A game that ships, whichever: any game runs fed alike.
+        let roms = concat!(env!("CARGO_MANIFEST_DIR"), "/../../arcade/roms");
+        let file = std::fs::read_dir(roms)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "wasm"))
+            .min()
+            .expect("a game ships");
+        let bytes = std::fs::read(file).unwrap();
+        let mut emulator = Emulator::hosted(arcade::RUNNER).unwrap();
+        emulator.open(1, &bytes, 7, 0.0, false).unwrap();
+        emulator.pace(1, 0.0, 0.0).unwrap();
+        let tick_ms = 1000.0 / f64::from(TICKS);
+        let mut now = 0.0;
+        let mut ticks = |emulator: &mut Emulator, count: u32| {
+            for _ in 0..count {
+                now += tick_ms;
+                emulator.tick(now).unwrap();
+            }
+            now
+        };
+        // Held from the first update until fed.
+        ticks(&mut emulator, 10);
+        assert_eq!(emulator.updates(1).unwrap(), Some(0));
+        // Fed five: it runs them at its pace, and holds after.
+        let at = ticks(&mut emulator, 0);
+        feed(&mut emulator, 1, &[0x100; 5], false, (at, at)).unwrap();
+        ticks(&mut emulator, 20);
+        assert_eq!(emulator.updates(1).unwrap(), Some(5));
+        // Fed seven at once: they run now, and it holds after.
+        let at = ticks(&mut emulator, 0);
+        feed(&mut emulator, 1, &[0x1; 7], true, (at, at)).unwrap();
+        assert_eq!(emulator.updates(1).unwrap(), Some(12));
+        ticks(&mut emulator, 20);
+        assert_eq!(emulator.updates(1).unwrap(), Some(12));
+        // Fed while it runs what it was given: it runs on, then holds.
+        let at = ticks(&mut emulator, 0);
+        feed(&mut emulator, 1, &[0; 3], false, (at, at)).unwrap();
+        ticks(&mut emulator, 1);
+        feed(&mut emulator, 1, &[0; 3], false, (at, at)).unwrap();
+        ticks(&mut emulator, 20);
+        assert_eq!(emulator.updates(1).unwrap(), Some(18));
+    }
+
+    #[test]
     fn a_game_whose_file_never_came_opens_as_its_stop_screen() {
         let (asks, asked) = channel();
         let (told_there, told) = sync_channel(8);
@@ -424,7 +550,7 @@ mod tests {
             told.recv_timeout(Duration::from_secs(5))
                 .expect("the thread answers")
         };
-        assert!(matches!(next(), Told::Opened(1)));
+        assert!(matches!(next(), Told::Opened(1, None)));
         let Told::Screen(1, image) = next() else {
             panic!("its screen comes next");
         };
@@ -451,7 +577,7 @@ mod tests {
         })
         .unwrap();
         let next = || told.recv_timeout(Duration::from_secs(5));
-        assert!(matches!(next(), Ok(Told::Opened(1))));
+        assert!(matches!(next(), Ok(Told::Opened(1, None))));
         let Ok(Told::Screen(1, image)) = next() else {
             panic!("its picture comes next");
         };

@@ -20,6 +20,15 @@
 //! ([`Running::Resume`]), as if never left. Past the window the game stops
 //! and its cover takes its place again. A game waiting keeps its place in
 //! the live budget and gives it to a game wanted first.
+//!
+//! A game whose file plays several pads, as its cover says
+//! ([`crate::Client::running_plays`]), is fed: it runs only the updates its
+//! player's plugin gives it, each update's buttons for every pad
+//! ([`Carts::feed`]), and holds where they end. What it was given is
+//! counted here ([`Carts::given`]): the plugin that plays it, which agrees
+//! every update with the other players' machines, gives it the rest. It is
+//! never held or pressed by the client: whether it runs while its player is
+//! away is that plugin's to say, by feeding it or not.
 //! A game that stopped for good shows why until it is let go, out of view
 //! a while, and is played no more until then. Until a screen has shown a
 //! frame, it is the cabinet's dark glass. A file that does not come shows
@@ -73,6 +82,16 @@ pub const GAME_WAITS_S: f64 = 10.0;
 /// has not walked off, and a game held costs no tick and no sound.
 pub const GAME_WAITS_AWAY_S: f64 = 60.0;
 
+/// The updates a second a game runs at: the console's.
+pub const UPDATES_PER_S: u32 = arcade::TICKS;
+
+/// The pads a game may read, each a player's own: the console's.
+pub const PADS: usize = arcade::PADS;
+
+/// The most updates a game is given in all, the longest session the
+/// console keeps: the console's.
+pub const GAME_LONGEST: u64 = arcade::LONGEST as u64;
+
 /// A game the shell runs, as the client wants it: run when the client wants
 /// it seen, stopped when it stops wanting it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -81,10 +100,24 @@ pub enum Running {
     /// held. The shell answers with the size of its screen
     /// ([`crate::Client::running_opened`]), and the renderer gets a
     /// texture of it if it has none.
+    ///
+    /// A game `fed` runs only the updates it is fed ([`Running::Feed`]),
+    /// and holds from its first until it is.
     Open {
         picture: PictureId,
         cart: String,
         seed: u32,
+        fed: bool,
+    },
+    /// Give the game fed in `picture` its next updates, one an update, each
+    /// every pad's buttons in the update's word: it runs them at its pace
+    /// after those it was given before, and holds once it ran them all. Run
+    /// `at_once`, it runs them now, as fast as it can, and plays none of
+    /// their sound: a game catching up.
+    Feed {
+        picture: PictureId,
+        buttons: Vec<u32>,
+        at_once: bool,
     },
     /// Stop it. Its texture stays, showing the last frame, until the client
     /// lets it go.
@@ -154,6 +187,18 @@ struct Game {
     size: Option<(u32, u32)>,
     /// Its player gone, while it waits for them.
     left: Option<Left>,
+    /// What a game fed was given since it opened: fed games only.
+    fed: Option<Fed>,
+}
+
+/// What a game fed was given since it opened.
+#[derive(Clone, Copy, Default)]
+struct Fed {
+    /// The updates given.
+    given: u64,
+    /// Whether the shell answered its open: what is fed before then is
+    /// never given.
+    ready: bool,
 }
 
 /// A player gone from a game that waits for them: since when on the
@@ -178,6 +223,8 @@ struct Cover {
     /// Whether the shell shows that its file never came, in its place
     /// ([`Running::Fail`]), until it is asked again.
     missing: bool,
+    /// The pads its file plays, once the shell read it.
+    plays: Option<usize>,
     /// Its asks that failed in a row, with the last: its file did not come.
     /// It is asked again after a while, as a live picture is.
     failure: Option<Failure>,
@@ -278,6 +325,8 @@ pub struct Carts {
     reads: HashMap<PictureId, Vec<(u64, bool)>>,
     /// The games waiting for a player who left, in the order they left.
     waiting: Vec<GameId>,
+    /// The games fed to run again from their start ([`Carts::restart`]).
+    restarts: Vec<GameId>,
     /// The games' clock, seconds of the frames the client ran: a window
     /// is as long on a slow screen as on a fast one, and a hidden page's
     /// time counts at its first frame back.
@@ -330,6 +379,7 @@ impl Carts {
                     at: centre,
                     size: None,
                     left: None,
+                    fed: None,
                 }
             });
         }
@@ -394,6 +444,7 @@ impl Carts {
                 size: None,
                 seen: frame,
                 missing: false,
+                plays: None,
                 failure: None,
             }
         });
@@ -443,6 +494,9 @@ impl Carts {
         }
         let (width, height) = size?;
         game.size = Some((width, height));
+        if let Some(fed) = &mut game.fed {
+            fed.ready = true;
+        }
         if !game.made {
             // A game's pixels are squares, drawn large as such.
             self.changes.push(PictureChange::Live {
@@ -454,6 +508,63 @@ impl Carts {
             game.made = true;
         }
         Ok(())
+    }
+
+    /// The shell read the file of the cover or the game in `picture`: it
+    /// plays `plays` pads.
+    pub(crate) fn plays_read(&mut self, picture: PictureId, plays: usize) {
+        let cart = match self.covered.get(&picture) {
+            Some(&cart) => cart,
+            None => match self.pictures.get(&picture) {
+                Some(&(_, cart)) => cart,
+                None => return,
+            },
+        };
+        if let Some(cover) = self.covers.get_mut(&cart) {
+            cover.plays = Some(plays);
+        }
+    }
+
+    /// The pads the game `key` plays, once its cover was read.
+    pub(crate) fn plays(&self, key: GameId) -> Option<usize> {
+        self.covers.get(&key.1)?.plays
+    }
+
+    /// The updates given to the game `key`, fed, since it opened, while the
+    /// shell runs it: `None` for a game not fed, not open, not yet
+    /// answered, or stopped.
+    pub(crate) fn given(&self, key: GameId, live: &Live) -> Option<u64> {
+        let game = self.games.get(&key).filter(|game| !game.stopped)?;
+        let fed = game.fed.filter(|fed| fed.ready)?;
+        live.is_open(Source::Game(key.0, key.1)).then_some(fed.given)
+    }
+
+    /// Gives the game `key`, fed, its next updates' buttons, run at its pace
+    /// or `at_once` ([`Running::Feed`]): nothing for a game [`Carts::given`]
+    /// says nothing of.
+    pub(crate) fn feed(&mut self, key: GameId, buttons: &[u32], at_once: bool, live: &Live) {
+        if buttons.is_empty() || self.given(key, live).is_none() {
+            return;
+        }
+        let Some(game) = self.games.get_mut(&key) else {
+            return;
+        };
+        if let Some(fed) = &mut game.fed {
+            fed.given += buttons.len() as u64;
+        }
+        self.running.push(Running::Feed {
+            picture: game.picture,
+            buttons: buttons.to_vec(),
+            at_once,
+        });
+    }
+
+    /// Runs the game `key`, fed, again from its start, as the frame ends:
+    /// it stops, and opens again as its player wants it, given nothing.
+    pub(crate) fn restart(&mut self, key: GameId) {
+        if self.games.get(&key).is_some_and(|game| game.fed.is_some()) {
+            self.restarts.push(key);
+        }
     }
 
     fn cover_opened(
@@ -576,8 +687,11 @@ impl Carts {
         });
         live.hold(source);
         self.waiting.push(key);
-        // A game of one player holds while it waits.
-        self.running.push(Running::Hold(game.picture));
+        // A game of one player holds while it waits; a game fed runs as it
+        // is fed.
+        if game.fed.is_none() {
+            self.running.push(Running::Hold(game.picture));
+        }
     }
 
     /// Whether the game `key` waits for the player who left it: sitting
@@ -733,10 +847,15 @@ impl Carts {
                         continue;
                     };
                     game.held = Pad::NONE;
+                    // A game of several pads is fed: its players' machines
+                    // agree on each update before it runs.
+                    let plays = self.covers.get(&cart).and_then(|cover| cover.plays);
+                    game.fed = plays.is_some_and(|plays| plays > 1).then(Fed::default);
                     self.running.push(Running::Open {
                         picture: game.picture,
                         cart: part::Cabinet::cart_name(cart),
                         seed: game.seed,
+                        fed: game.fed.is_some(),
                     });
                 }
                 Order::Close(Source::Game(cabinet, cart)) => {
@@ -745,6 +864,7 @@ impl Carts {
                     };
                     // A game waiting gave its place: it waits no more.
                     game.left = None;
+                    game.fed = None;
                     // A game stopped for good keeps its screen with the
                     // shell, saying why, until it is let go.
                     if !game.stopped {
@@ -754,6 +874,18 @@ impl Carts {
                     }
                 }
                 Order::Open(Source::Moving(_)) | Order::Close(Source::Moving(_)) => {}
+            }
+        }
+        for key in core::mem::take(&mut self.restarts) {
+            let source = Source::Game(key.0, key.1);
+            let Some(game) = self.games.get_mut(&key) else {
+                continue;
+            };
+            if game.fed.take().is_some() && live.is_open(source) {
+                game.left = None;
+                live.closed(source);
+                self.reads.remove(&game.picture);
+                self.running.push(Running::Close(game.picture));
             }
         }
         let frame = self.frame;
@@ -801,7 +933,9 @@ impl Carts {
                 && game.left.take().is_some()
             {
                 live.resume(Source::Game(key.0, key.1));
-                self.running.push(Running::Resume(game.picture));
+                if game.fed.is_none() {
+                    self.running.push(Running::Resume(game.picture));
+                }
             }
         }
         // What is pressed now, and what was held and is let go.
@@ -815,7 +949,8 @@ impl Carts {
                 .map(|key| (key, Pad::NONE)),
         );
         for (key, pad) in pads {
-            let Some(game) = self.games.get_mut(&key) else {
+            // A game fed is given every pad's buttons, never pressed.
+            let Some(game) = self.games.get_mut(&key).filter(|game| game.fed.is_none()) else {
                 continue;
             };
             if pad != game.held && live.is_open(Source::Game(key.0, key.1)) {
@@ -893,6 +1028,7 @@ impl Carts {
         self.shown.clear();
         self.unseen.clear();
         self.waiting.clear();
+        self.restarts.clear();
         for ((cabinet, cart), game) in self.games.drain() {
             if game.stopped || live.is_open(Source::Game(cabinet, cart)) {
                 self.running.push(Running::Close(game.picture));
@@ -920,9 +1056,10 @@ impl Carts {
 }
 
 /// The seed a cabinet's game starts from: its name in the world, so every
-/// client starts the same game the same way. Each then ticks it by its own
-/// clock, from when it first saw the cabinet: the games are alike, never in
-/// step, and nothing holds them together.
+/// client starts the same game the same way. A game of one player then runs
+/// by its own clock on each client, alike and never in step; a game fed
+/// runs the same buttons on each of its players' machines, and so the
+/// same frames.
 fn seed(cabinet: u64) -> u32 {
     (cabinet ^ cabinet >> 32) as u32
 }
@@ -1089,7 +1226,8 @@ mod tests {
                 | Running::Read(_)
                 | Running::Fail(_)
                 | Running::Hold(_)
-                | Running::Resume(_) => None,
+                | Running::Resume(_)
+                | Running::Feed { .. } => None,
             })
             .collect()
     }
@@ -1309,6 +1447,7 @@ mod tests {
                 picture,
                 cart,
                 seed,
+                fed: false,
             },
         ] = running.as_slice()
         else {
@@ -1379,6 +1518,93 @@ mod tests {
         }
         assert_eq!(carts.drain_running(), [Running::Close(cover)]);
         assert!(carts.drain_changes().is_empty());
+    }
+
+    #[test]
+    fn a_game_of_two_pads_runs_only_what_it_is_fed_and_is_never_pressed_or_held() {
+        let mut carts = Held::default();
+        let game = (7, cart(2));
+        // Its cover read first: it plays two.
+        carts.draw(7, cart(2), at(3.0), &screen());
+        carts.end_frame();
+        let cover = covered(&carts.drain_running())[0];
+        carts.plays_read(cover, 2);
+        carts.opened(cover, Ok((160, 120))).unwrap();
+        assert_eq!(carts.plays(game), Some(2));
+        carts.play(7, cart(2), at(3.0), &screen());
+        carts.end_frame();
+        let running = carts.drain_running();
+        let [Running::Open {
+            picture, fed: true, ..
+        }] = running.as_slice()
+        else {
+            panic!("{running:?}");
+        };
+        let picture = *picture;
+        // Nothing is given before the shell answers.
+        let Held { carts: fed, live, .. } = &mut carts;
+        assert_eq!(fed.given(game, live), None);
+        fed.feed(game, &[1, 2], false, live);
+        assert!(carts.drain_running().is_empty());
+        carts.opened(picture, Ok((160, 120))).unwrap();
+        let Held { carts: fed, live, .. } = &mut carts;
+        assert_eq!(fed.given(game, live), Some(0));
+        fed.feed(game, &[1, 0x100], false, live);
+        fed.feed(game, &[0x101; 3], true, live);
+        assert_eq!(fed.given(game, live), Some(5));
+        // Pressed, it is not: its buttons are what it is fed.
+        carts.press(game, Pad::LEFT);
+        carts.play(7, cart(2), at(3.0), &screen());
+        carts.end_frame();
+        assert_eq!(
+            carts.drain_running(),
+            [
+                Running::Feed {
+                    picture,
+                    buttons: vec![1, 0x100],
+                    at_once: false
+                },
+                Running::Feed {
+                    picture,
+                    buttons: vec![0x101; 3],
+                    at_once: true
+                }
+            ]
+        );
+        // Left, it waits and is not held: it runs as it is fed.
+        carts.draw(7, cart(2), at(3.0), &screen());
+        carts.end_frame();
+        assert!(carts.waits(game));
+        let Held { carts: fed, live, .. } = &mut carts;
+        fed.feed(game, &[0x100], false, live);
+        assert_eq!(fed.given(game, live), Some(6));
+        carts.play(7, cart(2), at(3.0), &screen());
+        carts.end_frame();
+        assert!(!carts.waits(game));
+        assert_eq!(
+            carts.drain_running(),
+            [Running::Feed {
+                picture,
+                buttons: vec![0x100],
+                at_once: false
+            }]
+        );
+        // Run again from its start: it stops, and opens again fed, given
+        // nothing.
+        carts.restart(game);
+        carts.play(7, cart(2), at(3.0), &screen());
+        carts.end_frame();
+        assert_eq!(carts.drain_running(), [Running::Close(picture)]);
+        assert_eq!(carts.given(game, &carts.live), None);
+        carts.play(7, cart(2), at(3.0), &screen());
+        carts.end_frame();
+        let running = carts.drain_running();
+        assert!(
+            matches!(running.as_slice(), [Running::Open { fed: true, .. }]),
+            "{running:?}"
+        );
+        carts.opened(picture, Ok((160, 120))).unwrap();
+        assert_eq!(carts.given(game, &carts.live), Some(0));
     }
 
     #[test]

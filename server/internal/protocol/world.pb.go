@@ -1720,13 +1720,17 @@ func (x *Stances) GetMoved() []*Moved {
 	return nil
 }
 
-// A relay, as each holder of the thing hears it: who sent it, and what.
+// A relay, as each holder of the thing hears it: who sent it, what, and
+// when the world relayed it.
 type Relayed struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Plugin        string                 `protobuf:"bytes,1,opt,name=plugin,proto3" json:"plugin,omitempty"`
-	Thing         uint64                 `protobuf:"varint,2,opt,name=thing,proto3" json:"thing,omitempty"`
-	Session       uint32                 `protobuf:"varint,3,opt,name=session,proto3" json:"session,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Plugin  string                 `protobuf:"bytes,1,opt,name=plugin,proto3" json:"plugin,omitempty"`
+	Thing   uint64                 `protobuf:"varint,2,opt,name=thing,proto3" json:"thing,omitempty"`
+	Session uint32                 `protobuf:"varint,3,opt,name=session,proto3" json:"session,omitempty"`
+	Payload []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
+	// The world's clock when it relayed it, as Welcome's: one clock for every
+	// holder, so how long a holder has been quiet reads the same on each.
+	ClockMs       uint64 `protobuf:"varint,5,opt,name=clock_ms,json=clockMs,proto3" json:"clock_ms,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1787,6 +1791,13 @@ func (x *Relayed) GetPayload() []byte {
 		return x.Payload
 	}
 	return nil
+}
+
+func (x *Relayed) GetClockMs() uint64 {
+	if x != nil {
+		return x.ClockMs
+	}
+	return 0
 }
 
 // Sent instead of Welcome, then the socket closes.
@@ -2172,12 +2183,13 @@ const file_planet_v1_world_proto_rawDesc = "" +
 	"\asession\x18\x01 \x01(\rR\asession\x12)\n" +
 	"\x06stance\x18\x02 \x01(\v2\x11.planet.v1.StanceR\x06stance\"1\n" +
 	"\aStances\x12&\n" +
-	"\x05moved\x18\x01 \x03(\v2\x10.planet.v1.MovedR\x05moved\"k\n" +
+	"\x05moved\x18\x01 \x03(\v2\x10.planet.v1.MovedR\x05moved\"\x86\x01\n" +
 	"\aRelayed\x12\x16\n" +
 	"\x06plugin\x18\x01 \x01(\tR\x06plugin\x12\x14\n" +
 	"\x05thing\x18\x02 \x01(\x04R\x05thing\x12\x18\n" +
 	"\asession\x18\x03 \x01(\rR\asession\x12\x18\n" +
-	"\apayload\x18\x04 \x01(\fR\apayload\"!\n" +
+	"\apayload\x18\x04 \x01(\fR\apayload\x12\x19\n" +
+	"\bclock_ms\x18\x05 \x01(\x04R\aclockMs\"!\n" +
 	"\aRefused\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xd4\x04\n" +
 	"\rServerMessage\x12.\n" +

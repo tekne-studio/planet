@@ -23,8 +23,9 @@ seat.workspace = true
 gaia.workspace = true
 synth.workspace = true
 glam.workspace = true
-# The console a cabinet is drawn for: its screen's shape and its stations,
-# one a pad, are the numbers its manifest gives.
+# The console a cabinet is drawn for and its games run on: its screen's
+# shape, its stations, one a pad, how a pad's buttons sit in an update's
+# word and the updates a second are the numbers its manifest gives.
 arcade.workspace = true
 serde.workspace = true
 # Exact floats: what a page keeps comes back to the bit (a pet's traits).
