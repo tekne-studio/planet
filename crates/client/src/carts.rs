@@ -74,7 +74,7 @@ pub(crate) const HEARD_M: f64 = 12.0;
 /// How long a game waits for the player who left it in the world, by its
 /// offer, the key that leaves or anything else that ends a game played,
 /// seconds: a slip of a key, and a step back to the cabinet.
-pub const GAME_WAITS_S: f64 = 10.0;
+pub const GAME_WAITS_S: f64 = 5.0;
 
 /// How long a game waits for a player who went away from the world, the
 /// page hidden or covered or its window left, seconds: a while to answer
