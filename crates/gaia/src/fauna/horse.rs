@@ -264,7 +264,7 @@ const GAITS: [Gait; 4] = [WALK, TROT, GALLOP, RUN];
 /// half again the horse's length from tip to tip, deep and full, beating
 /// slow and deep. Flight feathers lie under three rows of coverts.
 pub const WING: Wing = Wing {
-    shoulder: DVec3::new(0.2, 1.46, -0.5),
+    shoulder: DVec3::new(0.2, 1.46, -0.62),
     bones_m: [0.44, 0.55, 0.37],
     edge_m: [[0.28, 0.1], [0.17, 0.07], [0.1, 0.045]],
     rows: &[
