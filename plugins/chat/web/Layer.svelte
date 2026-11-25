@@ -4,16 +4,25 @@
 	import type { LayerProps } from '$lib/plugins/plugin';
 	import Balloons from './Balloons.svelte';
 	import Bar from './Bar.svelte';
+	import { out } from './out.svelte';
 	import { parseSaid, type Line, type Scope } from './protocol';
 
 	// Chat over the world: the bar where a line is said, and a balloon over
 	// the head that said it. Lines are what was heard while here, never
 	// stored: the last hundred, each with the name its speaker had then.
+	// On a touch screen the bar is on the screen only while it is out and
+	// the controls are the body's own; a line someone else says while it is
+	// not marks the chat's button, until the bar is back.
 	let { seam, online, me, peers, anchors, touch, lent }: LayerProps = $props();
 
 	const LINES_KEPT = 100;
 	let lines = $state<Line[]>([]);
 	let lineCount = 0;
+
+	const seen = $derived(!touch || (out.shown && !lent));
+	$effect(() => {
+		if (seen) out.unread = false;
+	});
 
 	$effect(() =>
 		seam.listen((kind, event) => {
@@ -29,6 +38,7 @@
 				at: Date.now()
 			};
 			lines = [...lines.slice(1 - LINES_KEPT), line];
+			if (!own && !seen) out.unread = true;
 		})
 	);
 
@@ -38,4 +48,15 @@
 </script>
 
 <Balloons {anchors} {me} {lines} />
-<Bar {lines} {online} {touch} {lent} onsay={say} ongo={(place) => seam.core({ type: 'travel', place })} onopen={seam.release} onclose={seam.take} />
+<Bar
+	{lines}
+	{online}
+	{touch}
+	{lent}
+	away={!seen}
+	onsay={say}
+	ongo={(place) => seam.core({ type: 'travel', place })}
+	onopen={seam.release}
+	onclose={seam.take}
+	onputaway={() => (out.shown = false)}
+/>

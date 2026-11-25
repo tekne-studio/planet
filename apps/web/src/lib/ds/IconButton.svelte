@@ -11,12 +11,17 @@
 		label: string;
 		/** A count or a mark in the corner of the icon, for what the button opens. */
 		badge?: string;
+		/**
+		 * A dot in the corner: something new in what the button opens, seen
+		 * at a glance, with no count to read. The label says it in words.
+		 */
+		mark?: boolean;
 	}
 	type AsButton = Common & Omit<HTMLButtonAttributes, 'children'> & { href?: undefined };
 	type AsLink = Common & Omit<HTMLAnchorAttributes, 'children'> & { href: string };
 	type Props = AsButton | AsLink;
 
-	let { icon, label, badge, ...rest }: Props = $props();
+	let { icon, label, badge, mark = false, ...rest }: Props = $props();
 </script>
 
 {#if rest.href !== undefined}
@@ -28,6 +33,7 @@
 	<button class="icon-button" type="button" aria-label={label} title={label} {...rest as HTMLButtonAttributes}>
 		<Icon name={icon} />
 		{#if badge}<span class="badge" aria-hidden="true">{badge}</span>{/if}
+		{#if mark}<span class="mark" aria-hidden="true"></span>{/if}
 	</button>
 {/if}
 
@@ -72,5 +78,17 @@
 		line-height: var(--sp-4);
 		background: var(--action);
 		color: var(--action-text);
+	}
+	/* Round, the one round thing on a square button, and ringed in the
+	   page's own colour, so it reads on the border it sits over. */
+	.mark {
+		position: absolute;
+		top: calc(-1 * var(--sp-2));
+		right: calc(-1 * var(--sp-2));
+		width: var(--sp-4);
+		height: var(--sp-4);
+		border-radius: var(--radius-round);
+		background: var(--action);
+		box-shadow: 0 0 0 var(--bw) var(--bg);
 	}
 </style>

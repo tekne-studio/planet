@@ -6,8 +6,11 @@
 	// A bar at the foot of the world. Closed, it shows what was just said and
 	// fades it; Enter opens it, takes the pointer out of the world and puts
 	// the caret in it. Enter again says the line and hands the world back.
-	// On a touch screen a tap opens it and leaving the field closes it, since
-	// an open log covers the world the stick is held on.
+	// On a touch screen the chat waits behind its button, since a bar always
+	// there covers the world the thumbs walk: out, it holds every line heard;
+	// a tap on the field brings the phone's keyboard, a line said keeps the
+	// field for the next, leaving the field lets the keyboard go, and a tap
+	// on the world puts the chat away. Away, the bar keeps what was typed.
 	// The `@here` word is the bar's own, in the reader's language, and leaves
 	// as a flag; the place comes back from the server, never from what was
 	// typed.
@@ -18,15 +21,19 @@
 		touch: boolean;
 		/** The controls are lent: Enter is the holder's start, never the bar's. */
 		lent: boolean;
+		/** Off the screen: a touch screen's chat put away, or its controls lent. */
+		away: boolean;
 		onsay: (scope: Scope, text: string, here: boolean) => void;
 		ongo: (place: string) => void;
 		/** Chat is opening: let go of the world. */
 		onopen: () => void;
 		/** Chat closed: take the world back. */
 		onclose: () => void;
+		/** On a touch screen, a tap on the world puts the chat away. */
+		onputaway: () => void;
 	}
 
-	let { lines, online, touch, lent, onsay, ongo, onopen, onclose }: Props = $props();
+	let { lines, online, touch, lent, away, onsay, ongo, onopen, onclose, onputaway }: Props = $props();
 
 	/** How long a line stays on a closed bar. */
 	const RECENT_MS = 10_000;
@@ -49,19 +56,29 @@
 		const chars = [...draft];
 		if (chars.length > LINE_CHARS) draft = chars.slice(0, LINE_CHARS).join('');
 	});
-	const shown = $derived(open ? lines : lines.filter((line) => now - line.at < RECENT_MS));
+	/** Every line heard is read back: on a bar typed in, and on a touch screen's chat taken out. */
+	const reading = $derived(open || touch);
+	const shown = $derived(reading ? lines : lines.filter((line) => now - line.at < RECENT_MS));
 
 	// A closed bar forgets: the clock ticks while there is something to forget.
 	$effect(() => {
-		if (open || lines.length === 0) return;
+		if (reading || lines.length === 0) return;
 		const tick = setInterval(() => (now = Date.now()), 1000);
 		return () => clearInterval(tick);
 	});
 
-	// The newest line is the one to read.
+	// The newest line is the one to read, and the one a chat taken out
+	// opens on.
 	$effect(() => {
 		void shown.length;
+		void away;
 		log?.scrollTo({ top: log.scrollHeight });
+	});
+
+	// Put away while typed in, as when its controls are lent: the field lets
+	// go, and the phone's keyboard with it.
+	$effect(() => {
+		if (away && open) hide(false);
 	});
 
 	/** Whether a word of the draft is the share command, in this language or in English. */
@@ -80,7 +97,7 @@
 	}
 
 	function show() {
-		if (!online || open) return;
+		if (!online || open || away) return;
 		open = true;
 		onopen();
 		// The input is disabled until it is focused, so it lands after the flip.
@@ -108,17 +125,22 @@
 		if (event.key === 'Enter') {
 			event.preventDefault();
 			send();
-			hide(true);
+			if (!touch) hide(true);
 		} else if (event.key === 'Escape') {
 			event.preventDefault();
 			hide(false);
 		}
 	}
+
+	/** A tap on the world, the canvas the engine draws it on, on a touch screen. */
+	function onworld(event: MouseEvent) {
+		if (touch && !away && event.target instanceof HTMLCanvasElement) onputaway();
+	}
 </script>
 
-<svelte:window onkeydown={onkey} />
+<svelte:window onkeydown={onkey} onclick={onworld} />
 
-<div class="chat" class:open>
+<div class="chat" class:open={reading} class:away>
 	<ol class="log" bind:this={log} aria-label={t('lines')}>
 		{#each shown as line (line.id)}
 			<li class:own={line.own}>
@@ -191,6 +213,10 @@
 	.open .log {
 		overflow-y: auto;
 		pointer-events: auto;
+	}
+	/* Away, it keeps its field and what was typed, and takes no room. */
+	.away {
+		display: none;
 	}
 	li {
 		display: inline-flex;

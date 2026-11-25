@@ -17,6 +17,7 @@ const en = {
 	here: '@here',
 	goto: 'Go to {place}',
 	lines: 'Lines said',
+	unread: 'Chat, something new was said',
 	'hint.chat': 'chat'
 };
 
@@ -35,6 +36,7 @@ const pt: typeof en = {
 	here: '@aqui',
 	goto: 'Ir para {place}',
 	lines: 'Linhas ditas',
+	unread: 'Conversa, algo novo foi dito',
 	'hint.chat': 'conversar'
 };
 
@@ -53,6 +55,7 @@ const zh: typeof en = {
 	here: '@这里',
 	goto: '前往 {place}',
 	lines: '聊天记录',
+	unread: '聊天，有新消息',
 	'hint.chat': '聊天'
 };
 

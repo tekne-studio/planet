@@ -6,7 +6,7 @@
 	import { Refused, builds, type Link } from '$lib/instance';
 	import { keep, kept } from '$lib/kept';
 	import { plugins, type Seam } from '$lib/plugins';
-	import { touch } from '$lib/touch.svelte';
+	import { touch, visible } from '$lib/touch.svelte';
 	import type { Recipe } from '$lib/world';
 	import { onMount } from 'svelte';
 	import { replaceState } from '$app/navigation';
@@ -65,7 +65,8 @@
 	// the top left corner, where a plugin's menu otherwise sits. A touch
 	// screen walks, looks, jumps and flies: the stick and the buttons of
 	// `Touch`, the help in the bar, and no building offered to any plugin,
-	// whatever the level.
+	// whatever the level; and the stage keeps to what the phone's keyboard
+	// leaves in view (`visible`).
 
 	interface Props {
 		title: string;
@@ -551,7 +552,13 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="stage" class:touch={touch.current}>
+<div
+	class="stage"
+	class:touch={touch.current}
+	style:top={visible.current && `${visible.current.top}px`}
+	style:bottom={visible.current && 'auto'}
+	style:height={visible.current && `${visible.current.height}px`}
+>
 	<EngineView bind:this={view} {recipe} {fieldPath} {mode} {avatar} name={myName} {link} stand={arrival} effects={wanted} {loudness} hiddenMarkers={hidden} onevent={receive} />
 	{#if link}
 		<Nametags {anchors} {peers} {me} />

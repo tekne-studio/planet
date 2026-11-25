@@ -353,6 +353,7 @@
 				<Icon name="users" label="Near" />
 				<Icon name="globe" label="World" />
 				<Icon name="send" label="Send" />
+				<Icon name="message-circle" label="Chat" />
 				<Icon name="map-pin" label="Place" />
 				<Icon name="paw-print" label="Pet" />
 				<Icon name="flashlight" label="Flashlight" />
@@ -386,12 +387,14 @@
 				<Icon name="download" label="Download" />
 				<Button variant="ghost"><Icon name="send" /> With a label</Button>
 			</div>
-			<p class="muted">IconButton: an action said by its icon alone, square, for a corner where words do not fit. The label is required; it is the accessible name and the tooltip. A switch says it is on with <code>aria-pressed</code>, as one that opens says it is open with <code>aria-expanded</code>.</p>
+			<p class="muted">IconButton: an action said by its icon alone, square, for a corner where words do not fit. The label is required; it is the accessible name and the tooltip. A switch says it is on with <code>aria-pressed</code>, as one that opens says it is open with <code>aria-expanded</code>. A <code>badge</code> carries a count; a <code>mark</code> says something new waits in what it opens, a dot read at a glance, and its label says so in words.</p>
 			<div class="row">
 				<IconButton icon="log-out" label="Sign out" />
 				<IconButton href="/ds" icon="layout-dashboard" label="Backoffice" />
 				<IconButton icon="pencil" label="Edit" disabled />
 				<IconButton icon="flashlight" label="Flashlight" aria-pressed={true} />
+				<IconButton icon="users" label="Here" badge="3" />
+				<IconButton icon="message-circle" label="Chat, something new" mark />
 			</div>
 		</section>
 		<section>
