@@ -74,6 +74,8 @@ pub struct Shot {
     pub herd: Option<PathBuf>,
     /// Where the frames of a pegasus taking off go: `crate::takeoff`.
     pub takeoff: Option<PathBuf>,
+    /// Where the frames of a ridden horse's jumps go: `crate::leap`.
+    pub leap: Option<PathBuf>,
     /// Where the pictures of a pegasus flown to the clouds go:
     /// `crate::clouds`.
     pub clouds: Option<PathBuf>,
@@ -137,6 +139,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
         saddle: None,
         herd: None,
         takeoff: None,
+        leap: None,
         clouds: None,
         view: crate::animals::View::default(),
         cabinet: None,
@@ -210,6 +213,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
             "--saddle" if is_shot => shot.saddle = Some(PathBuf::from(value()?)),
             "--herd" if is_shot => shot.herd = Some(PathBuf::from(value()?)),
             "--takeoff" if is_shot => shot.takeoff = Some(PathBuf::from(value()?)),
+            "--leap" if is_shot => shot.leap = Some(PathBuf::from(value()?)),
             "--clouds" if is_shot => shot.clouds = Some(PathBuf::from(value()?)),
             "--yaw" if is_shot => shot.view.yaw_deg = number(&value()?, "--yaw")?,
             "--against-sun" if is_shot => shot.view.against_sun = true,

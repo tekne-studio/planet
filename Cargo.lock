@@ -2856,9 +2856,11 @@ dependencies = [
  "protocol",
  "render",
  "scene",
+ "seat",
  "softbuffer",
  "topology",
  "ui-native",
+ "voxel",
  "winit",
  "worldgen",
 ]

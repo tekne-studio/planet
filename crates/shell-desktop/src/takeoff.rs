@@ -231,7 +231,7 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
 }
 
 /// One frame of 60 a second, or as many as `s` seconds hold.
-fn tick(client: &mut Client, input: &mut Input, s: f64) {
+pub(crate) fn tick(client: &mut Client, input: &mut Input, s: f64) {
     for _ in 0..(s * 60.0).round().max(1.0) as u32 {
         client.update(1.0 / 60.0, input);
     }
@@ -239,7 +239,7 @@ fn tick(client: &mut Client, input: &mut Input, s: f64) {
 
 /// The ground near `at` whose rise over [`RUN_M`] is nearest [`SLOPE`],
 /// above the sea, and the way up it along the ground.
-fn sloped(land: &Land, at: DVec3) -> (DVec3, DVec3) {
+pub(crate) fn sloped(land: &Land, at: DVec3) -> (DVec3, DVec3) {
     let centre = land.under(at);
     let up = centre.up;
     let east = up.any_orthonormal_vector();
@@ -276,7 +276,7 @@ fn sloped(land: &Land, at: DVec3) -> (DVec3, DVec3) {
 }
 
 /// The world seen from `eye` looking at `at`, `up` up.
-fn picture(
+pub(crate) fn picture(
     client: &mut Client,
     headless: &mut render::Headless,
     eye: DVec3,

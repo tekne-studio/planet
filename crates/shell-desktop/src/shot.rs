@@ -191,6 +191,9 @@ pub fn run(shot: Shot) -> Result<(), String> {
     if let Some(dir) = &shot.takeoff {
         return crate::takeoff::run(&mut client, shot.size, dir);
     }
+    if let Some(dir) = &shot.leap {
+        return crate::leap::run(&mut client, shot.size, dir);
+    }
     if let Some(dir) = &shot.clouds {
         return crate::clouds::run(&mut client, shot.size, shot.boom_m, dir);
     }

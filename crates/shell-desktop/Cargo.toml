@@ -23,8 +23,11 @@ plugins-client.workspace = true
 protocol.workspace = true
 render.workspace = true
 scene.workspace = true
+# A shot lays the cells it looks at: a floor, a wall to jump.
+seat.workspace = true
 ui-native.workspace = true
 topology.workspace = true
+voxel.workspace = true
 worldgen.workspace = true
 winit.workspace = true
 log.workspace = true
