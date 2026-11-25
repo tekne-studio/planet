@@ -47,6 +47,10 @@ type Room interface {
 	// Refuse answers the op being applied with the code of why it is
 	// refused. An op nothing refuses has landed.
 	Refuse(code string)
+	// Link says who holds the plugin's `thing` together: they, and only
+	// they, relay bytes to each other about it, in place of who held it
+	// before. None lets it go; a session that leaves lets go of all it held.
+	Link(thing uint64, sessions []uint32)
 }
 
 // Plugin is a plugin's server half. The actor calls it, one call at a time,
@@ -183,6 +187,8 @@ func (r room) Tell(kind string, payload []byte, to func(Who) bool) {
 	}}}
 	r.actor.relay(message, func(s *session) bool { return to(s.who()) })
 }
+
+func (r room) Link(thing uint64, sessions []uint32) { r.actor.hold(r.plugin, thing, sessions) }
 
 func (r room) Recipe() Recipe { return r.actor.recipe }
 

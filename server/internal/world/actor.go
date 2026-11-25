@@ -1,6 +1,7 @@
 package world
 
 import (
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -70,6 +71,16 @@ const (
 	SoundWindow = time.Duration(pb.Limit_LIMIT_SOUND_WINDOW_MS) * time.Millisecond
 )
 
+// A relay's payload and its rate, as the schema says them to both sides: a
+// session relays at most RelayPerSecond payloads, RelayBurst at once after
+// a quiet while, each at most RelayBytes; one past them is dropped for
+// every holder alike, so a client cannot flood the others off the world.
+const (
+	RelayBytes     = int(pb.Limit_LIMIT_RELAY_BYTES)
+	RelayPerSecond = float64(pb.Limit_LIMIT_RELAY_PER_SECOND)
+	RelayBurst     = float64(pb.Limit_LIMIT_RELAY_BURST)
+)
+
 type inboundKind uint8
 
 const (
@@ -106,6 +117,14 @@ type actor struct {
 	// Stances changed since the last tick, by session.
 	dirty    map[uint32]*pb.Stance
 	lastSent time.Time
+	// Who holds each thing an owner linked, in the order it said them.
+	links map[link][]uint32
+}
+
+// link is one thing of an owner that sessions hold together.
+type link struct {
+	owner string
+	thing uint64
 }
 
 func newActor(hub *Hub, recipe Recipe, plugins []*plugged) *actor {
@@ -117,6 +136,7 @@ func newActor(hub *Hub, recipe Recipe, plugins []*plugged) *actor {
 		sessions: map[uint32]*session{},
 		plugins:  plugins,
 		dirty:    map[uint32]*pb.Stance{},
+		links:    map[link][]uint32{},
 	}
 }
 
@@ -175,6 +195,7 @@ func (a *actor) leave(s *session) {
 	}
 	delete(a.sessions, s.id)
 	delete(a.dirty, s.id)
+	a.unlink(s.id)
 	for _, p := range a.plugins {
 		p.plugin.Gone(s.id)
 	}
@@ -208,6 +229,8 @@ func (a *actor) handle(s *session, message *pb.ClientMessage) {
 			Session: s.id,
 			Name:    s.name,
 		}}}, s)
+	case *pb.ClientMessage_Relay:
+		a.pass(s, m.Relay, time.Now())
 	case *pb.ClientMessage_Sound:
 		voice := m.Sound.GetVoice()
 		if voice == "" || len(voice) > VoiceBytes || !s.sounds(time.Now()) {
@@ -221,11 +244,79 @@ func (a *actor) handle(s *session, message *pb.ClientMessage) {
 	}
 }
 
+// pass relays one payload to every session that holds its thing, the sender
+// among them, in the order the actor takes them: each holder hears the same
+// sequence. A sender that holds nothing of it, a plugin that is off, a
+// payload too long or one past the sender's rate is dropped unheard.
+func (a *actor) pass(s *session, relay *pb.Relay, now time.Time) {
+	holders := a.links[link{relay.GetPlugin(), relay.GetThing()}]
+	if !slices.Contains(holders, s.id) || len(relay.GetPayload()) > RelayBytes || !a.on(relay.GetPlugin()) {
+		return
+	}
+	if !s.relays(now) {
+		return
+	}
+	a.relay(&pb.ServerMessage{Message: &pb.ServerMessage_Relayed{Relayed: &pb.Relayed{
+		Plugin:  relay.GetPlugin(),
+		Thing:   relay.GetThing(),
+		Session: s.id,
+		Payload: relay.GetPayload(),
+	}}}, func(to *session) bool { return slices.Contains(holders, to.id) })
+}
+
+// on says whether the owner `name` is on in this world.
+func (a *actor) on(name string) bool {
+	for _, p := range a.plugins {
+		if p.plugin.Name() == name {
+			return p.on
+		}
+	}
+	return false
+}
+
+// hold says who holds a thing of an owner now, in place of what was said
+// before; none lets it go. A session not here is left out.
+func (a *actor) hold(owner string, thing uint64, sessions []uint32) {
+	key := link{owner, thing}
+	holders := make([]uint32, 0, len(sessions))
+	for _, id := range sessions {
+		if _, here := a.sessions[id]; here && !slices.Contains(holders, id) {
+			holders = append(holders, id)
+		}
+	}
+	if len(holders) == 0 {
+		delete(a.links, key)
+		return
+	}
+	a.links[key] = holders
+}
+
+// unlink lets a session that left go of every thing it held.
+func (a *actor) unlink(id uint32) {
+	for key, holders := range a.links {
+		if !slices.Contains(holders, id) {
+			continue
+		}
+		holders = slices.DeleteFunc(holders, func(held uint32) bool { return held == id })
+		if len(holders) == 0 {
+			delete(a.links, key)
+		} else {
+			a.links[key] = holders
+		}
+	}
+}
+
 // turn takes the admin's word on which plugins are on, and says the world's
-// statement again to everyone here.
+// statement again to everyone here. What an owner switched off linked is let
+// go: it says again who holds what once it is on.
 func (a *actor) turn(on map[string]bool) {
 	for _, p := range a.plugins {
 		p.on = on[p.plugin.Name()]
+	}
+	for key := range a.links {
+		if !a.on(key.owner) {
+			delete(a.links, key)
+		}
 	}
 	a.broadcast(&pb.ServerMessage{Message: &pb.ServerMessage_Plugins{Plugins: &pb.Plugins{
 		Plugins: wirePlugins(spoken(a.plugins)),

@@ -1930,6 +1930,8 @@ impl Client {
                 self.peers.remove(left.session);
                 self.pets.left(left.session);
                 self.peers_changed();
+                let (plugins, lent) = self.lend();
+                plugins.left(left.session, lent);
             }
             Some(Message::Stances(stances)) => {
                 let own = match self.session.link() {
@@ -1969,6 +1971,10 @@ impl Client {
             Some(Message::Envelope(envelope)) => {
                 let (plugins, lent) = self.lend();
                 plugins.receive(&envelope, lent);
+            }
+            Some(Message::Relayed(relayed)) => {
+                let (plugins, lent) = self.lend();
+                plugins.relayed(&relayed, lent);
             }
             Some(Message::Answer(answer)) => {
                 if !answer.code.is_empty() {

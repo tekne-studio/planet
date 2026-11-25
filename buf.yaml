@@ -5,6 +5,7 @@ version: v2
 modules:
   - path: proto
   - path: plugins/chat/wire
+  - path: plugins/items/wire
 lint:
   use:
     - STANDARD

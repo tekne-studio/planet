@@ -26,7 +26,11 @@ type session struct {
 	stance *pb.Stance
 	// When the session sounded its last SoundBurst voices, oldest first.
 	sounded []time.Time
-	conn    Conn
+	// What the session may relay at once, refilled at RelayPerSecond up to
+	// RelayBurst, and when it was last refilled.
+	relayable float64
+	refilled  time.Time
+	conn      Conn
 	// Frames for the writer. Closed by the actor when the session ends.
 	out chan []byte
 	// Closed once, when the actor lets the session go.
@@ -39,12 +43,13 @@ func newSession(identity Identity, avatar, name string, conn Conn) *session {
 		name = identity.Name
 	}
 	return &session{
-		identity: identity,
-		avatar:   avatar,
-		name:     name,
-		conn:     conn,
-		out:      make(chan []byte, outboxDepth),
-		ended:    make(chan struct{}),
+		identity:  identity,
+		avatar:    avatar,
+		name:      name,
+		conn:      conn,
+		out:       make(chan []byte, outboxDepth),
+		ended:     make(chan struct{}),
+		relayable: RelayBurst,
 	}
 }
 
@@ -58,6 +63,20 @@ func (s *session) sounds(now time.Time) bool {
 		s.sounded = s.sounded[1:]
 	}
 	s.sounded = append(s.sounded, now)
+	return true
+}
+
+// relays says whether a payload relayed at `now` passes: one past the
+// session's rate is not, and is not counted.
+func (s *session) relays(now time.Time) bool {
+	if !s.refilled.IsZero() {
+		s.relayable = min(RelayBurst, s.relayable+now.Sub(s.refilled).Seconds()*RelayPerSecond)
+	}
+	s.refilled = now
+	if s.relayable < 1 {
+		return false
+	}
+	s.relayable--
 	return true
 }
 

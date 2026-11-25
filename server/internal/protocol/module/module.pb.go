@@ -473,6 +473,7 @@ type Reply struct {
 	//	*Reply_Tell
 	//	*Reply_Keep
 	//	*Reply_Answered
+	//	*Reply_Link
 	Reply         isReply_Reply `protobuf_oneof:"reply"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -551,6 +552,15 @@ func (x *Reply) GetAnswered() *Answered {
 	return nil
 }
 
+func (x *Reply) GetLink() *Link {
+	if x != nil {
+		if x, ok := x.Reply.(*Reply_Link); ok {
+			return x.Link
+		}
+	}
+	return nil
+}
+
 type isReply_Reply interface {
 	isReply_Reply()
 }
@@ -571,6 +581,10 @@ type Reply_Answered struct {
 	Answered *Answered `protobuf:"bytes,4,opt,name=answered,proto3,oneof"`
 }
 
+type Reply_Link struct {
+	Link *Link `protobuf:"bytes,5,opt,name=link,proto3,oneof"`
+}
+
 func (*Reply_Statement) isReply_Reply() {}
 
 func (*Reply_Tell) isReply_Reply() {}
@@ -578,6 +592,72 @@ func (*Reply_Tell) isReply_Reply() {}
 func (*Reply_Keep) isReply_Reply() {}
 
 func (*Reply_Answered) isReply_Reply() {}
+
+func (*Reply_Link) isReply_Reply() {}
+
+// Who holds one thing of an owner together, said by the owner while it
+// applies an op: they, and only they, relay bytes to each other about it
+// (`planet.v1.Relay`). It replaces what was said of the thing before; none
+// lets it go. A session that leaves the world leaves every thing it held.
+type Link struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Owner         string                 `protobuf:"bytes,1,opt,name=owner,proto3" json:"owner,omitempty"`
+	Thing         uint64                 `protobuf:"varint,2,opt,name=thing,proto3" json:"thing,omitempty"`
+	Sessions      []uint32               `protobuf:"varint,3,rep,packed,name=sessions,proto3" json:"sessions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Link) Reset() {
+	*x = Link{}
+	mi := &file_planet_module_v1_module_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Link) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Link) ProtoMessage() {}
+
+func (x *Link) ProtoReflect() protoreflect.Message {
+	mi := &file_planet_module_v1_module_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Link.ProtoReflect.Descriptor instead.
+func (*Link) Descriptor() ([]byte, []int) {
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *Link) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+func (x *Link) GetThing() uint64 {
+	if x != nil {
+		return x.Thing
+	}
+	return 0
+}
+
+func (x *Link) GetSessions() []uint32 {
+	if x != nil {
+		return x.Sessions
+	}
+	return nil
+}
 
 // Something an owner keeps, or forgets, in its store in the world folder.
 // The server writes what a call kept once the call has returned, all of it
@@ -596,7 +676,7 @@ type Keep struct {
 
 func (x *Keep) Reset() {
 	*x = Keep{}
-	mi := &file_planet_module_v1_module_proto_msgTypes[7]
+	mi := &file_planet_module_v1_module_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -608,7 +688,7 @@ func (x *Keep) String() string {
 func (*Keep) ProtoMessage() {}
 
 func (x *Keep) ProtoReflect() protoreflect.Message {
-	mi := &file_planet_module_v1_module_proto_msgTypes[7]
+	mi := &file_planet_module_v1_module_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -621,7 +701,7 @@ func (x *Keep) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Keep.ProtoReflect.Descriptor instead.
 func (*Keep) Descriptor() ([]byte, []int) {
-	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{7}
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Keep) GetOwner() string {
@@ -663,7 +743,7 @@ type Answered struct {
 
 func (x *Answered) Reset() {
 	*x = Answered{}
-	mi := &file_planet_module_v1_module_proto_msgTypes[8]
+	mi := &file_planet_module_v1_module_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -675,7 +755,7 @@ func (x *Answered) String() string {
 func (*Answered) ProtoMessage() {}
 
 func (x *Answered) ProtoReflect() protoreflect.Message {
-	mi := &file_planet_module_v1_module_proto_msgTypes[8]
+	mi := &file_planet_module_v1_module_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -688,7 +768,7 @@ func (x *Answered) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Answered.ProtoReflect.Descriptor instead.
 func (*Answered) Descriptor() ([]byte, []int) {
-	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{8}
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Answered) GetCode() string {
@@ -715,7 +795,7 @@ type Ask struct {
 
 func (x *Ask) Reset() {
 	*x = Ask{}
-	mi := &file_planet_module_v1_module_proto_msgTypes[9]
+	mi := &file_planet_module_v1_module_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -727,7 +807,7 @@ func (x *Ask) String() string {
 func (*Ask) ProtoMessage() {}
 
 func (x *Ask) ProtoReflect() protoreflect.Message {
-	mi := &file_planet_module_v1_module_proto_msgTypes[9]
+	mi := &file_planet_module_v1_module_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -740,7 +820,7 @@ func (x *Ask) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ask.ProtoReflect.Descriptor instead.
 func (*Ask) Descriptor() ([]byte, []int) {
-	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{9}
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Ask) GetOwner() string {
@@ -800,7 +880,7 @@ type Rows struct {
 
 func (x *Rows) Reset() {
 	*x = Rows{}
-	mi := &file_planet_module_v1_module_proto_msgTypes[10]
+	mi := &file_planet_module_v1_module_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -812,7 +892,7 @@ func (x *Rows) String() string {
 func (*Rows) ProtoMessage() {}
 
 func (x *Rows) ProtoReflect() protoreflect.Message {
-	mi := &file_planet_module_v1_module_proto_msgTypes[10]
+	mi := &file_planet_module_v1_module_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -825,7 +905,7 @@ func (x *Rows) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Rows.ProtoReflect.Descriptor instead.
 func (*Rows) Descriptor() ([]byte, []int) {
-	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{10}
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Rows) GetRows() []*Row {
@@ -845,7 +925,7 @@ type Row struct {
 
 func (x *Row) Reset() {
 	*x = Row{}
-	mi := &file_planet_module_v1_module_proto_msgTypes[11]
+	mi := &file_planet_module_v1_module_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -857,7 +937,7 @@ func (x *Row) String() string {
 func (*Row) ProtoMessage() {}
 
 func (x *Row) ProtoReflect() protoreflect.Message {
-	mi := &file_planet_module_v1_module_proto_msgTypes[11]
+	mi := &file_planet_module_v1_module_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -870,7 +950,7 @@ func (x *Row) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Row.ProtoReflect.Descriptor instead.
 func (*Row) Descriptor() ([]byte, []int) {
-	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{11}
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Row) GetKey() []byte {
@@ -897,7 +977,7 @@ type Statement struct {
 
 func (x *Statement) Reset() {
 	*x = Statement{}
-	mi := &file_planet_module_v1_module_proto_msgTypes[12]
+	mi := &file_planet_module_v1_module_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -909,7 +989,7 @@ func (x *Statement) String() string {
 func (*Statement) ProtoMessage() {}
 
 func (x *Statement) ProtoReflect() protoreflect.Message {
-	mi := &file_planet_module_v1_module_proto_msgTypes[12]
+	mi := &file_planet_module_v1_module_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -922,7 +1002,7 @@ func (x *Statement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Statement.ProtoReflect.Descriptor instead.
 func (*Statement) Descriptor() ([]byte, []int) {
-	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{12}
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Statement) GetPlugins() []*Carried {
@@ -952,7 +1032,7 @@ type Carried struct {
 
 func (x *Carried) Reset() {
 	*x = Carried{}
-	mi := &file_planet_module_v1_module_proto_msgTypes[13]
+	mi := &file_planet_module_v1_module_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -964,7 +1044,7 @@ func (x *Carried) String() string {
 func (*Carried) ProtoMessage() {}
 
 func (x *Carried) ProtoReflect() protoreflect.Message {
-	mi := &file_planet_module_v1_module_proto_msgTypes[13]
+	mi := &file_planet_module_v1_module_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -977,7 +1057,7 @@ func (x *Carried) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Carried.ProtoReflect.Descriptor instead.
 func (*Carried) Descriptor() ([]byte, []int) {
-	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{13}
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Carried) GetName() string {
@@ -1026,7 +1106,7 @@ type Offered struct {
 
 func (x *Offered) Reset() {
 	*x = Offered{}
-	mi := &file_planet_module_v1_module_proto_msgTypes[14]
+	mi := &file_planet_module_v1_module_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1038,7 +1118,7 @@ func (x *Offered) String() string {
 func (*Offered) ProtoMessage() {}
 
 func (x *Offered) ProtoReflect() protoreflect.Message {
-	mi := &file_planet_module_v1_module_proto_msgTypes[14]
+	mi := &file_planet_module_v1_module_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1051,7 +1131,7 @@ func (x *Offered) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Offered.ProtoReflect.Descriptor instead.
 func (*Offered) Descriptor() ([]byte, []int) {
-	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{14}
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Offered) GetKind() string {
@@ -1081,7 +1161,7 @@ type Tell struct {
 
 func (x *Tell) Reset() {
 	*x = Tell{}
-	mi := &file_planet_module_v1_module_proto_msgTypes[15]
+	mi := &file_planet_module_v1_module_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1093,7 +1173,7 @@ func (x *Tell) String() string {
 func (*Tell) ProtoMessage() {}
 
 func (x *Tell) ProtoReflect() protoreflect.Message {
-	mi := &file_planet_module_v1_module_proto_msgTypes[15]
+	mi := &file_planet_module_v1_module_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1106,7 +1186,7 @@ func (x *Tell) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tell.ProtoReflect.Descriptor instead.
 func (*Tell) Descriptor() ([]byte, []int) {
-	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{15}
+	return file_planet_module_v1_module_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Tell) GetPlugin() string {
@@ -1168,13 +1248,18 @@ const file_planet_module_v1_module_proto_rawDesc = "" +
 	"\x04here\x18\x06 \x03(\v2\x15.planet.module.v1.WhoR\x04here\"8\n" +
 	"\x04Gone\x12\x16\n" +
 	"\x06plugin\x18\x01 \x01(\tR\x06plugin\x12\x18\n" +
-	"\asession\x18\x02 \x01(\rR\asession\"\xe3\x01\n" +
+	"\asession\x18\x02 \x01(\rR\asession\"\x91\x02\n" +
 	"\x05Reply\x12;\n" +
 	"\tstatement\x18\x01 \x01(\v2\x1b.planet.module.v1.StatementH\x00R\tstatement\x12,\n" +
 	"\x04tell\x18\x02 \x01(\v2\x16.planet.module.v1.TellH\x00R\x04tell\x12,\n" +
 	"\x04keep\x18\x03 \x01(\v2\x16.planet.module.v1.KeepH\x00R\x04keep\x128\n" +
-	"\banswered\x18\x04 \x01(\v2\x1a.planet.module.v1.AnsweredH\x00R\bansweredB\a\n" +
-	"\x05reply\"\\\n" +
+	"\banswered\x18\x04 \x01(\v2\x1a.planet.module.v1.AnsweredH\x00R\banswered\x12,\n" +
+	"\x04link\x18\x05 \x01(\v2\x16.planet.module.v1.LinkH\x00R\x04linkB\a\n" +
+	"\x05reply\"N\n" +
+	"\x04Link\x12\x14\n" +
+	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x14\n" +
+	"\x05thing\x18\x02 \x01(\x04R\x05thing\x12\x1a\n" +
+	"\bsessions\x18\x03 \x03(\rR\bsessions\"\\\n" +
 	"\x04Keep\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\fR\x03key\x12\x14\n" +
@@ -1221,7 +1306,7 @@ func file_planet_module_v1_module_proto_rawDescGZIP() []byte {
 	return file_planet_module_v1_module_proto_rawDescData
 }
 
-var file_planet_module_v1_module_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_planet_module_v1_module_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_planet_module_v1_module_proto_goTypes = []any{
 	(*Call)(nil),            // 0: planet.module.v1.Call
 	(*Describe)(nil),        // 1: planet.module.v1.Describe
@@ -1230,41 +1315,43 @@ var file_planet_module_v1_module_proto_goTypes = []any{
 	(*Op)(nil),              // 4: planet.module.v1.Op
 	(*Gone)(nil),            // 5: planet.module.v1.Gone
 	(*Reply)(nil),           // 6: planet.module.v1.Reply
-	(*Keep)(nil),            // 7: planet.module.v1.Keep
-	(*Answered)(nil),        // 8: planet.module.v1.Answered
-	(*Ask)(nil),             // 9: planet.module.v1.Ask
-	(*Rows)(nil),            // 10: planet.module.v1.Rows
-	(*Row)(nil),             // 11: planet.module.v1.Row
-	(*Statement)(nil),       // 12: planet.module.v1.Statement
-	(*Carried)(nil),         // 13: planet.module.v1.Carried
-	(*Offered)(nil),         // 14: planet.module.v1.Offered
-	(*Tell)(nil),            // 15: planet.module.v1.Tell
-	(*protocol.Recipe)(nil), // 16: planet.v1.Recipe
-	(protocol.Level)(0),     // 17: planet.v1.Level
-	(*protocol.Stance)(nil), // 18: planet.v1.Stance
+	(*Link)(nil),            // 7: planet.module.v1.Link
+	(*Keep)(nil),            // 8: planet.module.v1.Keep
+	(*Answered)(nil),        // 9: planet.module.v1.Answered
+	(*Ask)(nil),             // 10: planet.module.v1.Ask
+	(*Rows)(nil),            // 11: planet.module.v1.Rows
+	(*Row)(nil),             // 12: planet.module.v1.Row
+	(*Statement)(nil),       // 13: planet.module.v1.Statement
+	(*Carried)(nil),         // 14: planet.module.v1.Carried
+	(*Offered)(nil),         // 15: planet.module.v1.Offered
+	(*Tell)(nil),            // 16: planet.module.v1.Tell
+	(*protocol.Recipe)(nil), // 17: planet.v1.Recipe
+	(protocol.Level)(0),     // 18: planet.v1.Level
+	(*protocol.Stance)(nil), // 19: planet.v1.Stance
 }
 var file_planet_module_v1_module_proto_depIdxs = []int32{
 	1,  // 0: planet.module.v1.Call.describe:type_name -> planet.module.v1.Describe
 	2,  // 1: planet.module.v1.Call.start:type_name -> planet.module.v1.Start
 	4,  // 2: planet.module.v1.Call.op:type_name -> planet.module.v1.Op
 	5,  // 3: planet.module.v1.Call.gone:type_name -> planet.module.v1.Gone
-	16, // 4: planet.module.v1.Start.recipe:type_name -> planet.v1.Recipe
-	17, // 5: planet.module.v1.Who.level:type_name -> planet.v1.Level
-	18, // 6: planet.module.v1.Who.stance:type_name -> planet.v1.Stance
+	17, // 4: planet.module.v1.Start.recipe:type_name -> planet.v1.Recipe
+	18, // 5: planet.module.v1.Who.level:type_name -> planet.v1.Level
+	19, // 6: planet.module.v1.Who.stance:type_name -> planet.v1.Stance
 	3,  // 7: planet.module.v1.Op.here:type_name -> planet.module.v1.Who
-	12, // 8: planet.module.v1.Reply.statement:type_name -> planet.module.v1.Statement
-	15, // 9: planet.module.v1.Reply.tell:type_name -> planet.module.v1.Tell
-	7,  // 10: planet.module.v1.Reply.keep:type_name -> planet.module.v1.Keep
-	8,  // 11: planet.module.v1.Reply.answered:type_name -> planet.module.v1.Answered
-	11, // 12: planet.module.v1.Rows.rows:type_name -> planet.module.v1.Row
-	13, // 13: planet.module.v1.Statement.plugins:type_name -> planet.module.v1.Carried
-	14, // 14: planet.module.v1.Carried.ops:type_name -> planet.module.v1.Offered
-	17, // 15: planet.module.v1.Offered.level:type_name -> planet.v1.Level
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	13, // 8: planet.module.v1.Reply.statement:type_name -> planet.module.v1.Statement
+	16, // 9: planet.module.v1.Reply.tell:type_name -> planet.module.v1.Tell
+	8,  // 10: planet.module.v1.Reply.keep:type_name -> planet.module.v1.Keep
+	9,  // 11: planet.module.v1.Reply.answered:type_name -> planet.module.v1.Answered
+	7,  // 12: planet.module.v1.Reply.link:type_name -> planet.module.v1.Link
+	12, // 13: planet.module.v1.Rows.rows:type_name -> planet.module.v1.Row
+	14, // 14: planet.module.v1.Statement.plugins:type_name -> planet.module.v1.Carried
+	15, // 15: planet.module.v1.Carried.ops:type_name -> planet.module.v1.Offered
+	18, // 16: planet.module.v1.Offered.level:type_name -> planet.v1.Level
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_planet_module_v1_module_proto_init() }
@@ -1283,8 +1370,9 @@ func file_planet_module_v1_module_proto_init() {
 		(*Reply_Tell)(nil),
 		(*Reply_Keep)(nil),
 		(*Reply_Answered)(nil),
+		(*Reply_Link)(nil),
 	}
-	file_planet_module_v1_module_proto_msgTypes[9].OneofWrappers = []any{
+	file_planet_module_v1_module_proto_msgTypes[10].OneofWrappers = []any{
 		(*Ask_Get)(nil),
 		(*Ask_Scan)(nil),
 	}
@@ -1294,7 +1382,7 @@ func file_planet_module_v1_module_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_planet_module_v1_module_proto_rawDesc), len(file_planet_module_v1_module_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

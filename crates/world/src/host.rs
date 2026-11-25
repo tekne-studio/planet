@@ -13,7 +13,8 @@ use std::collections::BTreeMap;
 
 use prost::Message;
 use protocol::module::{
-    Answered, Ask, Call, Carried, Keep, Offered, Reply, Rows, Statement, Tell, ask, call, reply,
+    Answered, Ask, Call, Carried, Keep, Link, Offered, Reply, Rows, Statement, Tell, ask, call,
+    reply,
 };
 use worldgen::Generator;
 
@@ -278,6 +279,14 @@ impl Room for Hosted<'_> {
     fn refuse(&mut self, code: &str) {
         self.said.push(reply::Reply::Answered(Answered {
             code: code.to_owned(),
+        }));
+    }
+
+    fn link(&mut self, thing: u64, sessions: &[u32]) {
+        self.said.push(reply::Reply::Link(Link {
+            owner: self.owner.to_owned(),
+            thing,
+            sessions: sessions.to_vec(),
         }));
     }
 }

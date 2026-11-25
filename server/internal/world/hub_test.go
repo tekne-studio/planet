@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -582,5 +583,132 @@ func TestAStanceIsRelayedWithoutFieldsTheSchemaDoesNotName(t *testing.T) {
 	}
 	if relayed.U != 30 || relayed.Hand != "test.thing" {
 		t.Fatalf("what the schema names is kept: %v", relayed)
+	}
+}
+
+// table is a plugin that links whoever sits at a thing: `sit` names the
+// thing, and everyone who sat at it holds it together.
+type table struct {
+	sat map[uint64][]uint32
+}
+
+func (p *table) Name() string    { return "table" }
+func (p *table) Version() uint32 { return 1 }
+func (p *table) Ops() []Op       { return []Op{{Kind: "sit", Level: LevelAnonymous}} }
+func (p *table) Do(room Room, who Who, _ string, payload []byte) {
+	thing := uint64(payload[0])
+	p.sat[thing] = append(p.sat[thing], who.Session)
+	room.Link(thing, p.sat[thing])
+}
+func (p *table) Gone(uint32) {}
+
+func relay(plugin string, thing uint64, payload string) *pb.ClientMessage {
+	return &pb.ClientMessage{Message: &pb.ClientMessage_Relay{Relay: &pb.Relay{
+		Plugin: plugin, Thing: thing, Payload: []byte(payload),
+	}}}
+}
+
+// relayed waits for the next relay this client hears, as `thing:session:payload`.
+func (c *client) relayed() string {
+	c.t.Helper()
+	r := c.hearUntil(func(m *pb.ServerMessage) bool { return m.GetRelayed() != nil }).GetRelayed()
+	return fmt.Sprintf("%s.%d:%d:%s", r.Plugin, r.Thing, r.Session, r.Payload)
+}
+
+func TestARelayReachesEveryHolderInOneOrder(t *testing.T) {
+	plugin := &table{sat: map[uint64][]uint32{}}
+	hub := NewHub(founded(recipe(t)), []Installed{{Plugin: plugin, On: true}}, nil)
+	a := connect(t, hub, hello())
+	idA := a.hear().GetWelcome().Session
+	b := connect(t, hub, hello())
+	idB := b.hear().GetWelcome().Session
+	c := connect(t, hub, hello())
+	idC := c.hear().GetWelcome().Session
+	sit := func(who *client, thing byte) {
+		who.say(&pb.ClientMessage{Message: &pb.ClientMessage_Envelope{Envelope: &pb.Envelope{
+			Plugin: "table", Kind: "sit", Payload: []byte{thing}, Id: 1,
+		}}})
+		who.hearUntil(func(m *pb.ServerMessage) bool { return m.GetAnswer() != nil })
+	}
+	sit(a, 5)
+	sit(b, 5)
+	sit(c, 6)
+
+	// One that holds nothing of the thing, another thing's holder, a plugin
+	// nobody carries and a payload past the limit are dropped unheard.
+	c.say(relay("table", 5, "intruder"))
+	a.say(relay("nobody", 5, "lost"))
+	a.say(relay("table", 5, strings.Repeat("x", RelayBytes+1)))
+	// Each holder hears all three, the sender too, in the one order the world
+	// took them in: what two sessions say at once may come in either order,
+	// and one session's in its own.
+	a.say(relay("table", 5, "one"))
+	b.say(relay("table", 5, "two"))
+	a.say(relay("table", 5, "three"))
+	heard := map[*client][]string{}
+	for _, holder := range []*client{a, b} {
+		for range 3 {
+			heard[holder] = append(heard[holder], holder.relayed())
+		}
+	}
+	if !slices.Equal(heard[a], heard[b]) {
+		t.Fatalf("the holders hear one order: %v and %v", heard[a], heard[b])
+	}
+	one, two, three := fmt.Sprintf("table.5:%d:one", idA), fmt.Sprintf("table.5:%d:two", idB), fmt.Sprintf("table.5:%d:three", idA)
+	if !slices.Contains(heard[a], two) || slices.Index(heard[a], one) == -1 || slices.Index(heard[a], one) > slices.Index(heard[a], three) {
+		t.Fatalf("every relay, a session's in its order: %v", heard[a])
+	}
+	// The one at the other thing hears its own alone.
+	c.say(relay("table", 6, "mine"))
+	if heard := c.relayed(); heard != fmt.Sprintf("table.6:%d:mine", idC) {
+		t.Fatalf("another thing's holder: %q", heard)
+	}
+
+	// A holder that leaves lets go: what the other relays reaches itself alone,
+	// and a newcomer holds nothing until the plugin says so.
+	b.leave()
+	d := connect(t, hub, hello())
+	d.hear()
+	d.say(relay("table", 5, "late"))
+	a.say(relay("table", 5, "alone"))
+	if heard := a.relayed(); heard != fmt.Sprintf("table.5:%d:alone", idA) {
+		t.Fatalf("after the other left: %q", heard)
+	}
+	if links := plugin.sat[5]; !slices.Contains(links, idB) {
+		t.Fatalf("the plugin's own list is its own: %v", links)
+	}
+	a.leave()
+	c.leave()
+	d.leave()
+}
+
+func TestARelayPastTheRateIsDropped(t *testing.T) {
+	s := &session{relayable: RelayBurst}
+	start := time.Unix(0, 0)
+	for i := range int(RelayBurst) {
+		if !s.relays(start) {
+			t.Fatalf("relay %d of the burst passes", i)
+		}
+	}
+	if s.relays(start) {
+		t.Fatal("one past the burst at once is dropped")
+	}
+	// The rate refills it: a second's worth passes a second later, no more.
+	later := start.Add(time.Second)
+	for i := range int(RelayPerSecond) {
+		if !s.relays(later) {
+			t.Fatalf("relay %d of a second's worth passes", i)
+		}
+	}
+	if s.relays(later) {
+		t.Fatal("past a second's worth is dropped")
+	}
+	// A long quiet fills it to the burst, never past.
+	quiet := later.Add(time.Hour)
+	for range int(RelayBurst) {
+		s.relays(quiet)
+	}
+	if s.relays(quiet) {
+		t.Fatal("a quiet while refills to the burst at most")
 	}
 }

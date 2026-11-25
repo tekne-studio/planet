@@ -13,7 +13,7 @@ const EMULATOR: &str = "../../arcade/emulator";
 
 /// A number of the manifest: its field, the constant it becomes, its type,
 /// and what it is.
-const NUMBERS: [(&str, &str, &str, &str); 13] = [
+const NUMBERS: [(&str, &str, &str, &str); 14] = [
     (
         "contract",
         "CONTRACT",
@@ -75,6 +75,12 @@ const NUMBERS: [(&str, &str, &str, &str); 13] = [
         "CALLS",
         "u32",
         "The deepest chain of calls a game reaches before its own count stops it: a host's engine holds at least as many.",
+    ),
+    (
+        "pad_bits",
+        "PAD_BITS",
+        "u32",
+        "How far apart the pads' buttons are in an update's word: the pad at index `i` is the first pad's buttons shifted `i` times this.",
     ),
     (
         "values",

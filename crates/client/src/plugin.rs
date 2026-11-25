@@ -66,6 +66,16 @@ pub trait Plugin {
     /// A message of this plugin from the world server.
     fn receive(&mut self, _kind: &str, _payload: &[u8], _host: &mut Host<'_>) {}
 
+    /// Bytes relayed by `session` about the plugin's `thing`, held by this
+    /// client together with it ([`Host::relay`]): this client's own come
+    /// back too, and every holder hears them all in one order, the
+    /// plugin's events among them.
+    fn relayed(&mut self, _thing: u64, _session: u32, _payload: &[u8], _host: &mut Host<'_>) {}
+
+    /// The session `session` left the world, heard in its place among the
+    /// plugin's messages: what it held of the plugin's is let go.
+    fn left(&mut self, _session: u32, _host: &mut Host<'_>) {}
+
     /// The keys it asks for, by name: data, which each shell binds. Asked
     /// once, as it is plugged in.
     fn keys(&self) -> Vec<KeyAsk> {
@@ -334,6 +344,23 @@ impl Host<'_> {
     /// envelope under the plugin's name. Nothing goes out while offline.
     pub fn send(&mut self, kind: &str, payload: Vec<u8>) {
         self.lent.session.envelope(self.plugin, kind, payload);
+    }
+
+    /// Sends bytes to the sessions that hold the plugin's `thing` together
+    /// with this one, as the plugin's world half linked them: each hears
+    /// them, this client too ([`Plugin::relayed`]), in the one order the
+    /// world takes them in. The world reads none of it, and drops what this
+    /// session sends past the wire's rate. Nothing goes out while offline.
+    pub fn relay(&mut self, thing: u64, payload: Vec<u8>) {
+        self.lent.session.relay(self.plugin, thing, payload);
+    }
+
+    /// This client's session in the world, while online.
+    pub fn session(&self) -> Option<u32> {
+        match self.lent.session.link() {
+            crate::session::Link::Online { session } => Some(session),
+            _ => None,
+        }
     }
 
     /// Says an event of this plugin over the seam. `body` is an object, and
@@ -1272,6 +1299,28 @@ impl Plugins {
                 .receive(&envelope.kind, &envelope.payload, &mut host);
             self.handed(before, lent);
         }
+    }
+
+    /// Hands bytes relayed about a plugin's thing to the plugin it names. One
+    /// for a plugin that is off, or that nobody plugged in, is let pass.
+    pub(crate) fn relayed(&mut self, relayed: &protocol::Relayed, mut lent: Lent<'_>) {
+        if let Some(held) = self.find(&relayed.plugin) {
+            let before = *lent.pointer;
+            let mut host = lent.again().host(held.plugin.name());
+            held.plugin
+                .relayed(relayed.thing, relayed.session, &relayed.payload, &mut host);
+            self.handed(before, lent);
+        }
+    }
+
+    /// Tells every plugin that is on that a session left the world.
+    pub(crate) fn left(&mut self, session: u32, mut lent: Lent<'_>) {
+        let before = *lent.pointer;
+        for held in self.held.iter_mut().filter(|held| held.on) {
+            let mut host = lent.again().host(held.plugin.name());
+            held.plugin.left(session, &mut host);
+        }
+        self.handed(before, lent);
     }
 
     /// Whether a plugin that is on asks for a key with what is held with it:

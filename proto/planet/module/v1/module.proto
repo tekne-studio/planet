@@ -80,7 +80,18 @@ message Reply {
     Tell tell = 2;
     Keep keep = 3;
     Answered answered = 4;
+    Link link = 5;
   }
+}
+
+// Who holds one thing of an owner together, said by the owner while it
+// applies an op: they, and only they, relay bytes to each other about it
+// (`planet.v1.Relay`). It replaces what was said of the thing before; none
+// lets it go. A session that leaves the world leaves every thing it held.
+message Link {
+  string owner = 1;
+  uint64 thing = 2;
+  repeated uint32 sessions = 3;
 }
 
 // Something an owner keeps, or forgets, in its store in the world folder.

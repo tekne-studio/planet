@@ -170,6 +170,19 @@ impl Session {
         }
     }
 
+    /// Bytes for the sessions that hold one thing of a plugin together, this
+    /// one among them: the world relays them to each, this one too, in the
+    /// one order it takes them in. Nothing while offline.
+    pub fn relay(&mut self, plugin: &str, thing: u64, payload: Vec<u8>) {
+        if self.online() {
+            self.say(client_message::Message::Relay(protocol::Relay {
+                plugin: plugin.to_owned(),
+                thing,
+                payload,
+            }));
+        }
+    }
+
     fn say(&mut self, message: client_message::Message) {
         let frame = protocol::encode(&ClientMessage {
             message: Some(message),

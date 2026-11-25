@@ -1,0 +1,81 @@
+// The items plugin's wire: what rides the core's envelope under the name
+// `items`, and what the players at one cabinet relay to each other.
+// `bun run proto` generates Rust into the world half's src/gen: the server
+// carries a payload and never reads it.
+//
+// Up, `sit` is a Sit, `rise` a Rise, `look` a Look; down, `stations` is a
+// Stations. A relay about a cabinet is a Versus.
+syntax = "proto3";
+
+package planet.items.v1;
+
+// Takes a station of a cabinet: its controls, a player's own pad. Refused
+// as `station` past the pads a game reads, `taken` when another holds it.
+// A session holds one station in the world, so sitting at another lets go
+// of the one it held.
+message Sit {
+  // The cabinet, by its part's id.
+  uint64 cabinet = 1;
+  // From 0, the first pad.
+  uint32 station = 2;
+}
+
+// Lets go of the station held at a cabinet.
+message Rise {
+  uint64 cabinet = 1;
+}
+
+// Asks who holds the stations of every cabinet someone sits at: a Stations
+// each, to the asker alone.
+message Look {}
+
+// Who holds each station of a cabinet, said to everyone in the world when
+// it changes. A session that leaves the world lets go of its station.
+message Stations {
+  uint64 cabinet = 1;
+  // By station, from 0: a session, or 0 for none.
+  repeated uint32 holders = 2;
+}
+
+// A game played together at one cabinet, relayed between its holders. Each
+// hears every relay, its own too, in one order, so each reads the same
+// buttons for every update.
+message Versus {
+  oneof message {
+    Start start = 1;
+    Pads pads = 2;
+  }
+}
+
+// The game as it ran before the pads' buttons were agreed, sent by the one
+// who ran it to the one who sat since, in parts: a game started on the same
+// file and seed and run through these buttons is the same game.
+message Start {
+  // The session it is for: the one who sat.
+  uint32 to = 1;
+  // The updates it ran, where the agreed buttons start.
+  uint64 at = 2;
+  // From 0, of `parts`.
+  uint32 part = 3;
+  uint32 parts = 4;
+  // Its buttons, both pads in one word an update, as runs: `buttons[i]`
+  // held `counts[i]` updates.
+  repeated uint32 buttons = 5;
+  repeated uint32 counts = 6;
+}
+
+// Buttons of pads from an update on, one byte an update.
+message Pads {
+  repeated Pad pads = 1;
+}
+
+message Pad {
+  // From 0, the station.
+  uint32 pad = 1;
+  // The update its first byte is for.
+  uint64 from = 2;
+  // A byte an update: the pad's buttons, its own bits alone. Its holder
+  // writes what it pressed; another writes only nothing pressed, for a
+  // holder gone quiet.
+  bytes buttons = 3;
+}

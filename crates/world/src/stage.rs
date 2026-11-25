@@ -18,6 +18,8 @@ pub(crate) struct Stage {
     pub store: BTreeMap<Vec<u8>, Vec<u8>>,
     pub told: Vec<(String, Vec<u8>, Vec<u32>)>,
     pub refused: Option<String>,
+    /// Who holds each thing the owner linked.
+    pub linked: BTreeMap<u64, Vec<u32>>,
 }
 
 impl Stage {
@@ -35,6 +37,7 @@ impl Stage {
             store: BTreeMap::new(),
             told: Vec::new(),
             refused: None,
+            linked: BTreeMap::new(),
         }
     }
 }
@@ -80,5 +83,13 @@ impl Room for Stage {
 
     fn refuse(&mut self, code: &str) {
         self.refused = Some(code.to_owned());
+    }
+
+    fn link(&mut self, thing: u64, sessions: &[u32]) {
+        if sessions.is_empty() {
+            self.linked.remove(&thing);
+        } else {
+            self.linked.insert(thing, sessions.to_vec());
+        }
     }
 }

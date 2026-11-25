@@ -33,13 +33,44 @@ func loaded(t *testing.T) *Module {
 // chat is the one plugin this version carries, as the core hosts it.
 func chat(t *testing.T, m *Module) world.Plugin {
 	t.Helper()
+	return carried(t, m, "chat")
+}
+
+func carried(t *testing.T, m *Module, name string) world.Plugin {
+	t.Helper()
 	for _, in := range m.Plugins() {
-		if in.Plugin.Name() == "chat" {
+		if in.Plugin.Name() == name {
 			return in.Plugin
 		}
 	}
-	t.Fatal("the module carries no chat")
+	t.Fatalf("the module carries no %s", name)
 	return nil
+}
+
+// sit is the items plugin's Sit, by hand: a cabinet and a station.
+func sit(cabinet uint64, station uint32) []byte {
+	payload := protowire.AppendTag(nil, 1, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, cabinet)
+	payload = protowire.AppendTag(payload, 2, protowire.VarintType)
+	return protowire.AppendVarint(payload, uint64(station))
+}
+
+func TestAStationTakenLinksItsHoldersAcrossTheBridge(t *testing.T) {
+	items := carried(t, loaded(t), "items")
+	r, who := three()
+	neighbourWho := r.here[1]
+	items.Do(r, who, "sit", sit(0xcab, 0))
+	items.Do(r, neighbourWho, "sit", sit(0xcab, 1))
+	if linked := r.linked[0xcab]; !slices.Equal(linked, []uint32{speaker, neighbour}) {
+		t.Fatalf("the two at a cabinet relay to each other: %v", r.linked)
+	}
+	items.Do(r, r.here[2], "sit", sit(0xcab, 0))
+	if r.refused != "taken" {
+		t.Fatalf("a third finds the station taken: %q", r.refused)
+	}
+	if heard := r.heard[far]; len(heard) != 2 || !strings.HasPrefix(heard[1], "stations:") {
+		t.Fatalf("everyone hears who holds the stations: %v", heard)
+	}
 }
 
 func TestTheModuleSaysWhatItCarries(t *testing.T) {
@@ -89,10 +120,18 @@ func TestTheModuleSaysWhatItCarries(t *testing.T) {
 	if build.Name() != "build" || build.Version() != 1 || !plugins[1].On || len(build.Ops()) != 0 {
 		t.Fatalf("building is on and offers no op: %s %d %v", build.Name(), build.Version(), build.Ops())
 	}
-	// So is items: placing is a hand's, and the parts are the core's.
+	// Items places parts by a hand and the parts are the core's: what its
+	// world half holds is who stands at a cabinet's controls, for anyone.
 	items := plugins[2].Plugin
-	if items.Name() != "items" || items.Version() != 1 || !plugins[2].On || len(items.Ops()) != 0 {
-		t.Fatalf("items is on and offers no op: %s %d %v", items.Name(), items.Version(), items.Ops())
+	var stations []string
+	for _, op := range items.Ops() {
+		if op.Level != world.LevelAnonymous {
+			t.Fatalf("anyone plays at a cabinet: %v", op)
+		}
+		stations = append(stations, op.Kind)
+	}
+	if items.Name() != "items" || items.Version() != 2 || !plugins[2].On || strings.Join(stations, " ") != "sit rise look" {
+		t.Fatalf("items is on and offers a cabinet's stations: %s %d %v", items.Name(), items.Version(), items.Ops())
 	}
 	// And ride: a body in a way moves in the client, and goes out in its
 	// stance.
@@ -149,6 +188,8 @@ type room struct {
 	params string
 	// The code the last op was refused with.
 	refused string
+	// Who holds each thing the plugin linked.
+	linked map[uint64][]uint32
 }
 
 func (r *room) Now() time.Time     { return r.now }
@@ -158,6 +199,12 @@ func (r *room) Recipe() world.Recipe {
 	return recipe
 }
 func (r *room) Here() []world.Who { return r.here }
+func (r *room) Link(thing uint64, sessions []uint32) {
+	if r.linked == nil {
+		r.linked = map[uint64][]uint32{}
+	}
+	r.linked[thing] = sessions
+}
 func (r *room) Tell(kind string, payload []byte, to func(world.Who) bool) {
 	for _, who := range r.here {
 		if to(who) {

@@ -1,6 +1,6 @@
 [package]
 name = "items-world"
-description = "The items plugin's world half: its name and its version. Placing is in the client, and the parts are the core's."
+description = "The items plugin's world half: who holds each station of a cabinet, and its wire. Placing is in the client, and the parts are the core's."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,12 @@ repository.workspace = true
 
 [dependencies]
 world.workspace = true
+arcade.workspace = true
+prost.workspace = true
+
+[dev-dependencies]
+topology.workspace = true
+worldgen.workspace = true
 
 [lints]
 workspace = true

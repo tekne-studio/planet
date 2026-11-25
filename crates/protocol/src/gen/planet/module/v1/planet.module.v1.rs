@@ -85,7 +85,7 @@ pub struct Gone {
 /// What the module says back.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Reply {
-    #[prost(oneof="reply::Reply", tags="1, 2, 3, 4")]
+    #[prost(oneof="reply::Reply", tags="1, 2, 3, 4, 5")]
     pub reply: ::core::option::Option<reply::Reply>,
 }
 /// Nested message and enum types in `Reply`.
@@ -100,7 +100,22 @@ pub mod reply {
         Keep(super::Keep),
         #[prost(message, tag="4")]
         Answered(super::Answered),
+        #[prost(message, tag="5")]
+        Link(super::Link),
     }
+}
+/// Who holds one thing of an owner together, said by the owner while it
+/// applies an op: they, and only they, relay bytes to each other about it
+/// (`planet.v1.Relay`). It replaces what was said of the thing before; none
+/// lets it go. A session that leaves the world leaves every thing it held.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Link {
+    #[prost(string, tag="1")]
+    pub owner: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub thing: u64,
+    #[prost(uint32, repeated, tag="3")]
+    pub sessions: ::prost::alloc::vec::Vec<u32>,
 }
 /// Something an owner keeps, or forgets, in its store in the world folder.
 /// The server writes what a call kept once the call has returned, all of it

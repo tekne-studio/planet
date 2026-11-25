@@ -64,6 +64,10 @@ impl Room for Three {
     fn refuse(&mut self, code: &str) {
         panic!("chat refuses nothing: {code}");
     }
+
+    fn link(&mut self, thing: u64, _sessions: &[u32]) {
+        panic!("chat links nothing: {thing}");
+    }
 }
 
 impl Three {

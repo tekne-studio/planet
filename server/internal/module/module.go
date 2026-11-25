@@ -497,6 +497,11 @@ func (h *hosted) Do(room world.Room, who world.Who, kind string, payload []byte)
 		if answered := reply.GetAnswered(); answered != nil {
 			room.Refuse(answered.Code)
 		}
+		// An owner links its own things alone, in the order it said them
+		// among its events.
+		if link := reply.GetLink(); link != nil && link.Owner == h.name {
+			room.Link(link.Thing, link.Sessions)
+		}
 		tell := reply.GetTell()
 		// An owner speaks under its own name alone.
 		if tell == nil || tell.Plugin != h.name {

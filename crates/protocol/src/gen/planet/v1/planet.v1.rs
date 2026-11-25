@@ -107,6 +107,23 @@ pub struct Envelope {
     #[prost(uint32, tag="4")]
     pub id: u32,
 }
+/// Bytes for the sessions that hold one thing of an owner together, carried
+/// by the server and never read by it: the owner's world half says who holds
+/// the thing, and only one of them may relay. Every holder hears it, the
+/// sender too, all in the one order the server took them in, so each holder
+/// reads the same sequence.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Relay {
+    /// The owner's name, as an envelope says it.
+    #[prost(string, tag="1")]
+    pub plugin: ::prost::alloc::string::String,
+    /// The thing within the owner, by its own number.
+    #[prost(uint64, tag="2")]
+    pub thing: u64,
+    /// At most `LIMIT_RELAY_BYTES`.
+    #[prost(bytes="vec", tag="3")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
+}
 /// What became of an op asked with an id: it landed, or the code of why it
 /// was refused. To the asker alone.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -120,7 +137,7 @@ pub struct Answer {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ClientMessage {
-    #[prost(oneof="client_message::Message", tags="1, 2, 3, 5, 6, 7")]
+    #[prost(oneof="client_message::Message", tags="1, 2, 3, 5, 6, 7, 8")]
     pub message: ::core::option::Option<client_message::Message>,
 }
 /// Nested message and enum types in `ClientMessage`.
@@ -139,6 +156,8 @@ pub mod client_message {
         Envelope(super::Envelope),
         #[prost(message, tag="7")]
         Sound(super::Sound),
+        #[prost(message, tag="8")]
+        Relay(super::Relay),
     }
 }
 /// Seed + params + generator version, as the world folder holds it. The
@@ -266,6 +285,18 @@ pub struct Stances {
     #[prost(message, repeated, tag="1")]
     pub moved: ::prost::alloc::vec::Vec<Moved>,
 }
+/// A relay, as each holder of the thing hears it: who sent it, and what.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Relayed {
+    #[prost(string, tag="1")]
+    pub plugin: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub thing: u64,
+    #[prost(uint32, tag="3")]
+    pub session: u32,
+    #[prost(bytes="vec", tag="4")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
+}
 /// Sent instead of Welcome, then the socket closes.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Refused {
@@ -274,7 +305,7 @@ pub struct Refused {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServerMessage {
-    #[prost(oneof="server_message::Message", tags="1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12")]
+    #[prost(oneof="server_message::Message", tags="1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13")]
     pub message: ::core::option::Option<server_message::Message>,
 }
 /// Nested message and enum types in `ServerMessage`.
@@ -303,6 +334,8 @@ pub mod server_message {
         Answer(super::Answer),
         #[prost(message, tag="12")]
         Sounded(super::Sounded),
+        #[prost(message, tag="13")]
+        Relayed(super::Relayed),
     }
 }
 /// The body a stance is measured from. Every body is parametrised on the
@@ -392,6 +425,13 @@ pub enum Limit {
     /// LIMIT_SOUND_WINDOW_MS. One more is dropped unheard.
     SoundBurst = 4,
     SoundWindowMs = 2000,
+    /// Bytes of a relay's payload. A longer one is dropped.
+    RelayBytes = 4096,
+    /// A session relays at most this many payloads a second, and as many as
+    /// LIMIT_RELAY_BURST at once after a quiet while: a link's jitter bunches
+    /// what a client spaced. One more is dropped, for every member alike.
+    RelayPerSecond = 120,
+    RelayBurst = 240,
 }
 impl Limit {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -406,6 +446,9 @@ impl Limit {
             Self::VoiceBytes => "LIMIT_VOICE_BYTES",
             Self::SoundBurst => "LIMIT_SOUND_BURST",
             Self::SoundWindowMs => "LIMIT_SOUND_WINDOW_MS",
+            Self::RelayBytes => "LIMIT_RELAY_BYTES",
+            Self::RelayPerSecond => "LIMIT_RELAY_PER_SECOND",
+            Self::RelayBurst => "LIMIT_RELAY_BURST",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -417,6 +460,9 @@ impl Limit {
             "LIMIT_VOICE_BYTES" => Some(Self::VoiceBytes),
             "LIMIT_SOUND_BURST" => Some(Self::SoundBurst),
             "LIMIT_SOUND_WINDOW_MS" => Some(Self::SoundWindowMs),
+            "LIMIT_RELAY_BYTES" => Some(Self::RelayBytes),
+            "LIMIT_RELAY_PER_SECOND" => Some(Self::RelayPerSecond),
+            "LIMIT_RELAY_BURST" => Some(Self::RelayBurst),
             _ => None,
         }
     }

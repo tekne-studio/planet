@@ -165,6 +165,13 @@ pub trait Room {
     /// Answers the op being applied with the code of why it is refused. An
     /// op nothing refuses has landed.
     fn refuse(&mut self, code: &str);
+
+    /// Says who holds this owner's `thing` together, in place of who held
+    /// it before: they, and only they, relay bytes to each other about it,
+    /// each hearing every relay in the one order the server takes them in.
+    /// None lets it go, and a session that leaves the world lets go of all
+    /// it held. The server reads none of what they relay.
+    fn link(&mut self, thing: u64, sessions: &[u32]);
 }
 
 /// A plugin's world half. The host calls it one call at a time, and may keep

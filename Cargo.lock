@@ -1392,7 +1392,11 @@ dependencies = [
 name = "items-world"
 version = "0.0.0"
 dependencies = [
+ "arcade",
+ "prost",
+ "topology",
  "world",
+ "worldgen",
 ]
 
 [[package]]

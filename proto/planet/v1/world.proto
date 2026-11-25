@@ -80,6 +80,13 @@ enum Limit {
   // LIMIT_SOUND_WINDOW_MS. One more is dropped unheard.
   LIMIT_SOUND_BURST = 4;
   LIMIT_SOUND_WINDOW_MS = 2000;
+  // Bytes of a relay's payload. A longer one is dropped.
+  LIMIT_RELAY_BYTES = 4096;
+  // A session relays at most this many payloads a second, and as many as
+  // LIMIT_RELAY_BURST at once after a quiet while: a link's jitter bunches
+  // what a client spaced. One more is dropped, for every member alike.
+  LIMIT_RELAY_PER_SECOND = 120;
+  LIMIT_RELAY_BURST = 240;
 }
 
 // What a client says first. Who it is was settled before: the key it was
@@ -128,6 +135,20 @@ message Envelope {
   uint32 id = 4;
 }
 
+// Bytes for the sessions that hold one thing of an owner together, carried
+// by the server and never read by it: the owner's world half says who holds
+// the thing, and only one of them may relay. Every holder hears it, the
+// sender too, all in the one order the server took them in, so each holder
+// reads the same sequence.
+message Relay {
+  // The owner's name, as an envelope says it.
+  string plugin = 1;
+  // The thing within the owner, by its own number.
+  uint64 thing = 2;
+  // At most `LIMIT_RELAY_BYTES`.
+  bytes payload = 3;
+}
+
 // What became of an op asked with an id: it landed, or the code of why it
 // was refused. To the asker alone.
 message Answer {
@@ -145,6 +166,7 @@ message ClientMessage {
     Rename rename = 5;
     Envelope envelope = 6;
     Sound sound = 7;
+    Relay relay = 8;
   }
   reserved 4;
 }
@@ -252,6 +274,14 @@ message Stances {
   repeated Moved moved = 1;
 }
 
+// A relay, as each holder of the thing hears it: who sent it, and what.
+message Relayed {
+  string plugin = 1;
+  uint64 thing = 2;
+  uint32 session = 3;
+  bytes payload = 4;
+}
+
 // Sent instead of Welcome, then the socket closes.
 message Refused {
   string reason = 1;
@@ -270,6 +300,7 @@ message ServerMessage {
     Plugins plugins = 10;
     Answer answer = 11;
     Sounded sounded = 12;
+    Relayed relayed = 13;
   }
   reserved 7;
 }
