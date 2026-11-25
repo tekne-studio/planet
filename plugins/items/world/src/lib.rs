@@ -128,8 +128,10 @@ impl world::Plugin for Items {
                     return room.refuse(REFUSED_STATION);
                 }
                 let held = self.held.get(&sit.cabinet).map(|holders| holders[station]);
+                // Asked again, by one whose answer went astray or whose
+                // client forgot it: said again.
                 if held == Some(who.session) {
-                    return;
+                    return self.said(sit.cabinet, room);
                 }
                 if held.is_some_and(|held| held != 0) {
                     return room.refuse(REFUSED_TAKEN);

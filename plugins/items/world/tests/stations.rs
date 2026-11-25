@@ -137,10 +137,15 @@ fn two_sit_a_third_is_refused_and_everyone_hears_it() {
     sit(&mut items, &mut hall, 3, CABINET, u32::MAX);
     assert_eq!(hall.refused.as_deref(), Some(REFUSED_STATION));
     assert_eq!(last(&hall, 3, CABINET), Some(vec![1, 2]), "nothing changed");
-    // Sitting again where one sits already changes nothing, and says nothing.
+    // Sitting again where one sits already changes nothing and says it again,
+    // links included: the server lets a link go while its owner is off.
+    hall.linked.clear();
     let said = hall.heard.len();
     sit(&mut items, &mut hall, 1, CABINET, 0);
-    assert_eq!((hall.refused.clone(), hall.heard.len()), (None, said));
+    assert_eq!(hall.refused, None);
+    assert_eq!(hall.heard.len(), said + 4, "everyone hears it again");
+    assert_eq!(last(&hall, 4, CABINET), Some(vec![1, 2]));
+    assert_eq!(hall.linked[&CABINET], [1, 2]);
 }
 
 #[test]

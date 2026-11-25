@@ -21,7 +21,9 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+protocol.workspace = true
 scene.workspace = true
+worldgen.workspace = true
 
 [lints]
 workspace = true

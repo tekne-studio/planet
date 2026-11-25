@@ -1382,11 +1382,13 @@ dependencies = [
  "libm",
  "part",
  "prost",
+ "protocol",
  "scene",
  "serde",
  "serde_json",
  "topology",
  "voxel",
+ "worldgen",
 ]
 
 [[package]]

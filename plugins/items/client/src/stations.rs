@@ -76,10 +76,12 @@ impl Stations {
             .or(asked.map(|asked| asked.station))
     }
 
-    /// The first station of `cabinet` free among the `plays` its game reads.
+    /// The first station of `cabinet` free among the `plays` its game reads:
+    /// held by nobody, or by this session, whose sit the world says again.
     fn free(&self, cabinet: u64, plays: usize) -> Option<usize> {
         let holders = self.held.get(&cabinet).copied().unwrap_or_default();
-        (0..plays.min(PADS)).find(|&station| holders[station] == 0)
+        (0..plays.min(PADS))
+            .find(|&station| holders[station] == 0 || Some(holders[station]) == self.session)
     }
 
     /// Who holds `cabinet`'s stations now.
@@ -168,6 +170,10 @@ impl Items {
             });
         }
         self.rise(host);
+        // What the world said goes with it: a rise while the plugin is off is
+        // refused, so its first turn back asks the world again.
+        self.stations.session = None;
+        self.stations.held.clear();
     }
 
     fn ask(&mut self, host: &mut Host<'_>, cabinet: u64, station: usize, ran: Runs) {
@@ -267,6 +273,14 @@ impl Items {
             *held = session;
         }
         self.stations.said(cabinet, holders);
+        // Held here and neither asked for nor played: an answer come after
+        // the wait, or a station held before the plugin was switched off and
+        // on. Let go, or it is nobody's to play.
+        let me = host.session();
+        if me.is_some_and(|me| holders.contains(&me)) && !self.stations.sits_at(cabinet) {
+            host.send(RISE, wire::Rise { cabinet }.encode_to_vec());
+            return;
+        }
         let Some(asked) = self
             .stations
             .asked

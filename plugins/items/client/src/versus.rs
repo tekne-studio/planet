@@ -15,9 +15,9 @@
 //!
 //! A holder gone quiet holds the others [`WAIT_S`] at most: then they write
 //! its pad released, nothing pressed, and run on. Such bytes count only when
-//! the world's stamps say its holder wrote nothing new for as long, so a
-//! peer never releases the pad of a holder who plays; one who writes again
-//! claims its pad back past them. A machine that fell behind, hidden or
+//! the world's stamps say its holder wrote nothing for as long, so a peer
+//! never releases the pad of a holder who plays; one who writes again is
+//! heard, wherever its bytes fall, and claims its pad back past them. A machine that fell behind, hidden or
 //! slow, runs what it missed at once and goes on.
 //!
 //! Alone at the cabinet, a player runs the game with no delay and relays
@@ -514,7 +514,7 @@ impl Versus {
 
     /// Buttons of pads, the first written for an update first: a holder's
     /// own, its pad's bits alone; another's for it, released, and only once
-    /// its holder wrote nothing new for [`WAIT_MS`] by the world's clock.
+    /// its holder wrote nothing for [`WAIT_MS`] by the world's clock.
     fn wrote(&mut self, session: u32, pads: wire::Pads, clock_ms: u64, now_s: f64) {
         let (holders, plays, me, mine) = (self.holders, self.plays, self.me, self.mine);
         let fed = self.fed();
@@ -530,6 +530,15 @@ impl Versus {
                 self.heard_ms[index].is_none_or(|heard| clock_ms.saturating_sub(heard) >= WAIT_MS);
             if holders[index] == 0 || !(own || quiet) {
                 continue;
+            }
+            // A holder who writes is not quiet, wherever its bytes fall: one
+            // back from a while away writes behind the releases written for
+            // it, and reaches past them only once they stop counting.
+            if own {
+                self.heard_ms[index] = Some(clock_ms);
+                self.heard_s[index] = Some(now_s);
+                lockstep.absent[index] = false;
+                lockstep.waited_s[index] = None;
             }
             let front = lockstep.front[index];
             // A gap: what comes after it waits for what is missing.
@@ -557,12 +566,7 @@ impl Versus {
                 continue;
             }
             lockstep.front[index] = front + count;
-            if own {
-                self.heard_ms[index] = Some(clock_ms);
-                self.heard_s[index] = Some(now_s);
-                lockstep.absent[index] = false;
-                lockstep.waited_s[index] = None;
-            } else if index == mine && session != me {
+            if !own && index == mine && session != me {
                 lockstep.filled = true;
             }
         }
@@ -859,25 +863,32 @@ mod tests {
 
     #[test]
     fn a_holder_gone_quiet_is_released_and_claims_its_pad_back() {
-        let mut net = Net::new(0.05);
-        net.sit(B, 1, [A, B], Runs::default());
-        net.turns(120, played);
-        let before = net.agree();
-        net.machine(B).ready = false;
-        net.turns(300, played);
-        let a = net.versus(A).fed();
-        assert!(
-            a > before + 240,
-            "A plays on, B's pad released: {before} to {a}"
-        );
-        net.machine(B).ready = true;
-        net.turns(120, played);
-        assert!(net.agree() > a + 90, "B caught up and plays again");
-        let back = net.versus(A).history().words(a + 40, net.versus(A).fed());
-        assert!(
-            back.iter().any(|&word| Pad::of_pad(word, 1) != Pad::NONE),
-            "B's pad is B's again"
-        );
+        // On one Wi-Fi, past the delay, and a phone on a mobile link.
+        for latency_s in [0.05, 0.1, 0.25] {
+            let mut net = Net::new(latency_s);
+            net.sit(B, 1, [A, B], Runs::default());
+            net.turns(120, played);
+            let before = net.agree();
+            net.machine(B).ready = false;
+            net.turns(300, played);
+            let a = net.versus(A).fed();
+            // Held a wait and a round trip, then on at its pace.
+            assert!(
+                a > before + 200,
+                "A plays on, B's pad released: {before} to {a} at {latency_s} s"
+            );
+            net.machine(B).ready = true;
+            net.turns(120, played);
+            assert!(
+                net.agree() > a + 90,
+                "B caught up and plays again at {latency_s} s"
+            );
+            let back = net.versus(A).history().words(a + 60, net.versus(A).fed());
+            assert!(
+                back.iter().any(|&word| Pad::of_pad(word, 1) != Pad::NONE),
+                "B's pad is B's again at {latency_s} s"
+            );
+        }
     }
 
     #[test]

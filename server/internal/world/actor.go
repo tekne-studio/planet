@@ -74,7 +74,10 @@ const (
 // A relay's payload and its rate, as the schema says them to both sides: a
 // session relays at most RelayPerSecond payloads, RelayBurst at once after
 // a quiet while, each at most RelayBytes; one past them is dropped for
-// every holder alike, so a client cannot flood the others off the world.
+// every holder alike. Within them a session can still send a holder more
+// than a slow link carries, and that holder is dropped as too slow to
+// follow: dropping a relay for one holder alone would break the one order
+// every holder reads.
 const (
 	RelayBytes     = int(pb.Limit_LIMIT_RELAY_BYTES)
 	RelayPerSecond = float64(pb.Limit_LIMIT_RELAY_PER_SECOND)
