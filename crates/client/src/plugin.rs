@@ -944,8 +944,10 @@ impl Host<'_> {
         }
     }
 
-    /// Runs the game fed of the cabinet `id` again from its start: it stops
-    /// as the frame ends, and opens again given nothing while it is played.
+    /// Runs the game of the cabinet `id` again from its start, as a
+    /// console's reset does: it stops as the frame ends, its cover shows,
+    /// and it opens again from its seed while it is played, a game fed
+    /// given nothing.
     pub fn restart_game(&mut self, id: PartId) {
         if let Some(key) = self.game_of(id) {
             self.lent.carts.restart(key);

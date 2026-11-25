@@ -321,7 +321,7 @@ pub struct Carts {
     reads: HashMap<PictureId, Vec<(u64, bool)>>,
     /// The games waiting for a player who left, in the order they left.
     waiting: Vec<GameId>,
-    /// The games fed to run again from their start ([`Carts::restart`]).
+    /// The games to run again from their start ([`Carts::restart`]).
     restarts: Vec<GameId>,
     /// The games' clock, seconds of the frames the client ran: a window
     /// is as long on a slow screen as on a fast one, and a hidden page's
@@ -576,10 +576,11 @@ impl Carts {
         });
     }
 
-    /// Runs the game `key`, fed, again from its start, as the frame ends:
-    /// it stops, and opens again as its player wants it, given nothing.
+    /// Runs the game `key` again from its start, as the frame ends: it
+    /// stops, its cover shows, and it opens again as its player wants it,
+    /// from its seed, a game fed given nothing.
     pub(crate) fn restart(&mut self, key: GameId) {
-        if self.games.get(&key).is_some_and(|game| game.fed.is_some()) {
+        if self.games.contains_key(&key) {
             self.restarts.push(key);
         }
     }
@@ -902,7 +903,8 @@ impl Carts {
             let Some(game) = self.games.get_mut(&key) else {
                 continue;
             };
-            if game.fed.take().is_some() && live.is_open(source) {
+            game.fed = None;
+            if live.is_open(source) {
                 game.left = None;
                 live.closed(source);
                 self.reads.remove(&game.picture);
@@ -1636,6 +1638,45 @@ mod tests {
         );
         carts.opened(picture, Ok((160, 120))).unwrap();
         assert_eq!(carts.given(game, &carts.live), Some(0));
+    }
+
+    #[test]
+    fn a_game_of_one_pad_run_again_shows_its_cover_then_runs_from_its_seed() {
+        let mut carts = Held::default();
+        let (picture, cover) = carts.running(1, cart(1));
+        let game = (1, cart(1));
+        carts.press(game, Pad::START);
+        carts.play(1, cart(1), at(3.0), &screen());
+        carts.end_frame();
+        carts.drain_running();
+        // Reset as it is played: it stops as the frame ends.
+        carts.carts.restart(game);
+        carts.play(1, cart(1), at(3.0), &screen());
+        carts.end_frame();
+        assert_eq!(carts.drain_running(), [Running::Close(picture)]);
+        // Its cover shows until its first frame, its last one let go.
+        assert_eq!(
+            shown(carts.play(1, cart(1), at(3.0), &screen())),
+            Some(cover)
+        );
+        carts.end_frame();
+        let running = carts.drain_running();
+        assert!(
+            matches!(
+                running.as_slice(),
+                [Running::Open {
+                    seed: 1,
+                    fed: false,
+                    ..
+                }]
+            ),
+            "{running:?}"
+        );
+        assert!(matches!(
+            carts.drain_changes().as_slice(),
+            [PictureChange::Remove(id)] if *id == picture
+        ));
+        assert!(!carts.waits(game));
     }
 
     #[test]
