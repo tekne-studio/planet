@@ -50,7 +50,10 @@ impl Gait {
     }
 
     pub fn of(controller: &Controller) -> Gait {
-        if controller.flying() {
+        // Taken off on wings, it flies from the press: the spring off its
+        // legs is the flight's start, and a peer draws both from when its
+        // gait turned.
+        if controller.flying() || controller.aloft() {
             Gait::Fly
         } else if controller.way().is_some() {
             // A body in a way of moving holds the way's pose over the idle

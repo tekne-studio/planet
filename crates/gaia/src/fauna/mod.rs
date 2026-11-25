@@ -44,7 +44,9 @@ pub use body::{Animal, Beat, Flank, Footfall, Glide, Going, Landing, Leap, LegPo
 pub use call::{ANSWERS_M, COMES_M, FASTEST_MPS, Run, coming_s};
 pub use gait::{Gait, Gaits, Hoof};
 pub use herd::{Herd, Land, Pose, grazing};
-pub use kind::{Backing, BySize, Carry, Flight, Habitat, Herding, Jump, Kind, Pace, Winged};
+pub use kind::{
+    Backing, BySize, Carry, Flight, Habitat, Herding, Jump, Kind, Pace, Spring, Winged,
+};
 pub use look::{Blot, Build, Coat, Face, Look, Marks, Patches, Traits};
 pub use random::{Random, mix};
 pub use region::{HOMES, PLACE_BITS, REGION_BITS, Region};

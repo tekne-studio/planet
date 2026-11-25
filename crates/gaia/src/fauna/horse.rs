@@ -7,7 +7,7 @@ use glam::{DVec3, Vec3};
 
 use crate::fauna::gait::{Gait, Gaits};
 use crate::fauna::kind::{
-    Backing, BySize, Carry, Flight, Habitat, Herding, Jump, Kind, Pace, Winged,
+    Backing, BySize, Carry, Flight, Habitat, Herding, Jump, Kind, Pace, Spring, Winged,
 };
 use crate::fauna::look::{Build, Coat, Face, Marks, Patches};
 use crate::fauna::rig::{Ears, Leg, Neck, Part, Rig, Role, Section, Tail};
@@ -331,7 +331,8 @@ pub const WING: Wing = Wing {
     ],
     beat_hz: (0.9, 1.8),
     stroke: (0.1, 1.0),
-    spread_s: 0.3,
+    open_s: 0.12,
+    fold_s: 0.3,
     heave_m: 0.08,
 };
 
@@ -677,6 +678,14 @@ pub const HORSE: Kind = Kind {
             top_mps: 150.0,
             ceiling_m: 500.0,
             takeoff_m: 3.0,
+            // A gallop's gather and a jump's arc: the press is answered at
+            // once, and the wings are out in under two thirds of a second.
+            spring: Spring {
+                gather_s: 0.2,
+                rise_s: 0.3,
+                height_m: 0.6,
+                forward_mps: 1.5,
+            },
             land_mps: 2.5,
             land_per_m: 1.0,
         },

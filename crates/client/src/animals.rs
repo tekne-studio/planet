@@ -312,8 +312,8 @@ pub(crate) struct Animals {
     /// rides it.
     glides: Vec<(Option<u32>, fauna::Glide)>,
     /// Where an animal ridden sprang into a jump this frame, by who rides
-    /// it.
-    sprang: Vec<(Option<u32>, DVec3)>,
+    /// it, and whether to take off.
+    sprang: Vec<(Option<u32>, DVec3, bool)>,
     /// How an animal ridden came down from a jump, a fall or a flight this
     /// frame, by who rides it.
     landed: Vec<(Option<u32>, fauna::Landing)>,
@@ -488,8 +488,10 @@ impl Animals {
     }
 
     /// Where each animal ridden sprang into a jump this frame, by who rides
-    /// it: `None` for this client's body, a peer by its session.
-    pub(crate) fn sprang(&self) -> &[(Option<u32>, DVec3)] {
+    /// it: `None` for this client's body, a peer by its session; and
+    /// whether to take off, which every client draws alike from its rider's
+    /// gait.
+    pub(crate) fn sprang(&self) -> &[(Option<u32>, DVec3, bool)] {
         &self.sprang
     }
 
@@ -658,7 +660,8 @@ impl Animals {
             let glide = body.animal.glide();
             self.glides.extend(glide.map(|glide| (rider.who, glide)));
             let sprang = body.animal.sprang();
-            self.sprang.extend(sprang.map(|at| (rider.who, at)));
+            self.sprang
+                .extend(sprang.map(|at| (rider.who, at, rider.wings)));
             let landed = body.animal.landed();
             self.landed
                 .extend(landed.map(|landing| (rider.who, landing)));
@@ -2219,7 +2222,7 @@ mod tests {
             }
             let along = grid.tangents(from).du;
             controller.face(topology::bearing_deg(grid.direction(from), along).unwrap());
-            let profile = Profile::Paces(crate::paces::tests::horse());
+            let profile = Profile::Paces(Box::new(crate::paces::tests::horse()));
             assert!(controller.take_way(
                 "test.horse",
                 &profile,
@@ -2722,6 +2725,84 @@ mod tests {
                 pegasi += 1;
                 assert!(grown[0] > 0.9 && grown[1] < 0.1, "{grown:?}");
             }
+        }
+        assert!(pegasi > 0, "a pegasus near the spawn");
+    }
+
+    /// A peer's pegasus takes off as its rider's does, from the stance's
+    /// gait alone: it gathers on the ground from the stance that turned to
+    /// flight, springs off its legs as the body rises, once, and opens its
+    /// wings only at the spring's top.
+    #[test]
+    fn a_peers_pegasus_takes_off_by_its_gait_and_opens_its_wings_at_the_top() {
+        let world = World::new();
+        let spawn = crate::spawn_point(&world.generator);
+        let winged = gaia::fauna::horse::HORSE.wings.expect("a horse has wings");
+        let spring = crate::paces::Spring::from(winged.flight.spring);
+        let open_s = winged.wing.open_s;
+        let beat_s = 1.0 / winged.wing.beat_hz.0;
+        let frames = ((spring.top_s() + beat_s) * 60.0).round() as usize;
+        let mut pegasi = 0;
+        let mut herd = Animals::default();
+        world.step(&mut herd, 1e3, spawn, NONE);
+        for horse in herd.near().to_vec() {
+            let ground = world.land_off(horse.at, 50.0);
+            let up = ground.normalize();
+            let mut animals = Animals::default();
+            world.step(&mut animals, 1e3, spawn, NONE);
+            let standing = [rider(Some(7), horse.number, ground)];
+            for _ in 0..60 {
+                let bodies = Bodies {
+                    riders: &standing,
+                    on_foot: &[],
+                };
+                world.step(&mut animals, 1e3, spawn, bodies);
+            }
+            let grown = |animals: &Animals| {
+                let body = animals.ridden.get(&Some(7))?;
+                body.animal.wings().map(|wings| wings.grown)
+            };
+            if grown(&animals).is_none() {
+                continue;
+            }
+            pegasi += 1;
+            let (mut sprang, mut beats) = (Vec::new(), Vec::new());
+            for frame in 1..=frames {
+                let s = frame as f64 / 60.0;
+                // Its rider's spring, as the stances bring it.
+                let over_m = spring.height_at(s, spring.height_m);
+                let riders = [Rider {
+                    wings: true,
+                    ..rider(Some(7), horse.number, ground + up * over_m)
+                }];
+                let bodies = Bodies {
+                    riders: &riders,
+                    on_foot: &[],
+                };
+                world.step(&mut animals, 1e3, spawn, bodies);
+                let grown = grown(&animals).expect("its wings");
+                if s < spring.top_s() - 0.5 / 60.0 {
+                    assert!(grown < 0.01, "{s} s: {grown} grown before the top");
+                }
+                if s > spring.top_s() + open_s + 0.05 {
+                    assert!(grown > 0.95, "{s} s: {grown} grown past the top");
+                }
+                for &(who, _, take_off) in animals.sprang() {
+                    assert_eq!((who, take_off), (Some(7), true));
+                    sprang.push(s);
+                }
+                beats.extend(animals.wingbeats().iter().map(|_| s));
+            }
+            assert_eq!(sprang.len(), 1, "it springs once: {sprang:?}");
+            // Opened raised, its first downstroke takes the air within a
+            // beat of the top.
+            let first_s = beats.first().copied().unwrap_or(f64::INFINITY);
+            assert!(
+                (spring.top_s()..spring.top_s() + beat_s).contains(&first_s),
+                "first beat at {first_s} s"
+            );
+            let late_s = sprang[0] - spring.gather_s;
+            assert!((0.0..0.1).contains(&late_s), "springs at {} s", sprang[0]);
         }
         assert!(pegasi > 0, "a pegasus near the spawn");
     }

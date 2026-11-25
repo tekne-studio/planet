@@ -30,8 +30,9 @@ pub enum Profile {
     /// Over the surface on a cushion, as a board glides.
     Hover(Hover),
     /// On feet at a few paces, as a horse is ridden: always steered, and
-    /// always on an animal.
-    Paces(Paces),
+    /// always on an animal. Boxed: a table of paces is many times a
+    /// hover's size.
+    Paces(Box<Paces>),
 }
 
 /// Who turns a body in a way.

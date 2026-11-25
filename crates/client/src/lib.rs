@@ -84,7 +84,7 @@ pub use marker::{At as MarkerAt, Choice as MarkerChoice, Marked, Marker, Said as
 pub use model3d::ModelRefusal;
 pub use offer::{Act, Hold, Offer, On, Prompt, Reached, Stands};
 use offer::{Offered, Press, Pressed};
-pub use paces::{Backing, Flight, Jump, Pace, Paces};
+pub use paces::{Backing, Flight, Jump, Pace, Paces, Spring};
 pub use part::{
     CARTRIDGE, Cabinet, Clip, ClipKind, ContentId, ImageKind, Media, NAME_BYTES, Name, Part,
     PartId, PictureLevel, Portal, Pose as PartPose, Shape,
@@ -2735,7 +2735,9 @@ impl Client {
         }
         // A horse ridden here drives off the ground as it springs into a
         // jump, heard by its rider and sent for peers to strike under it.
-        for &(who, at) in self.animals.sprang() {
+        // A pegasus springing to take off is heard as each client draws it,
+        // a peer's too: its gait tells them all.
+        for &(who, at, takeoff) in self.animals.sprang() {
             let Some(animal) = self.animals.under(who) else {
                 continue;
             };
@@ -2743,7 +2745,7 @@ impl Client {
             let seed = self
                 .strikes
                 .strike(&spring, Group::Steps, at, voices::LEAP_REACH_M);
-            if who.is_none() {
+            if who.is_none() && !takeoff {
                 self.session.sound(voices::SPRING.name, seed);
             }
         }

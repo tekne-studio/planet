@@ -222,11 +222,13 @@ impl Peer {
 
     /// Where to draw the body at `now`, or nowhere until a stance has come.
     /// In a way of moving it stands tilted with the ground, leaned into the
-    /// turn and bobbing, as a body in it here does.
+    /// turn and bobbing, as a body in it here does. Its gait is the one of
+    /// the stance it is drawn from, so a gait that turned shows where the
+    /// body was when it did: a pegasus springs from where it stood.
     fn motion_at(&self, now_s: f64, moon: DVec3, way: Option<&Way>) -> Option<Motion> {
         let latest = self.latest?;
         let render_s = now_s - DELAY_S;
-        let (anchor, facing) = match self.previous {
+        let (anchor, facing, gait) = match self.previous {
             Some(previous)
                 if previous.anchor.same_body(latest.anchor) && render_s < latest.at_s =>
             {
@@ -245,9 +247,9 @@ impl Peer {
                     .facing
                     .lerp(latest.facing, t)
                     .normalize_or(latest.facing);
-                (anchor, facing)
+                (anchor, facing, previous.gait)
             }
-            _ => (latest.anchor, latest.facing),
+            _ => (latest.anchor, latest.facing, latest.gait),
         };
         let up = anchor.up();
         let hover = way.and_then(|way| match &way.profile {
@@ -267,7 +269,7 @@ impl Peer {
         Some(Motion {
             position,
             basis: figure::basis(stands, facing),
-            gait: latest.gait,
+            gait,
             speed_mps: latest.speed_mps,
             sprint: latest.sprint,
             stride_m: self.stride_m,

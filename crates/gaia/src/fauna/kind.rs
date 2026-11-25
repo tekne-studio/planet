@@ -200,10 +200,33 @@ pub struct Flight {
     /// How high it climbs as it takes off, metres over the ground, and the
     /// room it needs over its head for that.
     pub takeoff_m: f64,
+    /// How it leaves the ground for it.
+    pub spring: Spring,
     /// How fast it comes down to land, metres a second, near the ground,
     /// and how much faster for each metre over it.
     pub land_mps: f64,
     pub land_per_m: f64,
+}
+
+/// How a kind with wings leaves the ground under a rider: from the press it
+/// gathers on its legs for `gather_s`, then springs off them `height_m`
+/// up, slowing to its top in `rise_s`, carried forward as fast as it went
+/// and at least `forward_mps`; at the top its wings open and take it. Its
+/// body is drawn by these times from when its wings were asked for, so
+/// every client that sees them asked sees it alike.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Spring {
+    pub gather_s: f64,
+    pub rise_s: f64,
+    pub height_m: f64,
+    pub forward_mps: f64,
+}
+
+impl Spring {
+    /// Seconds from the press to the spring's top, where the wings open.
+    pub fn top_s(&self) -> f64 {
+        self.gather_s + self.rise_s
+    }
 }
 
 /// How a kind steps backward under a rider, from a halt: it sets off at

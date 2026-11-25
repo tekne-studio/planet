@@ -12,7 +12,7 @@ use scene::BoxPart;
 
 use crate::fauna::ease::{Follow, smoothstep};
 use crate::fauna::gait::Gait;
-use crate::fauna::kind::Kind;
+use crate::fauna::kind::{Kind, Spring};
 use crate::fauna::look::{Look, Traits};
 use crate::fauna::rig::{LEGS, Leg, Rig};
 use crate::fauna::wing::Wings;
@@ -56,8 +56,11 @@ const HEARD_AFTER_S: f64 = 0.8;
 /// The most the body is left over where the ground puts it, metres at
 /// size 1: what its legs reach down by stretching.
 const HANG_M: f64 = 0.06;
-/// How far under its root a foot comes at least, in leg lengths.
+/// How far under its root a foot comes at least, in leg lengths, and over
+/// how much more it eases into that: a foot lifted fast slows into its
+/// tuck, never stops dead in it.
 const TUCK: f64 = 0.3;
+const TUCK_SOFT: f64 = 0.15;
 /// How far the body sinks to let its longest leg down reach, at most, at
 /// size 1.
 const SINK_M: f64 = 0.4;
@@ -108,13 +111,17 @@ const AIR_RIPPLE_HZ: f64 = 0.7;
 const AIR_SWAY: f64 = 0.05;
 /// A jump. Gathering, the body sinks this far at size 1 and lifts its
 /// nose this far, radians, and the fore feet leave the ground from this
-/// far through it.
+/// far through it; taking off, from its start, rocked back onto its
+/// haunches.
 const GATHER_SINK_M: f64 = 0.12;
 const GATHER_PITCH: f64 = 0.12;
 const GATHER_FORE: f64 = 0.5;
 /// In the air the body pitches this far, radians: nose up as it rises,
 /// down as it falls, as fast as it rises against how fast it left.
 const LEAP_PITCH: f64 = 0.35;
+/// Leaving the ground, how long the body and its feet take to come away
+/// from where they left it into their pose in the air, seconds.
+const LEAVE_S: f64 = 0.12;
 /// How high a tucked foot is lifted, metres at size 1: a leg tucks no
 /// higher than under the body, whatever this asks.
 const TUCK_LIFT_M: f64 = 0.7;
@@ -151,6 +158,10 @@ const CLIMB_HARD_MPS: f64 = 4.0;
 /// and in full once it comes down this fast, metres a second.
 const REACH_M: (f64, f64) = (0.5, 3.0);
 const REACH_DESCENT_MPS: f64 = 0.5;
+/// Taking off, a body gathering this far over the ground under it, metres
+/// at size 1, has sprung, whatever its clock says: a peer's spring is drawn
+/// as its body is seen to leave.
+const SPRUNG_M: f64 = 0.1;
 
 /// How the hair of a mane and a tail moves in a frame: how far it streams
 /// back and the tail lifts, 0 to 1, how far the tail swishes side to side,
@@ -199,6 +210,9 @@ pub struct Animal {
     /// Its wings, for one born with them, and whether they fly it now.
     wings: Option<Wings>,
     winging: bool,
+    /// Seconds since its wings were asked for, for one born with them: what
+    /// its take-off is drawn by. None while they are not.
+    asked_s: Option<f64>,
     /// How fast it climbs, metres a second, eased: what pitches it on the
     /// wing and has its wings beat.
     climb_mps: f64,
@@ -245,8 +259,12 @@ pub struct Going {
     pub balk_s: Option<f64>,
     /// Where it is in a jump; none on the ground.
     pub leap: Option<Leap>,
-    /// Its wings out, flying it: legs tucked, pitched with its climb and
-    /// banked into its turn. One born without wings ignores it.
+    /// Its wings asked for, to fly it. Asked standing, it takes off: it
+    /// gathers and springs off its legs, as its kind's [`Spring`] times it
+    /// from the step they were first asked, and opens them at the top.
+    /// Asked in the air, they open at once. Open, its legs are tucked, it
+    /// pitches with its climb and banks into its turn. One born without
+    /// wings ignores it.
     pub wings: bool,
 }
 
@@ -448,6 +466,9 @@ struct Carriage {
     /// far up stepping backward holds it, 0 to 1.
     bend: Follow,
     raised: Follow,
+    /// In the air, how far over where its arc has it the body was as it
+    /// left the ground, metres: under, crouched to spring, it rises out.
+    left_m: Option<f64>,
     up: DVec3,
     forward: DVec3,
 }
@@ -470,6 +491,10 @@ struct Foot {
     lift_m: f64,
     along_m: f64,
     swing: f64,
+    /// In the air, where it left the ground from: `at`, `lift_m` and
+    /// `along_m` as they were, which it comes away from into its pose
+    /// aloft.
+    left: Option<(DVec3, f64, f64)>,
 }
 
 /// A leg as drawn this frame, world space.
@@ -537,6 +562,7 @@ impl Animal {
             air: Air::default(),
             wings,
             winging: false,
+            asked_s: None,
             climb_mps: 0.0,
             beat: None,
             glide: None,
@@ -671,7 +697,9 @@ impl Animal {
             let climb = (going.position.length() - self.position.length()) / dt;
             self.climb_mps += (climb - self.climb_mps) * (1.0 - libm::exp(-CLIMB_PER_S * dt));
         }
-        self.winging = going.wings && self.wings.is_some();
+        self.asked_s = self.asked(dt, going.wings);
+        let taking_off = self.taking_off();
+        self.winging = going.wings && self.wings.is_some() && taking_off.is_none();
         if !self.winging && self.carriage.is_none() {
             self.climb_mps = 0.0;
         }
@@ -681,9 +709,9 @@ impl Animal {
         self.turn_rps = going.turn_rps;
         self.graze = going.graze;
         self.balk_s = going.balk_s;
-        let springs =
-            matches!(self.leap, Some(Leap::Gathering(_))) && going.leap == Some(Leap::Flying);
-        self.leap = going.leap;
+        let leap = taking_off.or(going.leap);
+        let springs = matches!(self.leap, Some(Leap::Gathering(_))) && leap == Some(Leap::Flying);
+        self.leap = leap;
         let pace = self.pace();
         let gait = self.kind.gaits.at(pace);
         let hz = gait.hz_at(pace) / self.look.traits.size.sqrt();
@@ -692,6 +720,43 @@ impl Animal {
         self.clock_s += dt;
         self.settle(dt, ground, springs);
         self.struck(dt, was, &gait)
+    }
+
+    /// Seconds since its wings were asked for, `dt` on, while `wings` asks
+    /// for them. Asked standing, it takes off from the step they were;
+    /// asked in the air, or before it was first set, they are open at once.
+    /// Gathering, a body that has left the ground has sprung.
+    fn asked(&self, dt: f64, wings: bool) -> Option<f64> {
+        let spring = self.spring().filter(|_| wings)?;
+        let standing = self.carriage.is_some() && !self.air.flying;
+        let s = match self.asked_s {
+            Some(s) => s + dt,
+            None if standing => dt,
+            None => spring.top_s(),
+        };
+        let sprung = self.air.lift_m > SPRUNG_M * self.look.traits.size;
+        Some(match s < spring.gather_s && sprung {
+            true => spring.gather_s,
+            false => s,
+        })
+    }
+
+    /// How it leaves the ground on its wings, for one born with them.
+    fn spring(&self) -> Option<Spring> {
+        self.wings.as_ref()?;
+        self.kind.wings.map(|winged| winged.flight.spring)
+    }
+
+    /// Where it is in taking off, by the time since its wings were asked
+    /// for: gathering, then in the air off its legs. None before they were
+    /// asked for and from the top of its spring, where they open.
+    fn taking_off(&self) -> Option<Leap> {
+        let (s, spring) = (self.asked_s?, self.spring()?);
+        match s {
+            _ if s < spring.gather_s => Some(Leap::Gathering(s / spring.gather_s)),
+            _ if s < spring.top_s() => Some(Leap::Flying),
+            _ => None,
+        }
     }
 
     /// The beat of its gait it struck since `was` strides along, if it
@@ -828,23 +893,39 @@ impl Animal {
             if flying {
                 let (lift_m, along_m, tuck) = self.air.leg(hind, reach);
                 let foot = &mut self.feet[leg];
+                let aloft = frame.transform_point3(wide(rig.leg(leg).foot) - DVec3::Z * along_m);
+                // A foot comes away from where it left the ground: a hind
+                // one down there drives the body off before it tucks. One
+                // further from it than a leap was never on that ground.
+                let near = (foot.at - aloft).length() <= LEAP_M;
+                let left = foot.left.unwrap_or(match near {
+                    true => (foot.at, foot.lift_m, foot.along_m),
+                    false => (aloft, lift_m * size, along_m),
+                });
+                let away = smoothstep(0.0, LEAVE_S, self.air.aloft_s);
                 *foot = Foot {
                     planted: None,
                     slip: DVec3::ZERO,
                     peel_m: 0.0,
-                    at: frame.transform_point3(wide(rig.leg(leg).foot) - DVec3::Z * along_m),
-                    lift_m: lift_m * size,
-                    along_m,
+                    at: left.0.lerp(aloft, away),
+                    lift_m: left.1 + (lift_m * size - left.1) * away,
+                    along_m: left.2 + (along_m - left.2) * away,
                     swing: 0.5 * tuck,
+                    left: Some(left),
                 };
                 continue;
             }
+            self.feet[leg].left = None;
             let hoof = gait.hoof(leg, self.stride, pace);
             let planned = frame.transform_point3(wide(rig.leg(leg).foot) - DVec3::Z * hoof.along_m);
             // Gathered far enough, the fore feet leave the ground first.
+            let fore = match self.asked_s {
+                Some(_) => 0.0,
+                None => GATHER_FORE,
+            };
             let leaving = match hind {
                 true => 0.0,
-                false => smoothstep(GATHER_FORE, 1.0, gathered),
+                false => smoothstep(fore, 1.0, gathered),
             };
             let foot = &mut self.feet[leg];
             if leaving > 0.0 {
@@ -966,10 +1047,21 @@ impl Animal {
                 c.height.follow(0.0, BODY_SETTLE_PER_S, dt);
                 // Lagging low, the legs fold; lagging high, they would hang
                 // short of the ground. Down a step it drops as far as they
-                // reach at once. In the air it is where its arc has it.
+                // reach at once. In the air it is where its arc has it, once
+                // it has come away from where it left the ground; further
+                // from it than a leap, it was never on that ground.
                 c.height.off = match flying {
-                    true => 0.0,
-                    false => c.height.off.min(HANG_M * size),
+                    true => {
+                        let near = c.height.off.abs() <= LEAP_M;
+                        let left = *c
+                            .left_m
+                            .get_or_insert(if near { c.height.off } else { 0.0 });
+                        left * (1.0 - smoothstep(0.0, LEAVE_S, self.air.aloft_s))
+                    }
+                    false => {
+                        c.left_m = None;
+                        c.height.off.min(HANG_M * size)
+                    }
                 };
                 c.at = target + up * c.height.off;
                 c.pitch.follow(pitch, BODY_SETTLE_PER_S, dt);
@@ -1001,6 +1093,7 @@ impl Animal {
                 leap: Follow::at(leap_pitch),
                 bend: Follow::at(bend),
                 raised: Follow::at(raised),
+                left_m: None,
                 up,
                 forward,
             },
@@ -1157,12 +1250,13 @@ impl Animal {
         let foot = &self.feet[leg];
         let root = d.body.transform_point3(root(&rest, foot, build));
         let mut target = foot.at + d.up * (foot.lift_m + (rig.pastern_m + rig.hoof_m) * size);
-        // A foot swung up over a step comes no higher than a tuck under the
-        // body: a leg never points up.
-        let tuck = TUCK * (rest.upper_m + rest.lower_m) * size;
-        let over = (target - root).dot(d.up) + tuck;
+        // A foot swung up over a step or tucked comes no higher than a
+        // tuck under the body, eased into: a leg never points up.
+        let leg_m = (rest.upper_m + rest.lower_m) * size;
+        let (tuck, soft) = (TUCK * leg_m, TUCK_SOFT * leg_m);
+        let over = (target - root).dot(d.up) + tuck + soft;
         if over > 0.0 {
-            target -= d.up * over;
+            target -= d.up * (over - soft * (1.0 - libm::exp(-over / soft)));
         }
         // A leg bends in the plane the body walks in, square to the leg
         // itself, so however far ahead or behind it reaches it has one side

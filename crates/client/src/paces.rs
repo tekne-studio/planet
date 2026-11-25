@@ -113,6 +113,8 @@ pub struct Flight {
     /// How high it climbs taking off, metres over the ground: the room it
     /// needs over its head, past its own.
     pub takeoff_m: f64,
+    /// How it leaves the ground for that.
+    pub spring: Spring,
     /// How fast it comes down to land, metres per second, near the ground,
     /// and how much faster for each metre over it.
     pub land_mps: f64,
@@ -120,6 +122,48 @@ pub struct Flight {
     /// How far the eye rolls with the animal's bank in a turn, as a share
     /// of it: zero holds the horizon level.
     pub bank_eye: f64,
+}
+
+/// How a body in paces leaves the ground taking off: it gathers for
+/// `gather_s`, carried on as fast as it went, then springs `height_m` over
+/// the ground where it tops, slowing to that top in `rise_s`, carried at
+/// least `forward_mps`; there the wings take it. Peers draw it by the same
+/// times, from when its gait turned to flight.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Spring {
+    pub gather_s: f64,
+    pub rise_s: f64,
+    pub height_m: f64,
+    pub forward_mps: f64,
+}
+
+impl Spring {
+    /// Seconds from the press to the top.
+    pub fn top_s(&self) -> f64 {
+        self.gather_s + self.rise_s
+    }
+
+    /// How high over where it left the ground it is `s` seconds from the
+    /// press, metres, springing to `top_m` over it: on the ground through
+    /// its gathering, then up, slowing to a stop at the top. Read where it
+    /// is rather than stepped, so a frame of any length lands on the arc.
+    pub fn height_at(&self, s: f64, top_m: f64) -> f64 {
+        let t = (s - self.gather_s).clamp(0.0, self.rise_s);
+        let rise_mps = 2.0 * top_m / self.rise_s;
+        rise_mps * t - rise_mps / self.rise_s * t * t / 2.0
+    }
+}
+
+/// A kind's spring, as its way carries it.
+impl From<gaia::fauna::Spring> for Spring {
+    fn from(spring: gaia::fauna::Spring) -> Spring {
+        Spring {
+            gather_s: spring.gather_s,
+            rise_s: spring.rise_s,
+            height_m: spring.height_m,
+            forward_mps: spring.forward_mps,
+        }
+    }
 }
 
 impl Flight {
@@ -816,8 +860,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// A horse born with wings, as the ride plugin gives one.
+    /// A horse born with wings, as the ride plugin gives one: its flight
+    /// the horse kind's.
     pub(crate) fn pegasus() -> Paces {
+        let flight = gaia::fauna::horse::HORSE.wings.expect("wings").flight;
         Paces {
             flight: Some(Flight {
                 name: "fly",
@@ -825,14 +871,15 @@ pub(crate) mod tests {
                 no_room: "no_room",
                 wingless: "wingless",
                 no_ground: "no_ground",
-                speed_mps: 18.0,
-                per_m: 0.25,
-                sprint: 2.5,
-                top_mps: 150.0,
-                ceiling_m: 500.0,
-                takeoff_m: 3.0,
-                land_mps: 2.5,
-                land_per_m: 1.0,
+                speed_mps: flight.speed_mps,
+                per_m: flight.per_m,
+                sprint: flight.sprint,
+                top_mps: flight.top_mps,
+                ceiling_m: flight.ceiling_m,
+                takeoff_m: flight.takeoff_m,
+                spring: flight.spring.into(),
+                land_mps: flight.land_mps,
+                land_per_m: flight.land_per_m,
                 bank_eye: 0.3,
             }),
             ..horse()

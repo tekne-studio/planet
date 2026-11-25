@@ -138,6 +138,7 @@ pub fn paces() -> Paces {
                 top_mps: flight.top_mps,
                 ceiling_m: flight.ceiling_m,
                 takeoff_m: flight.takeoff_m,
+                spring: flight.spring.into(),
                 land_mps: flight.land_mps,
                 land_per_m: flight.land_per_m,
                 bank_eye: BANK_EYE,
@@ -375,7 +376,7 @@ impl Plugin for Ride {
             },
             Way {
                 name: HORSE,
-                profile: Profile::Paces(paces()),
+                profile: Profile::Paces(Box::new(paces())),
                 steering: Steering::Steered,
                 held: seated(),
             },
@@ -770,6 +771,7 @@ mod tests {
             (flight.speed_mps, flight.ceiling_m, flight.takeoff_m),
             (winged.speed_mps, winged.ceiling_m, winged.takeoff_m)
         );
+        assert_eq!(flight.spring, client::Spring::from(winged.spring));
     }
 
     #[test]

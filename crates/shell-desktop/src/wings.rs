@@ -1,7 +1,7 @@
 //! Pictures of a horse's wings, with a fixed clock and seed: how a wing
 //! is looked at. `bun run shot --wings out/wings` writes, for the look
 //! `--look` born with wings in each coat a pegasus wears, a sheet of each: the
-//! wings growing out as it leaves the ground, a beat in eight seen from
+//! wings opening at the top of its spring off the ground, a beat in eight seen from
 //! its side, from over it and from under it, a glide, and a landing as
 //! they fold away. `--yaw`, `--against-sun` and `--clock` aim the eye as
 //! for `--animals`.
@@ -25,9 +25,11 @@ const AWAY_M: f64 = 6.0;
 /// From over and from under it, how far, and how far to its side.
 const OVER_M: f64 = 6.0;
 const ASIDE_M: f64 = 2.0;
-/// Taking off: how high it climbs, metres, over how long, seconds.
+/// Taking off: how high it climbs from the top of its spring, metres,
+/// over how long, seconds, and how long the sheet covers from the press.
 const RISE_M: f64 = 3.0;
 const RISE_S: f64 = 1.4;
+const OPEN_S: f64 = 0.7;
 /// Flying: how fast, metres a second, how fast it climbs as it beats, and
 /// how high it flies, metres.
 const FLY_MPS: f64 = 18.0;
@@ -109,9 +111,13 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
     coats.sort_unstable();
     coats.dedup();
 
+    // Its kind's spring off the ground, as a rider's way springs it, then
+    // a climb eased in.
+    let spring = client::Spring::from(HORSE.wings.ok_or("a horse has no wings")?.flight.spring);
     let rise = |t: f64| {
-        let s = ((t - SETTLE_S) / RISE_S).clamp(0.0, 1.0);
-        (RISE_M * s * s * (3.0 - 2.0 * s), 0.0)
+        let sprung = spring.height_at(t - SETTLE_S, spring.height_m);
+        let s = ((t - SETTLE_S - spring.top_s()) / RISE_S).clamp(0.0, 1.0);
+        (sprung + RISE_M * s * s * (3.0 - 2.0 * s), 0.0)
     };
     let beat = |t: f64| (HIGH_M + CLIMB_MPS * t, FLY_MPS * t);
     let glide = |t: f64| (HIGH_M + 20.0 - SINK_MPS * t, GLIDE_MPS * t);
@@ -130,12 +136,12 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
     let beat_s = 2.0 / (slow_hz + fast_hz);
     let flights = [
         Flight {
-            name: "wings-grow",
+            name: "wings-open",
             speed_mps: 0.0,
             at: &rise,
             out: &off_the_ground,
-            from_s: SETTLE_S - 0.1,
-            span_s: RISE_S,
+            from_s: SETTLE_S,
+            span_s: OPEN_S,
             raised_m: OVER_GRASS_M,
         },
         Flight {

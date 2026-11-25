@@ -124,14 +124,17 @@ const STEP_DOWN_RISE_M: f64 = 0.6;
 /// How far under a roof the eye is held, metres: a view from inside the
 /// roof would see through it.
 const EYE_UNDER_M: f64 = 0.15;
-/// Taking off on wings, the climb comes in over this long, seconds, and
-/// closes on the take-off height this fast, per second, at most this many
-/// metres a second.
+/// Taking off on wings, the climb comes in over this long, seconds, as
+/// what it carried off the ground goes, and closes on the take-off height
+/// this fast, per second, at most this many metres a second.
 const RISE_EASE_S: f64 = 0.5;
 const RISE_PER_S: f64 = 2.0;
 const RISE_MOST_MPS: f64 = 5.0;
 /// How long a take-off or a landing refused is said, seconds.
 const REFUSED_S: f64 = 2.0;
+/// How far over the ground as drawn a flyer is held, metres: on what it
+/// rides, eased in as the climb is.
+const FLYER_OVER_M: f64 = 0.5;
 /// Within this of its way's ceiling, metres, a body aloft on what it rides
 /// is at it: what the readout says.
 const AT_CEILING_M: f64 = 1.0;
@@ -266,7 +269,7 @@ enum Kept {
     /// whether a take-off or a landing was refused a moment ago, and why.
     Paced {
         paces: Box<Paces>,
-        pacing: Pacing,
+        pacing: Box<Pacing>,
         aloft: Option<Aloft>,
         refused: Option<(Refused, f64)>,
     },
@@ -275,9 +278,14 @@ enum Kept {
 /// Where a body in paces is in its flight, on an animal with wings.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Aloft {
-    /// Leaving the ground, for `s` seconds so far: it climbs to the way's
-    /// take-off height, eased in.
-    Rising { s: f64 },
+    /// Springing off its legs, `s` seconds from the press, by its way's
+    /// [`crate::paces::Spring`]: carried along the ground at `mps`, to top `top_m` over
+    /// where it leaves it. On its feet until the top.
+    Springing { s: f64, mps: f64, top_m: f64 },
+    /// On its wings from the top of its spring, for `s` seconds so far: it
+    /// climbs to the way's take-off height, eased in, as what it `carried`
+    /// off the ground, world space, eases out.
+    Rising { s: f64, carried: DVec3 },
     /// Flying where the body looks, as a body on its own flies.
     Flying,
     /// Coming down to land, slower the nearer the ground.
@@ -305,8 +313,8 @@ impl Kept {
                 glide: Box::new(Glide::new(heading, up)),
             },
             Profile::Paces(paces) => Kept::Paced {
-                paces: Box::new(paces.clone()),
-                pacing: Pacing::new(heading),
+                paces: paces.clone(),
+                pacing: Box::new(Pacing::new(heading)),
                 aloft: None,
                 refused: None,
             },
@@ -440,14 +448,17 @@ impl Controller {
         matches!(self.moves, Moves::Walk)
     }
 
-    /// On feet: walking, or in a way that goes on them and not aloft. The
-    /// ground holds such a body as it holds a walker.
+    /// On feet: walking, or in a way that goes on them, not yet on wings.
+    /// The ground holds such a body as it holds a walker.
     fn on_feet(&self) -> bool {
         matches!(
             self.moves,
             Moves::Walk
                 | Moves::Way {
-                    kept: Kept::Paced { aloft: None, .. },
+                    kept: Kept::Paced {
+                        aloft: None | Some(Aloft::Springing { .. }),
+                        ..
+                    },
                     ..
                 }
         )
@@ -470,9 +481,16 @@ impl Controller {
         }
     }
 
-    /// Aloft on what it rides: flying on an animal's wings.
+    /// Aloft on what it rides: flying on an animal's wings, or springing
+    /// off its legs to, from the press that took it off.
     pub fn aloft(&self) -> bool {
         self.mount_aloft().is_some()
+    }
+
+    /// On an animal's wings: aloft and past its spring.
+    fn on_wings(&self) -> bool {
+        self.mount_aloft()
+            .is_some_and(|(_, aloft)| !matches!(aloft, Aloft::Springing { .. }))
     }
 
     /// Whether a body aloft on what it rides flies as high over the ground
@@ -496,8 +514,10 @@ impl Controller {
 
     /// Off the ground on an animal's wings, as [`Controller::land`] brings
     /// it down: in a way in paces that flies, and only where a roof leaves
-    /// room over it for the way's take-off. Refused, the readout says why
-    /// for a moment, and the body stays as it is.
+    /// room over it for the way's take-off. On the ground it springs off
+    /// its legs from this frame on, as fast as it went; in a jump its wings
+    /// take it at once. Refused, the readout says why for a moment, and the
+    /// body stays as it is.
     pub fn take_off(
         &mut self,
         winged: bool,
@@ -514,6 +534,7 @@ impl Controller {
             .room_m();
         let planet = self.site == Site::Planet;
         let underground = self.underground(self.ground_m(generator));
+        let grounded = self.grounded;
         let Moves::Way {
             kept:
                 Kept::Paced {
@@ -536,11 +557,22 @@ impl Controller {
             Some(flight) if underground || room_m < paces.room_m + flight.takeoff_m => {
                 Refused::NoRoom
             }
-            Some(_) => {
-                *aloft = Some(Aloft::Rising { s: 0.0 });
+            Some(flight) => {
+                let mps = pacing.speed_mps.max(0.0);
+                *aloft = Some(match grounded {
+                    true => Aloft::Springing {
+                        s: 0.0,
+                        mps,
+                        top_m: flight.spring.height_m,
+                    },
+                    false => Aloft::Rising {
+                        s: 0.0,
+                        carried: pacing.heading * mps,
+                    },
+                });
                 *refused = None;
                 pacing.leaping = None;
-                self.grounded = false;
+                self.grounded = grounded;
                 self.vertical_mps = 0.0;
                 return Ok(());
             }
@@ -650,9 +682,9 @@ impl Controller {
         }
     }
 
-    /// In flight: on its own, or aloft on what it rides.
+    /// In flight: on its own, or on the wings of what it rides.
     pub fn flying(&self) -> bool {
-        matches!(self.moves, Moves::Fly) || self.aloft()
+        matches!(self.moves, Moves::Fly) || self.on_wings()
     }
 
     /// The way of moving the body is in, by its full name.
@@ -817,7 +849,7 @@ impl Controller {
             return false;
         }
         // It goes as fast as the animal under it does.
-        let profile = Profile::Paces(paces.scaled(animal.speed_share, animal.size));
+        let profile = Profile::Paces(Box::new(paces.scaled(animal.speed_share, animal.size)));
         self.set_down(point, animal.heading, generator, built)
             && self.take_way(name, &profile, steering, animal.number, generator)
     }
@@ -1336,7 +1368,7 @@ impl Controller {
                         ..
                     } => Kept::Paced {
                         paces,
-                        pacing: pacing.arrived(self.facing),
+                        pacing: Box::new(pacing.arrived(self.facing)),
                         aloft: aloft.map(|_| Aloft::Flying),
                         refused: None,
                     },
@@ -1433,13 +1465,11 @@ impl Controller {
                 kept: Kept::Glide { .. },
                 ..
             } => return self.glide(dt, wish, generator, built),
-            Moves::Way {
-                kept: Kept::Paced { aloft: None, .. },
-                ..
-            } => {
+            Moves::Way { .. } if self.on_feet() => {
                 // A long frame is ridden as short ones: a gallop crosses
                 // metres of a slope in a slow frame, and in one step that
                 // reads as a wall. A pace is stepped once, in the first.
+                // Off the top of a spring its wings take it.
                 let slices = (dt / PACED_DT).ceil().max(1.0);
                 for slice in 0..slices as usize {
                     let wish = match slice {
@@ -1449,7 +1479,13 @@ impl Controller {
                             ..wish
                         },
                     };
-                    self.paced(dt / slices, wish, generator, built);
+                    match self.mount_aloft() {
+                        None => self.paced(dt / slices, wish, generator, built),
+                        Some((flight, Aloft::Springing { .. })) => {
+                            self.spring(dt / slices, flight, generator, built);
+                        }
+                        Some(_) => break,
+                    }
                 }
                 // What the slices left is eased once, over the whole frame.
                 self.settle_drawn(dt);
@@ -1557,12 +1593,13 @@ impl Controller {
         self.transport();
     }
 
-    /// The velocity of a body aloft on what it rides, one step of `dt`,
-    /// world space, at the way's speeds: as a body on its own flies, where
-    /// it looks, held under the way's ceiling and over the sea. Taking off,
-    /// it climbs to the way's take-off height, eased in, and flies on;
-    /// landing, it goes no faster than its fastest pace and comes down
-    /// slower the nearer what it lands on.
+    /// The velocity of a body on the wings of what it rides, one step of
+    /// `dt`, world space, at the way's speeds: as a body on its own flies,
+    /// where it looks, held under the way's ceiling and over the sea. Off
+    /// the top of its spring, it climbs to the way's take-off height, eased
+    /// in as what it carried eases out, and flies on; landing, it goes no
+    /// faster than its fastest pace and comes down slower the nearer what
+    /// it lands on.
     fn flown(
         &mut self,
         dt: f64,
@@ -1587,17 +1624,19 @@ impl Controller {
         };
         let speed_mps = flight.speed_at(reach.clearance_m, reach.sprint);
         match aloft {
-            Aloft::Rising { s } => {
+            // Stepped on its legs: [`Controller::spring`].
+            Aloft::Springing { .. } => DVec3::ZERO,
+            Aloft::Rising { s, carried } => {
                 *s += dt;
-                let ease = (*s / RISE_EASE_S).clamp(0.0, 1.0);
-                let ease = ease * ease * (3.0 - 2.0 * ease);
+                let ease = rise_ease(*s);
+                let carried = *carried - up * carried.dot(up);
                 let rise_mps = ((flight.takeoff_m - below.over_m) * RISE_PER_S)
                     .clamp(0.0, RISE_MOST_MPS)
                     * ease;
                 if below.over_m >= flight.takeoff_m - 0.1 {
                     *aloft = Aloft::Flying;
                 }
-                reach.wish * speed_mps * ease + up * rise_mps
+                reach.wish * speed_mps * ease + carried * (1.0 - ease) + up * rise_mps
             }
             Aloft::Flying => {
                 let velocity = reach.wish * speed_mps;
@@ -1679,7 +1718,7 @@ impl Controller {
             .map(|pace| pace.min(paces.stepped))
             .filter(|_| ground_mps > 0.5);
         landed.speed_mps = ground_mps.min(fastest);
-        *pacing = landed;
+        **pacing = landed;
         self.grounded = true;
         self.vertical_mps = 0.0;
         self.stand_on(self.height_m - below.over_m);
@@ -1740,7 +1779,7 @@ impl Controller {
         let up = self.frame_up;
         let gravity = self.gravity_up();
         let tangent = |v: DVec3| v - up * v.dot(up);
-        let mut pacing = *pacing;
+        let mut pacing = **pacing;
         pacing.heading = tangent(pacing.heading).normalize_or(self.facing);
         let ahead = self.ahead(pacing.way() * pacing.reach_m(paces), generator, built);
         let [x, y] = wish.movement.map(f64::from);
@@ -1807,7 +1846,81 @@ impl Controller {
             ..
         } = &mut self.moves
         {
-            *kept = pacing;
+            **kept = pacing;
+        }
+    }
+
+    /// One step of a body in paces springing off the ground to take off,
+    /// by `flight`'s spring: it gathers, carried on as fast as it went,
+    /// then leaves the ground, carried at least as fast as the spring says,
+    /// to top the spring's height over the ground where it tops, higher
+    /// where the ground ahead rises. The ground holds it as it holds a
+    /// jump. At the top its wings take it.
+    fn spring(&mut self, dt: f64, flight: Flight, generator: &Generator, built: Built<'_>) {
+        let Moves::Way {
+            kept:
+                Kept::Paced {
+                    ref pacing,
+                    aloft: Some(Aloft::Springing { s, mps, top_m }),
+                    ..
+                },
+            ..
+        } = self.moves
+        else {
+            return;
+        };
+        if dt <= 0.0 {
+            return;
+        }
+        let spring = flight.spring;
+        let (heading, is) = (pacing.heading, s + dt);
+        let off = is > spring.gather_s;
+        let mps = match off {
+            true => mps.max(spring.forward_mps),
+            false => mps,
+        };
+        let top_m = match s <= spring.gather_s && off {
+            true => {
+                let ahead = self.ahead(heading * mps * spring.rise_s, generator, built);
+                spring.height_m + ahead.rise_m.max(0.0)
+            }
+            false => top_m,
+        };
+        if off {
+            self.grounded = false;
+        }
+        self.vertical_mps = (spring.height_at(is, top_m) - spring.height_at(s, top_m)) / dt;
+        let up = self.frame_up;
+        let velocity = heading * mps + self.gravity_up() * self.vertical_mps;
+        let position = self.position();
+        self.facing = heading;
+        self.step(velocity * dt, generator, built);
+        self.resolve_site();
+        let went = self.position() - position;
+        self.ground_mps = (went - up * went.dot(up)).length() / dt;
+        self.speed_mps = self.ground_mps;
+        self.sprinting = false;
+        if self.grounded {
+            self.stride_m += self.ground_mps * dt;
+        }
+        self.align_frame(dt, generator);
+        self.transport();
+        let topped = is >= spring.top_s();
+        if topped {
+            (self.grounded, self.vertical_mps) = (false, 0.0);
+        }
+        if let Moves::Way {
+            kept: Kept::Paced { aloft, .. },
+            ..
+        } = &mut self.moves
+        {
+            *aloft = Some(match topped {
+                true => Aloft::Rising {
+                    s: 0.0,
+                    carried: heading * mps,
+                },
+                false => Aloft::Springing { s: is, mps, top_m },
+            });
         }
     }
 
@@ -2034,7 +2147,11 @@ impl Controller {
                 && !self.underground(ground)
                 && !matches!(self.mount_aloft(), Some((_, Aloft::Landing))) =>
             {
-                let shown_m = self.shown_ground_m(generator, self.radial()) + 0.5;
+                let over_m = match self.mount_aloft() {
+                    Some((_, Aloft::Rising { s, .. })) => FLYER_OVER_M * rise_ease(s),
+                    _ => FLYER_OVER_M,
+                };
+                let shown_m = self.shown_ground_m(generator, self.radial()) + over_m;
                 let (seat, point) = self.over(generator);
                 let built_m = built
                     .and_then(|built| built.footing(generator, seat, point, self.height_m))
@@ -2404,6 +2521,13 @@ impl Controller {
     }
 }
 
+/// How far a climb on wings has come in `s` seconds off the top of a
+/// spring, 0 to 1, eased over [`RISE_EASE_S`].
+fn rise_ease(s: f64) -> f64 {
+    let ease = (s / RISE_EASE_S).clamp(0.0, 1.0);
+    ease * ease * (3.0 - 2.0 * ease)
+}
+
 /// The rotation that takes `from` a `fraction` of the way to `to`, both unit.
 /// When they are opposite any axis would do, so the caller names one.
 fn turn_toward(from: DVec3, to: DVec3, fraction: f64, fallback_axis: DVec3) -> DQuat {
@@ -2586,7 +2710,7 @@ mod tests {
                     * controller.facing;
             assert!(controller.take_way(
                 "test.horse",
-                &Profile::Paces(paces.clone()),
+                &Profile::Paces(Box::new(paces.clone())),
                 Steering::Steered,
                 1,
                 &generator
@@ -3085,7 +3209,7 @@ mod tests {
             controller.lift_onto(floor_m);
             assert!(controller.take_way(
                 "test.horse",
-                &Profile::Paces(paces.clone()),
+                &Profile::Paces(Box::new(paces.clone())),
                 Steering::Steered,
                 1,
                 &generator
@@ -3172,7 +3296,7 @@ mod tests {
         controller.lift_onto(floor_m);
         assert!(controller.take_way(
             "test.horse",
-            &Profile::Paces(paces.clone()),
+            &Profile::Paces(Box::new(paces.clone())),
             Steering::Steered,
             1,
             &generator
@@ -3204,14 +3328,11 @@ mod tests {
             }
         }
         let galloping = matches!(
-            controller.moves,
+            &controller.moves,
             Moves::Way {
-                kept: Kept::Paced {
-                    pacing: Pacing { pace: Some(2), .. },
-                    ..
-                },
+                kept: Kept::Paced { pacing, .. },
                 ..
-            }
+            } if pacing.pace == Some(2)
         );
         (
             (controller.point().u - from) * BLOCK_M,
@@ -3321,7 +3442,7 @@ mod tests {
         controller.lift_onto(f64::from(top) * BLOCK_M);
         assert!(controller.take_way(
             "test.horse",
-            &Profile::Paces(crate::paces::tests::pegasus()),
+            &Profile::Paces(Box::new(crate::paces::tests::pegasus())),
             Steering::Steered,
             1,
             &generator
@@ -3343,9 +3464,9 @@ mod tests {
     }
 
     /// On a horse with wings, taking off climbs to the way's take-off
-    /// height and says it flies; flown, it goes faster than a body on its
-    /// own at that height; landing, it comes down onto the floor, in the
-    /// saddle still, at a pace.
+    /// height and says it flies from the press; flown, it goes faster than
+    /// a body on its own at that height; landing, it comes down onto the
+    /// floor, in the saddle still, at a pace.
     #[test]
     fn a_winged_mount_takes_off_flies_faster_than_a_body_and_lands() {
         on_a_pegasus(None, |controller, generator, built| {
@@ -3356,7 +3477,7 @@ mod tests {
             );
             assert!(!controller.aloft());
             assert_eq!(controller.take_off(true, generator, built), Ok(()));
-            assert!(controller.aloft() && controller.flying());
+            assert!(controller.aloft());
             assert_eq!(crate::Gait::of(controller), crate::Gait::Fly);
             run(controller, 3.0, Wish::default(), generator, built);
             let over_m = controller.height_m - floor_m;
@@ -3390,6 +3511,66 @@ mod tests {
             assert!((controller.height_m - ground_m).abs() < 0.01);
             assert!(controller.pace().is_some(), "down at a pace");
         });
+    }
+
+    /// Taken off, a pegasus gathers on its feet, on the floor, for its
+    /// spring's gather, then springs off them: it rises slowing to its
+    /// spring's height at the top, carried forward as fast as it went and
+    /// at least its spring's least, and is on its wings from there. Its
+    /// gait is the flight's from the press, as peers see it.
+    #[test]
+    fn a_pegasus_springs_off_its_legs_and_takes_wing_at_the_top() {
+        let spring = crate::paces::tests::pegasus()
+            .flight
+            .expect("a pegasus flies")
+            .spring;
+        for trot in [false, true] {
+            on_a_pegasus(None, |controller, generator, built| {
+                let floor_m = controller.height_m;
+                if trot {
+                    let ahead = Wish {
+                        movement: [0.0, 1.0],
+                        ..Wish::default()
+                    };
+                    run(controller, 1.5, ahead, generator, built);
+                }
+                let went_mps = controller.speed_mps();
+                let from = controller.position();
+                assert_eq!(controller.take_off(true, generator, built), Ok(()));
+                let mut over_m = Vec::new();
+                for frame in 1..=((spring.top_s() + 0.1) * 60.0).round() as usize {
+                    controller.update(1.0 / 60.0, Wish::default(), generator, built);
+                    let s = frame as f64 / 60.0;
+                    over_m.push((s, controller.height_m - floor_m));
+                    assert!(controller.aloft(), "{s} s: aloft from the press");
+                    assert_eq!(crate::Gait::of(controller), crate::Gait::Fly, "{s} s");
+                    // On its wings from the frame its clock passes the top.
+                    let past = s - spring.top_s();
+                    if past.abs() > 0.5 / 60.0 {
+                        assert_eq!(controller.flying(), past > 0.0, "{s} s");
+                    }
+                }
+                for &(s, over) in &over_m {
+                    if s <= spring.gather_s {
+                        assert!(over.abs() < 0.01, "{s} s: {over} m, gathering");
+                    }
+                }
+                let top = over_m
+                    .iter()
+                    .find(|(s, _)| (s - spring.top_s()).abs() < 0.5 / 60.0)
+                    .expect("the top")
+                    .1;
+                assert!(
+                    (top - spring.height_m).abs() < 0.05,
+                    "{top} m over the floor at the top"
+                );
+                let rises = over_m.windows(2).map(|pair| pair[1].1 - pair[0].1);
+                assert!(rises.clone().all(|rise| rise > -1e-9), "it never sinks");
+                let gone_m = (controller.position() - from).length();
+                let least_m = went_mps.max(spring.forward_mps) * spring.rise_s;
+                assert!(gone_m > least_m, "{gone_m} m on from where it pressed");
+            });
+        }
     }
 
     /// Landed flying fast, a pegasus comes down at the fastest pace forward
@@ -3615,7 +3796,7 @@ mod tests {
             let mut controller = Controller::spawn(sea, &generator);
             assert!(controller.take_way(
                 "test.horse",
-                &Profile::Paces(crate::paces::tests::pegasus()),
+                &Profile::Paces(Box::new(crate::paces::tests::pegasus())),
                 Steering::Steered,
                 1,
                 &generator
@@ -3680,7 +3861,7 @@ mod tests {
             generator: &Generator,
             built: Built<'_>,
         ) -> bool {
-            let paces = Profile::Paces(crate::paces::tests::horse());
+            let paces = Profile::Paces(Box::new(crate::paces::tests::horse()));
             controller.mount(
                 "test.horse",
                 &paces,
@@ -3740,7 +3921,7 @@ mod tests {
                 let way = crate::paces::tests::horse();
                 assert!(controller.mount(
                     "test.horse",
-                    &Profile::Paces(way.clone()),
+                    &Profile::Paces(Box::new(way.clone())),
                     Steering::Steered,
                     &animal,
                     generator,
@@ -3787,7 +3968,7 @@ mod tests {
         let mut controller = Controller::spawn(point, &generator);
         assert!(controller.take_way(
             "test.horse",
-            &Profile::Paces(crate::paces::tests::horse()),
+            &Profile::Paces(Box::new(crate::paces::tests::horse())),
             Steering::Steered,
             1,
             &generator
@@ -3978,7 +4159,7 @@ mod tests {
         let mut controller = Controller::spawn(at, &generator);
         controller.lift_onto(f64::from(top) * BLOCK_M);
         controller.face(topology::bearing_deg(grid.direction(at), grid.tangents(at).du).unwrap());
-        let paces = Profile::Paces(crate::paces::tests::horse());
+        let paces = Profile::Paces(Box::new(crate::paces::tests::horse()));
         assert!(controller.take_way("test.horse", &paces, Steering::Steered, 1, &generator));
         then(&mut controller, &generator, built, stand);
     }
@@ -4132,7 +4313,7 @@ mod tests {
         controller.stand_at(None, &generator);
         let along = grid.tangents(from).du;
         controller.face(topology::bearing_deg(grid.direction(from), along).unwrap());
-        let paces = Profile::Paces(crate::paces::tests::horse());
+        let paces = Profile::Paces(Box::new(crate::paces::tests::horse()));
         assert!(controller.take_way("test.horse", &paces, Steering::Steered, 1, &generator));
         set_going(&mut controller, 1);
         for _ in 0..240 {

@@ -35,6 +35,20 @@ impl Ground for Hills {
 /// Checks every leg of a drawn animal: none points at the sky, none bends
 /// against its joint, and each reaches its ground.
 pub fn legs_hold(animal: &Animal, ground: &impl Ground, frame: usize) {
+    legs_bend(animal, frame);
+    for (leg, foot) in animal.feet().iter().enumerate().take(LEGS) {
+        let off = (ground.under(*foot).point - *foot).length();
+        assert!(
+            off < 1e-6,
+            "frame {frame}, foot {leg} is {off} m off the ground"
+        );
+    }
+}
+
+/// Checks every leg of a drawn animal, on the ground or in the air: none
+/// points at the sky, none bends against its joint, and each foot down
+/// reaches where it stands.
+fn legs_bend(animal: &Animal, frame: usize) {
     let Some((body, legs)) = animal.legs() else {
         return;
     };
@@ -63,13 +77,6 @@ pub fn legs_hold(animal: &Animal, ground: &impl Ground, frame: usize) {
         assert!(
             !animal.planted()[leg] || short < 0.15 * size,
             "frame {frame}, leg {leg} falls {short} m short: {pose:?}"
-        );
-    }
-    for (leg, foot) in animal.feet().iter().enumerate().take(LEGS) {
-        let off = (ground.under(*foot).point - *foot).length();
-        assert!(
-            off < 1e-6,
-            "frame {frame}, foot {leg} is {off} m off the ground"
         );
     }
 }
@@ -701,4 +708,158 @@ fn its_side_under_the_saddle_is_every_box_there() {
             .flanks()
             .is_empty()
     );
+}
+
+/// How sharply legs move over a run, relative to the body they hang from,
+/// the most of any joint or fetlock: how fast, metres a second; how
+/// sharply one turns back on itself from one frame to the next, metres a
+/// second; and how hard one is thrown, metres a second squared.
+#[derive(Clone, Copy, Debug, Default)]
+struct Sharpness {
+    speed: f64,
+    back: f64,
+    thrown: f64,
+}
+
+impl Sharpness {
+    fn within(&self, most: &Sharpness) -> bool {
+        self.speed <= most.speed && self.back <= most.back && self.thrown <= most.thrown
+    }
+}
+
+/// Steps `animal` `frames` times at `fps` by `go`, which says whether its
+/// frame counts, and says how sharply its legs moved through the frames
+/// that do.
+fn sharpness(
+    animal: &mut Animal,
+    fps: f64,
+    frames: usize,
+    mut go: impl FnMut(&mut Animal, usize) -> bool,
+) -> Sharpness {
+    let dt = 1.0 / fps;
+    let mut was: Vec<[[DVec3; 2]; LEGS]> = Vec::new();
+    let mut most = Sharpness::default();
+    for frame in 0..frames {
+        if !go(animal, frame) {
+            continue;
+        }
+        let (_, legs) = animal.legs().expect("drawn");
+        was.push(legs.map(|leg| [leg.joint - leg.root, leg.fetlock - leg.root]));
+        let k = was.len() - 1;
+        if k < 2 {
+            continue;
+        }
+        for (leg, part) in (0..LEGS).flat_map(|leg| (0..2).map(move |part| (leg, part))) {
+            let moved = |i: usize| was[i][leg][part] - was[i - 1][leg][part];
+            let (now, before) = (moved(k), moved(k - 1));
+            most.speed = most.speed.max(now.length() / dt);
+            most.back = most.back.max((-now.dot(before)).max(0.0).sqrt() / dt);
+            most.thrown = most.thrown.max((now - before).length() / (dt * dt));
+        }
+    }
+    most
+}
+
+/// A run's speed, metres a second: its legs' sharpest, which a take-off,
+/// its most sudden move, is held to.
+const RUN_MPS: f64 = 12.5;
+
+/// How sharply a pegasus's legs move taking off under its rider as a
+/// rider's way takes it, from `speed_mps` at `fps` over [`Rolling`] ground
+/// `roll` steep: on its feet through its gather, sprung by its kind's arc
+/// to its top, then climbing eased in, as far as two seconds from the
+/// press. Every frame from the press, none bends the wrong way or points
+/// up and no fetlock goes under the ground.
+fn taking_off(speed_mps: f64, roll: f64, fps: f64) -> Sharpness {
+    let spring = HORSE.wings.expect("a horse may have wings").flight.spring;
+    let ground = Rolling { roll };
+    let mut animal = Animal::new(&HORSE, Look::new(&HORSE, 0, Some("white")));
+    let dt = 1.0 / fps;
+    let heading = DVec3::new(1.0, 0.0, 0.3).normalize();
+    let settle = (2.0 * fps) as usize;
+    let rise_mps = 2.0 * spring.height_m / spring.rise_s;
+    let (mut along_m, mut top_m) = (0.0, 0.0);
+    sharpness(&mut animal, fps, settle + settle, |animal, frame| {
+        let s = frame.saturating_sub(settle) as f64 * dt;
+        let pressed = frame >= settle;
+        let off = pressed && s > spring.gather_s;
+        let mps = match off {
+            true => speed_mps.max(spring.forward_mps),
+            false => speed_mps,
+        };
+        along_m += mps * dt;
+        let under = ground.under(heading * along_m).point;
+        if s <= spring.gather_s {
+            top_m = under.y;
+        }
+        let sprung = (s - spring.gather_s).clamp(0.0, spring.rise_s);
+        let arc = rise_mps * sprung - rise_mps / spring.rise_s * sprung * sprung / 2.0;
+        let climb = ((s - spring.top_s()) / 1.4).clamp(0.0, 1.0);
+        let height_m = top_m + arc + 3.0 * climb * climb * (3.0 - 2.0 * climb);
+        let position = match off {
+            true => DVec3::new(under.x, height_m.max(under.y), under.z),
+            false => under,
+        };
+        let going = Going {
+            position,
+            heading,
+            speed_mps: mps,
+            wings: pressed,
+            ..Going::standing(position, heading)
+        };
+        animal.step(dt, going, &ground);
+        if pressed {
+            legs_bend(animal, frame);
+            let (_, legs) = animal.legs().expect("drawn");
+            for (leg, pose) in legs.iter().enumerate() {
+                let over = pose.fetlock.y - ground.under(pose.fetlock).point.y;
+                assert!(
+                    over > 0.0,
+                    "{speed_mps} m/s, {roll} roll, {fps} fps, {s:.3} s: fetlock {leg} {over} m over the ground"
+                );
+            }
+        }
+        pressed
+    })
+}
+
+/// How sharply a horse's legs move at a run over [`Rolling`] ground
+/// `roll` steep at `fps`, settled into it.
+fn running(roll: f64, fps: f64) -> Sharpness {
+    let ground = Rolling { roll };
+    let mut animal = Animal::new(&HORSE, Look::new(&HORSE, 0, Some("white")));
+    let dt = 1.0 / fps;
+    let heading = DVec3::new(1.0, 0.0, 0.3).normalize();
+    sharpness(&mut animal, fps, (12.0 * fps) as usize, |animal, frame| {
+        let position = ground.under(heading * RUN_MPS * frame as f64 * dt).point;
+        let going = Going {
+            position,
+            heading,
+            speed_mps: RUN_MPS,
+            ..Going::standing(position, heading)
+        };
+        animal.step(dt, going, &ground);
+        frame as f64 * dt > 2.0
+    })
+}
+
+/// Its legs take it off whole: from a halt, a walk and a trot, on the flat
+/// and up slopes of about 17 degrees, at 60 frames a second and at 30, they
+/// gather, drive and tuck no more sharply than they run on that ground at
+/// that rate, none thrown from one frame to the next; none bends the wrong
+/// way, and no hoof goes through the ground.
+#[test]
+fn taking_off_its_legs_gather_drive_and_tuck_whole() {
+    for fps in [60.0, 30.0] {
+        for roll in [0.0, 3.0] {
+            let run = running(roll, fps);
+            for speed_mps in [0.0, 1.5, 3.6] {
+                let taking_off = taking_off(speed_mps, roll, fps);
+                assert!(
+                    taking_off.within(&run),
+                    "{speed_mps} m/s, {roll} roll, {fps} fps: {taking_off:?} against a run's {run:?}"
+                );
+            }
+        }
+    }
 }

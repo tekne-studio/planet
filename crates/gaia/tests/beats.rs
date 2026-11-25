@@ -217,7 +217,8 @@ fn flown_fast_and_level_it_glides() {
 /// It springs once a jump, as the ground lets it go from its gathering,
 /// and lands once, as its feet meet it again; never on a balk, which
 /// gathers and stays, nor lifted a moment off a bump. Taking to the wing
-/// it springs nothing, and it lands once coming down from it, set down.
+/// from the ground it springs once, and lands once coming down from it,
+/// set down.
 #[test]
 fn it_springs_and_lands_once_a_jump_and_never_on_a_balk() {
     let leaps = |look: Look, leap: fn(f64) -> (Option<Leap>, bool)| {
@@ -270,7 +271,7 @@ fn it_springs_and_lands_once_a_jump_and_never_on_a_balk() {
     assert_eq!(bumped, (0, vec![]), "a bump");
     let white = || Look::new(&HORSE, 7, Some("white"));
     let winged = leaps(white(), |s| (None, (1.0..3.0).contains(&s)));
-    assert_eq!(winged, (0, vec![true]), "to the wing and back down");
+    assert_eq!(winged, (1, vec![true]), "to the wing and back down");
 }
 
 /// The longest wait between two beats of its gait at `speed_mps`, seconds:

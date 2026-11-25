@@ -1,5 +1,5 @@
 //! Wings of boxes: data any flier fills, a [`Wing`], and a pair of them on
-//! an animal, [`Wings`], grown out as it takes off, beaten as hard as its
+//! an animal, [`Wings`], snapped open as it takes off, beaten as hard as its
 //! flight asks, held out to glide and folded away as it lands.
 //!
 //! A wing is three bones from the shoulder, arm, forearm and hand, along a
@@ -38,8 +38,9 @@ pub struct Wing {
     /// How far a beat swings the wing up and down, radians, held out and
     /// beating hard.
     pub stroke: (f64, f64),
-    /// How long it takes to grow out, or to fold away, seconds.
-    pub spread_s: f64,
+    /// How long it takes to open, and to fold away, seconds.
+    pub open_s: f64,
+    pub fold_s: f64,
     /// How far a hard beat lifts the body, metres.
     pub heave_m: f64,
 }
@@ -100,13 +101,21 @@ const SHINGLE: f64 = 0.3;
 /// The share of a beat where the downstroke strikes: the wing at its
 /// middle, coming down fastest.
 const STRIKE: f64 = 0.5;
+/// Where in a beat wings open from folded: raised, so the first downstroke
+/// takes the air.
+const OPEN_BEAT: f64 = 0.25;
+/// Opening, the feathers fan out in this share of the time the bones take.
+const FAN_LEAD: f64 = 0.6;
 
-/// A pair of wings on an animal: how far grown out and where in a beat.
+/// A pair of wings on an animal: how far open and where in a beat.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Wings {
     pub wing: &'static Wing,
     /// How far out, 0 folded away to 1 spread.
     pub grown: f64,
+    /// How far its feathers are fanned out, 0 closed to 1 spread: ahead of
+    /// the bones as they open, with them as they fold.
+    pub fanned: f64,
     /// Where in a beat, in beats: up at a quarter, down at three.
     pub beat: f64,
     /// How hard they beat, 0 held out to glide to 1 beating hard.
@@ -119,20 +128,30 @@ impl Wings {
         Wings {
             wing,
             grown: 0.0,
+            fanned: 0.0,
             beat: 0.0,
             effort: 0.0,
         }
     }
 
-    /// Grows them out while `out`, else folds them away, and beats them as
+    /// Opens them while `out`, else folds them away, and beats them as
     /// hard as the flight asks, `want` from 0, held, to 1, hard. Says
     /// whether a downstroke struck: a beat hard enough to be heard passing
     /// the middle of its stroke going down, while they are out. Folding
     /// away, they settle unheard: the animal has landed.
     pub fn update(&mut self, dt: f64, out: bool, want: f64) -> bool {
-        let toward = if out { 1.0 } else { 0.0 };
-        let rate = dt / self.wing.spread_s;
-        self.grown += (toward - self.grown).clamp(-rate, rate);
+        if out && self.grown <= 0.0 {
+            self.beat = OPEN_BEAT;
+        }
+        let rate = match out {
+            true => dt / self.wing.open_s,
+            false => -dt / self.wing.fold_s,
+        };
+        self.grown = (self.grown + rate).clamp(0.0, 1.0);
+        self.fanned = match out {
+            true => (self.fanned + rate / FAN_LEAD).clamp(self.grown, 1.0),
+            false => self.grown,
+        };
         let want = if out { want.clamp(0.0, 1.0) } else { 0.0 };
         self.effort += (want - self.effort) * (1.0 - libm::exp(-EFFORT_PER_S * dt));
         let (held, hard) = self.wing.beat_hz;
@@ -166,6 +185,7 @@ impl Wings {
         let wing = self.wing;
         let grow = smoothstep(0.0, 1.0, self.grown);
         let fold = 1.0 - grow;
+        let fan = smoothstep(0.0, 1.0, self.fanned);
         let flap = libm::sin(TAU * self.beat);
         let (held, hard) = wing.stroke;
         let stroke = held + (hard - held) * self.effort;
@@ -214,19 +234,20 @@ impl Wings {
                 joints[bone + 1] = joints[bone] + ways[bone] * wing.bones_m[bone] * grow;
             }
             // Out of the wing's plane along a bone, and back from it in
-            // that plane; folding, the feathers come to lie along it.
+            // that plane; folded `folded`, what lies back comes to lie
+            // along it.
             let normal = |way: DVec3| (DVec3::Y - way * way.y).normalize_or(DVec3::Y);
-            let back = |way: DVec3| {
+            let back = |way: DVec3, folded: f64| {
                 (way.cross(normal(way)) * side)
                     .normalize_or(DVec3::Z)
-                    .lerp(way, fold)
+                    .lerp(way, folded)
                     .normalize_or(DVec3::Z)
             };
             for bone in 0..3 {
                 let way = ways[bone];
                 let [deep, thick] = wing.edge_m[bone].map(|m| m * grow);
                 let long = wing.bones_m[bone] * grow;
-                let from = joints[bone] + back(way) * deep * 0.45 - way * thick;
+                let from = joints[bone] + back(way, fold) * deep * 0.45 - way * thick;
                 put(
                     plate(from, way, normal(way), long + 2.0 * thick, deep, thick),
                     paint[0],
@@ -244,14 +265,14 @@ impl Wings {
                     let at = joints[bone].lerp(joints[bone + 1], along - bone as f64);
                     let way = ways[bone];
                     let plane = normal(way);
-                    let fan = row.fan[0] + (row.fan[1] - row.fan[0]) * t;
+                    let turn = row.fan[0] + (row.fan[1] - row.fan[0]) * t;
                     let spread =
-                        (fan * (1.0 - 0.45 * flex) + row.fingers * k as f64 * glide) * grow;
-                    let toward =
-                        (back(way) * libm::cos(spread) + way * libm::sin(spread)).normalize();
-                    let (wide, thick) = (row.wide_m * grow, row.thick_m * grow);
-                    let from = at + plane * (row.over_m * grow + SHINGLE * thick * k as f64);
-                    let long = (row.long_m[0] + (row.long_m[1] - row.long_m[0]) * t) * grow;
+                        (turn * (1.0 - 0.45 * flex) + row.fingers * k as f64 * glide) * fan;
+                    let back = back(way, 1.0 - fan);
+                    let toward = (back * libm::cos(spread) + way * libm::sin(spread)).normalize();
+                    let (wide, thick) = (row.wide_m * fan, row.thick_m * fan);
+                    let from = at + plane * (row.over_m * fan + SHINGLE * thick * k as f64);
+                    let long = (row.long_m[0] + (row.long_m[1] - row.long_m[0]) * t) * fan;
                     let color = paint[row.paint.min(2)];
                     put(plate(from, toward, plane, long, wide, thick), color);
                     let [cap_long, cap_wide] = CAP;
@@ -316,6 +337,7 @@ mod tests {
     fn a_pegasus_spans_half_again_its_length() {
         let wings = Wings {
             grown: 1.0,
+            fanned: 1.0,
             beat: 0.0,
             ..Wings::new(&WING)
         };
@@ -340,23 +362,38 @@ mod tests {
         }
     }
 
-    /// Out, they grow in the time the wing says, and a beat hard enough
-    /// strikes once a beat; held out to glide, none strikes. Folded, none
-    /// is drawn.
+    /// Out, they open in the time the wing says, their feathers fanned
+    /// ahead of the bones, raised, so the first downstroke strikes within
+    /// a beat; a beat hard enough strikes once a beat; held out to glide,
+    /// none strikes. They fold in their own time, the feathers with the
+    /// bones. Folded, none is drawn.
     #[test]
-    fn they_grow_out_beat_and_fold_away() {
+    fn they_open_beat_and_fold_away() {
         let mut wings = Wings::new(&WING);
         let mut boxes = Vec::new();
         wings.boxes(DAffine3::IDENTITY, 1.0, [Vec3::ONE; 3], &mut boxes);
         assert!(boxes.is_empty());
         let dt = 1.0 / 60.0;
         let mut strikes = 0;
+        let mut first = None;
         for frame in 0..600 {
-            strikes += usize::from(wings.update(dt, true, 1.0));
-            if frame == (WING.spread_s / dt).ceil() as usize {
-                assert_eq!(wings.grown, 1.0);
+            let struck = wings.update(dt, true, 1.0);
+            strikes += usize::from(struck);
+            if struck && first.is_none() {
+                first = Some(frame as f64 * dt);
+            }
+            if frame == 0 {
+                assert!(wings.fanned > wings.grown, "{wings:?}");
+            }
+            if frame == (WING.open_s / dt).ceil() as usize {
+                assert_eq!((wings.grown, wings.fanned), (1.0, 1.0));
             }
         }
+        let first = first.expect("a first downstroke");
+        assert!(
+            first < 1.0 / WING.beat_hz.1 * 0.75,
+            "first strikes at {first:.2} s"
+        );
         let beats = wings.beat;
         assert!(
             (strikes as f64 - beats).abs() <= 2.0,
@@ -367,8 +404,10 @@ mod tests {
             gliding += usize::from(wings.update(dt, true, 0.0));
         }
         assert!(gliding <= 2, "{gliding} strikes gliding");
-        for _ in 0..30 {
+        for frame in 0..(WING.fold_s / dt).ceil() as usize {
             wings.update(dt, false, 0.0);
+            assert_eq!(wings.fanned, wings.grown, "folding, frame {frame}");
+            assert!(wings.grown > 0.0 || frame + 1 >= (WING.fold_s / dt) as usize);
         }
         assert_eq!(wings.grown, 0.0);
     }
