@@ -10,6 +10,12 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Every check a pull request runs: a push that fails one releases nothing.
+  checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   # The image builds before a version is tagged: a push whose image cannot
   # build releases nothing. One architecture, nothing pushed; the image job
   # takes its stages from the same cache.
@@ -29,7 +35,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   release:
-    needs: builds
+    needs: [checks, builds]
     runs-on: ubuntu-latest
     outputs:
       # The version this push released, without its `v`. Empty for a push that released none.

@@ -1,13 +1,17 @@
 name: ci
 
+# A pull request runs these by itself. A push to main or dev runs them as
+# the first job of the release, which waits for them: no version is tagged
+# and no image built from a commit that fails one.
 on:
-  push:
-    branches: [main, dev]
   pull_request:
+  workflow_call:
 
+# A newer push to a pull request ends the older run; a release's checks
+# always run to their end.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   commits:
