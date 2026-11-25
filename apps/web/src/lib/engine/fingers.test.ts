@@ -93,6 +93,64 @@ describe('fingers on buttons that stand in for keys', () => {
 		expect(fingers.holds('Space')).toBe(false);
 	});
 
+	test('a finger on the cross presses what is under it as it moves, two at a corner', () => {
+		const { fingers, pressed } = pad();
+		// A cross 90 across whose middle is at 100, 100: right of it is
+		// right, over it is up, and the finger holds the keys it says.
+		const box = { left: 55, top: 55, width: 90, height: 90 };
+		const target = { setPointerCapture() {}, getBoundingClientRect: () => box };
+		const ways = (x: number, y: number) =>
+			Math.abs(x) < 10 && Math.abs(y) < 10
+				? []
+				: [...(x > 10 ? ['ArrowRight'] : []), ...(y < -10 ? ['ArrowUp'] : [])];
+		const cross = fingers.steer(ways);
+		const at = (x: number, y: number) =>
+			({
+				pointerId: 1,
+				clientX: x,
+				clientY: y,
+				preventDefault() {},
+				currentTarget: target
+			}) as never;
+		cross.onpointerdown!(at(140, 100));
+		expect(fingers.holds('ArrowRight')).toBe(true);
+		cross.onpointermove!(at(140, 60));
+		expect(fingers.holds('ArrowRight') && fingers.holds('ArrowUp')).toBe(true);
+		cross.onpointermove!(at(100, 60));
+		// Back to the middle, nothing; off the cross, what is under it.
+		cross.onpointermove!(at(100, 100));
+		cross.onpointermove!(at(300, 100));
+		lift(1);
+		expect(pressed).toEqual([
+			'ArrowRight down',
+			'ArrowUp down',
+			'ArrowRight up',
+			'ArrowUp up',
+			'ArrowRight down',
+			'ArrowRight up'
+		]);
+	});
+
+	test('a key the cross and a button both hold goes up with the last finger', () => {
+		const { fingers, pressed } = pad();
+		const target = {
+			setPointerCapture() {},
+			getBoundingClientRect: () => ({ left: 0, top: 0, width: 90, height: 90 })
+		};
+		fingers.steer(() => ['ArrowLeft', 'ArrowDown']).onpointerdown!({
+			pointerId: 1,
+			clientX: 0,
+			clientY: 90,
+			preventDefault() {},
+			currentTarget: target
+		} as never);
+		land(fingers.hold('ArrowLeft'), 2);
+		lift(1);
+		expect(pressed).toEqual(['ArrowLeft down', 'ArrowDown down', 'ArrowDown up']);
+		lift(2);
+		expect(pressed.at(-1)).toBe('ArrowLeft up');
+	});
+
 	test('a tap presses once', () => {
 		const { fingers, pressed } = pad();
 		fingers.tap('Escape').onclick!({} as never);

@@ -34,6 +34,7 @@
 		NAME_CHARS,
 		type Anchor,
 		type CartridgeCover,
+		type Clear,
 		type Label,
 		type Waiting as WaitingGame,
 		type Marker,
@@ -67,10 +68,11 @@
 	// the bar on a touch screen. The page may bring a panel of its own, in
 	// the top left corner, where a plugin's menu otherwise sits. A touch
 	// screen walks, looks, jumps and flies: the stick and the buttons of
-	// `Touch`, a holder's `Pad` in their place while the controls are lent,
-	// the help in the bar, and no building offered to any plugin,
+	// `Touch`, the help in the bar, and no building offered to any plugin,
 	// whatever the level; and the stage keeps to what the phone's keyboard
-	// leaves in view (`visible`).
+	// leaves in view (`visible`). While the controls are lent, a holder's
+	// `Pad` takes the thumbs' place, the bar and the line wait, and the
+	// part the pad leaves clear goes to the engine, for the game played.
 
 	interface Props {
 		title: string;
@@ -167,6 +169,8 @@
 	let markersAt = $state.raw<MarkerAt[]>([]);
 	/** The stick a finger holds, while one does. */
 	let stick = $state.raw<Stick | null>(null);
+	/** What a touch screen's pad leaves clear of the stage, where a game played goes, while it is in. */
+	let clear = $state.raw<Clear | null>(null);
 	/** Whether this session builds here: a level that builds, on a screen that is no touch screen. */
 	const building = $derived(builds(level) && !touch.current);
 
@@ -567,7 +571,21 @@
 	style:bottom={visible.current && 'auto'}
 	style:height={visible.current && `${visible.current.height}px`}
 >
-	<EngineView bind:this={view} {recipe} {fieldPath} {mode} {avatar} name={myName} {link} stand={arrival} effects={wanted} {loudness} hiddenMarkers={hidden} onevent={receive} />
+	<EngineView
+		bind:this={view}
+		{recipe}
+		{fieldPath}
+		{mode}
+		{avatar}
+		name={myName}
+		{link}
+		stand={arrival}
+		effects={wanted}
+		{loudness}
+		clear={pad ? clear : null}
+		hiddenMarkers={hidden}
+		onevent={receive}
+	/>
 	{#if link}
 		<Nametags {anchors} {peers} {me} />
 	{/if}
@@ -611,7 +629,13 @@
 			<StickDrawn {stick} />
 		{/if}
 		{#if pad}
-			<Pad controls={CONTROLS} sticking={stick !== null} words={holderWords} onkey={(code, down) => view?.key(code, down)} />
+			<Pad
+				controls={CONTROLS}
+				sticking={stick !== null}
+				words={holderWords}
+				onkey={(code, down) => view?.key(code, down)}
+				onclear={(part) => (clear = part)}
+			/>
 		{:else}
 			<Touch flying={mode === 'fly' || (mode.startsWith('ride.') && (stats?.flying ?? false))} onkey={(code, down) => view?.key(code, down)} />
 		{/if}
@@ -659,23 +683,25 @@
 			<span aria-hidden="true">{t('engine.avatar.loading')}</span>
 		</div>
 	{/if}
-	<nav class="bar" aria-label={t('engine.bar')}>
-		{#if link}
-			<IconButton
-				icon="users"
-				label={t('engine.here')}
-				badge={session === 'online' ? String(peers.length + 1) : undefined}
-				aria-expanded={opened === 'here'}
-				onclick={() => toggle('here')}
-			/>
-		{/if}
-		<IconButton icon="settings" label={t('engine.settings')} aria-expanded={opened === 'settings'} onclick={() => toggle('settings')} />
-		{#if touch.current}
-			<IconButton icon="circle-help" label={t('engine.help')} aria-expanded={opened === 'help'} onclick={() => toggle('help')} />
-		{/if}
-		<ThemeToggle />
-	</nav>
-	{#if stats && game.place && opened !== 'here' && !(opened === 'help' && touch.current)}
+	{#if !pad}
+		<nav class="bar" aria-label={t('engine.bar')}>
+			{#if link}
+				<IconButton
+					icon="users"
+					label={t('engine.here')}
+					badge={session === 'online' ? String(peers.length + 1) : undefined}
+					aria-expanded={opened === 'here'}
+					onclick={() => toggle('here')}
+				/>
+			{/if}
+			<IconButton icon="settings" label={t('engine.settings')} aria-expanded={opened === 'settings'} onclick={() => toggle('settings')} />
+			{#if touch.current}
+				<IconButton icon="circle-help" label={t('engine.help')} aria-expanded={opened === 'help'} onclick={() => toggle('help')} />
+			{/if}
+			<ThemeToggle />
+		</nav>
+	{/if}
+	{#if stats && game.place && !pad && opened !== 'here' && !(opened === 'help' && touch.current)}
 		<Place place={stats.place} bearing_deg={stats.bearing_deg} altitude_m={stats.altitude_m} speed_mps={stats.speed_mps} />
 	{/if}
 	{#if opened === 'here' && link}

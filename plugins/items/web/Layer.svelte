@@ -13,8 +13,10 @@
 	// landmarks of the world, is anyone's: a line travels there through the
 	// engine's own `travel`, the passage a portal takes; a star on a line makes
 	// it a favourite and a house makes it the home, the world's to keep for
-	// an account and the engine's to hand this browser for a visitor.
-	let { seam, builds: builder, palette }: LayerProps = $props();
+	// an account and the engine's to hand this browser for a visitor. While
+	// a touch screen plays a game, the game has the glass: the menu and its
+	// buttons wait for the controls to come back.
+	let { seam, builds: builder, palette, lent, touch }: LayerProps = $props();
 
 	let editing = $state(false);
 	let item = $state<Item | null>(null);
@@ -97,57 +99,59 @@
 {#if builder}
 	<Drop {seam} {picked} />
 {/if}
-<Panel
-	{builder}
-	{editing}
-	{item}
-	{mode}
-	{picked}
-	{origin}
-	{paint}
-	{finish}
-	{edge}
-	{palette}
-	{refused}
-	{seam}
-	{listing}
-	{near}
-	{charting}
-	{landmarks}
-	{typed}
-	onlist={(on) => {
-		listing = on;
-		if (on && !editing) ask('edit', { on: true });
-	}}
-	onchart={chart}
-	ongo={(place) => {
-		chart(false);
-		seam.core({ type: 'travel', place });
-	}}
-	onsearch={(next) => (typed = next)}
-	onrelease={() => {
-		released = true;
-		seam.release();
-	}}
-	onfavour={(id, on) => seam.command('favour', { id, on })}
-	onhome={(id) => seam.command('home', { id })}
-	onadd={() => item && ask('take', { item, ahead: true })}
-	onclose={() => {
-		chart(false);
-		listing = false;
-		if (editing) ask('edit', { on: false });
-	}}
-	onpick={(id) => ask('pick', { id })}
-	onedit={(on) => {
-		if (!on) listing = false;
-		ask('edit', { on });
-	}}
-	ontake={(next) => ask('take', { item: next })}
-	onmode={(next) => ask('mode', { mode: next })}
-	onset={(set) => ask('set', set)}
-	onduplicate={() => ask('duplicate')}
-	onremove={() => ask('remove')}
-	onpaint={(next) => ask('paint', { paint: next })}
-	onfinish={(next) => ask('finish', { finish: next })}
-	onedge={(next) => ask('edge', { edge: next })}
-/>
+{#if !(lent && touch)}
+	<Panel
+		{builder}
+		{editing}
+		{item}
+		{mode}
+		{picked}
+		{origin}
+		{paint}
+		{finish}
+		{edge}
+		{palette}
+		{refused}
+		{seam}
+		{listing}
+		{near}
+		{charting}
+		{landmarks}
+		{typed}
+		onlist={(on) => {
+			listing = on;
+			if (on && !editing) ask('edit', { on: true });
+		}}
+		onchart={chart}
+		ongo={(place) => {
+			chart(false);
+			seam.core({ type: 'travel', place });
+		}}
+		onsearch={(next) => (typed = next)}
+		onrelease={() => {
+			released = true;
+			seam.release();
+		}}
+		onfavour={(id, on) => seam.command('favour', { id, on })}
+		onhome={(id) => seam.command('home', { id })}
+		onadd={() => item && ask('take', { item, ahead: true })}
+		onclose={() => {
+			chart(false);
+			listing = false;
+			if (editing) ask('edit', { on: false });
+		}}
+		onpick={(id) => ask('pick', { id })}
+		onedit={(on) => {
+			if (!on) listing = false;
+			ask('edit', { on });
+		}}
+		ontake={(next) => ask('take', { item: next })}
+		onmode={(next) => ask('mode', { mode: next })}
+		onset={(set) => ask('set', set)}
+		onduplicate={() => ask('duplicate')}
+		onremove={() => ask('remove')}
+		onpaint={(next) => ask('paint', { paint: next })}
+		onfinish={(next) => ask('finish', { finish: next })}
+		onedge={(next) => ask('edge', { edge: next })}
+	/>
+{/if}
