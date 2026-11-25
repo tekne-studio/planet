@@ -28,7 +28,8 @@ export default defineConfig({
 		// One origin in development too: Vite holds the page and hands the
 		// world's routes, its socket and its files to the Go server.
 		proxy: { '/api': { target: WORLD, ws: true }, '/files': { target: WORLD } },
-		// A plugin's panel lives in its own folder, outside this app.
-		fs: { allow: ['../../plugins'] }
+		// A plugin's panel lives in its own folder, outside this app, and
+		// the cabinet's reads the codes of the emulator the engine pins.
+		fs: { allow: ['../../plugins', '../../arcade/emulator'] }
 	}
 });

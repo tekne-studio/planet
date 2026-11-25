@@ -11,8 +11,10 @@
 import { kindOf } from '$lib/files';
 import { Refused } from '$lib/instance';
 import type { Seam } from '$lib/plugins/plugin';
+import { refusals as checked } from '../../../arcade/emulator/emulator.json';
 import { isPicture, isVideo, prepareImage, type Media } from './image';
 import type { Picked } from './protocol';
+import type { t } from './words';
 
 /** What a file is to items, by its name and type: a picture, a model of voxels, a 3D model, a sound, a cartridge, or none of them. */
 export type Given = 'picture' | 'model' | 'glb' | 'sound' | 'cartridge';
@@ -24,15 +26,17 @@ const SOUND_TYPES = ['audio/mpeg', 'audio/mp4', 'audio/x-m4a', 'audio/ogg'];
 export type NotTaken = 'kind' | 'size' | 'level' | 'key' | 'unreachable' | 'canvas';
 const refusals: readonly NotTaken[] = ['kind', 'size', 'level', 'key', 'unreachable', 'canvas'];
 
-/** Why the world refuses a cartridge: the codes of the emulator's `check`, which the page judges by too, and the world's own when its judgement runs past its deadline (`late`) or breaks (`trapped`). */
-const contract = ['size', 'invalid', 'import', 'export', 'memory', 'table', 'frame', 'segment', 'instruction', 'late', 'trapped'] as const;
-type Breaks = (typeof contract)[number];
+/** Why the world refuses a cartridge: every code of the emulator's `check`, which the page judges by too, as the pinned emulator names them, and the world's own when its judgement runs past its deadline (`late`) or breaks (`trapped`). */
+export const contract: readonly string[] = [...checked, 'late', 'trapped'];
+/** A code of the contract this panel has words for: each of `contract` (takeFile.test.ts). */
+type Breaks = Parameters<typeof t>[0] extends infer Key ? (Key extends `drop.refused.cartridge.${infer Code}` ? Code : never) : never;
 
 /** Why a file does not fit what it was given to: a 3D model by the engine's weighing, against what a world draws of one; a cartridge by the contract, `cartridge` for a file that is no WebAssembly or one refused for no reason given; `skin` for one no cabinet wears. */
 export type Unfit = 'broken' | 'triangles' | 'texels' | 'materials' | 'vertices' | 'cartridge' | `cartridge.${Breaks}` | 'skin';
 const unfits: readonly Unfit[] = [
 	...(['broken', 'triangles', 'texels', 'materials', 'vertices', 'cartridge', 'skin'] as const),
-	...contract.map((code) => `cartridge.${code}` as const)
+	// Each has its words, as the test holds every code the pinned emulator names to.
+	...contract.map((code) => `cartridge.${code}` as Unfit)
 ];
 
 /** What a file would be, by its name and type, before it is read. Null for one items takes no interest in. */

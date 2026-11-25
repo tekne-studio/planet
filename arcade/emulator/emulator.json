@@ -1,8 +1,8 @@
 {
 	"contract": 1,
 	"engine": 1,
-	"runner": "abd01186e9c1dfc66ae2ce8bf5b31bc00f14c3ccd4648ab81de6e96d89027b8f.wasm",
-	"host": "0ed3f5195c41c223c7b8326cc8f07b4dd571fd04d9a980230da3a074ac8e4ab4.js",
+	"runner": "c82622bfb51e27dae06b6280be54eba3d0a8a95bedea39bd0aa9f486a818b509.wasm",
+	"host": "9501bf2ce90a5bf889586e461272a8588edbbc6e1d5d37f495df3087a4b5ab39.js",
 	"chip": "ae0bb019276abb9b7bd191f0eb83085ab5ac93134929abf293083ab47794642f.wasm",
 	"processor": "9051e374fa134b05079323c80d3ddad453c0c970f503d90dfa21368e00625d31.js",
 	"width": 160,
@@ -62,5 +62,17 @@
 		"Enter": 16384,
 		"NumpadEnter": 16384
 	},
-	"cases": "0ca31ecae54d245fa13f6447a1a059a4aed42eb861383e8b9c9e3e4fc40f1fdd.json"
+	"refusals": [
+		"size",
+		"invalid",
+		"import",
+		"export",
+		"memory",
+		"table",
+		"frame",
+		"segment",
+		"instruction",
+		"pads"
+	],
+	"cases": "9a1c343071aed0bd9ca5d38bacb2a2379bcfcece95571ba25cff74a3d52bbb3b.json"
 }

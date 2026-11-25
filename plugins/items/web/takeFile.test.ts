@@ -6,7 +6,16 @@ import { Refused } from '../../../apps/web/src/lib/instance';
 // The page's own modules, as the app's aliases name them.
 mock.module('$lib/files', () => ({ kindOf }));
 mock.module('$lib/instance', () => ({ Refused }));
-const { notTakenOrUnfit, takeFile } = await import('./takeFile');
+/** The panel's words, each language's as written. */
+let catalogs: Record<string, Record<string, string>> = {};
+mock.module('$lib/i18n', () => ({
+	words: (given: typeof catalogs) => {
+		catalogs = given;
+		return (key: string) => key;
+	}
+}));
+await import('./words');
+const { contract, notTakenOrUnfit, takeFile } = await import('./takeFile');
 
 /** A seam whose weighing and sending refuse with the codes given, or take the file. */
 function seam(weighs: string, sends: string, commands: string[] = []): Seam {
@@ -32,6 +41,15 @@ const wasm = new File([new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0])], 'r
 const refusal = (taking: Promise<unknown>) => taking.then(() => null, notTakenOrUnfit);
 
 describe('a cartridge given', () => {
+	test('every code the pinned emulator judges by has its words, in every language', () => {
+		expect(contract).toContain('pads');
+		expect(Object.keys(catalogs)).toEqual(['en', 'pt', 'zh']);
+		const missing = Object.entries(catalogs).flatMap(([locale, words]) =>
+			contract.filter((code) => !words[`drop.refused.cartridge.${code}`]).map((code) => `${locale}: ${code}`)
+		);
+		expect(missing).toEqual([]);
+	});
+
 	test('one the page holds to the contract is refused before it is sent, and says why', async () => {
 		const commands: string[] = [];
 		expect(await refusal(takeFile(seam('import', '', commands), wasm))).toBe('cartridge.import');
