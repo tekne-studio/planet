@@ -7,7 +7,8 @@
 //! planet shot --out FILE [--seed HEX] [--bits N] [--avatar NAME] [--size WxH] [--clock S]
 //!             [--altitude M] [--pitch DEG] [--boom M] [--walk S] [--at U,V] [--moon M]
 //!             [--command JSON]... [--drag X0,Y0,X1,Y1]... [--ride] [--fly S [--against-sun]]
-//!             [--yaw DEG] [--animals DIR | --wings DIR [--against-sun] [--look SEED]]
+//!             [--yaw DEG] [--animals DIR | --wings DIR [--against-sun] [--look SEED]
+//!             | --saddle DIR | --herd DIR | --takeoff DIR]
 //! planet cart FILE.wasm [--seed N] [--scale N]
 //! planet cabinet-template FILE.png
 //! ```
@@ -23,6 +24,7 @@ mod play;
 mod saddle;
 mod shot;
 mod slice;
+mod takeoff;
 mod window;
 mod wings;
 

@@ -188,6 +188,9 @@ pub fn run(shot: Shot) -> Result<(), String> {
     if let Some(dir) = &shot.herd {
         return crate::herd::run(&mut client, shot.size, dir);
     }
+    if let Some(dir) = &shot.takeoff {
+        return crate::takeoff::run(&mut client, shot.size, dir);
+    }
     let mut headless = Headless::new(width, height)?;
     if let Some(cabinet) = &shot.cabinet {
         crate::play::run(&mut client, &mut headless, cabinet)?;
