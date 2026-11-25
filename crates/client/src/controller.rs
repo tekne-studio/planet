@@ -493,11 +493,11 @@ impl Controller {
             .is_some_and(|(_, aloft)| !matches!(aloft, Aloft::Springing { .. }))
     }
 
-    /// Whether a body aloft on what it rides flies as high over the ground
-    /// as its way lets it.
-    pub fn at_ceiling(&self, generator: &Generator) -> bool {
+    /// Whether a body aloft on what it rides flies as high over the sea as
+    /// its way lets it.
+    pub fn at_ceiling(&self) -> bool {
         self.mount_aloft().is_some_and(|(flight, aloft)| {
-            aloft == Aloft::Flying && self.clearance_m(generator) >= flight.ceiling_m - AT_CEILING_M
+            aloft == Aloft::Flying && self.height_m >= flight.ceiling_m - AT_CEILING_M
         })
     }
 
@@ -1025,7 +1025,11 @@ impl Controller {
     /// under it. On its own, at a height it flies.
     pub fn stand_at(&mut self, height_m: Option<f64>, generator: &Generator) {
         let ground = self.ground_m(generator);
-        self.height_m = height_m.map_or(ground, |wanted| wanted.max(ground));
+        // Aloft on what it rides, it arrives no higher than its way flies.
+        let ceiling_m = self
+            .mount_aloft()
+            .map_or(f64::MAX, |(flight, _)| flight.ceiling_m);
+        self.height_m = height_m.map_or(ground, |wanted| wanted.min(ceiling_m).max(ground));
         self.grounded = self.height_m <= ground + 1e-6;
         self.vertical_mps = 0.0;
         match (&mut self.moves, height_m) {
@@ -1609,6 +1613,7 @@ impl Controller {
         built: Built<'_>,
     ) -> DVec3 {
         let up = self.frame_up;
+        let (height_up, height_m) = (self.height_up(), self.height_m);
         let below = self.below(generator, built);
         let Moves::Way {
             kept:
@@ -1640,10 +1645,16 @@ impl Controller {
             }
             Aloft::Flying => {
                 let velocity = reach.wish * speed_mps;
+                // A step rises at most to the ceiling, over the sea as
+                // `height_m` is, along the up it is measured by.
+                let room_mps = (flight.ceiling_m - height_m).max(0.0) / dt;
+                let rise = velocity.dot(height_up);
+                let velocity = match rise > room_mps {
+                    true => velocity - height_up * (rise - room_mps),
+                    false => velocity,
+                };
                 let climb = velocity.dot(up);
-                let high = reach.clearance_m >= flight.ceiling_m && climb > 0.0;
-                let sea = below.wet && below.over_m <= 0.0 && climb < 0.0;
-                match high || sea {
+                match below.wet && below.over_m <= 0.0 && climb < 0.0 {
                     true => velocity - up * climb,
                     false => velocity,
                 }
@@ -2255,8 +2266,17 @@ impl Controller {
         ((c * p - b * q) / det, (a * q - b * p) / det)
     }
 
+    /// The up a step measures height along, `height_m` changed by a move's
+    /// part along it: the column's on the planet.
+    fn height_up(&self) -> DVec3 {
+        match self.site {
+            Site::Planet => DVec3::from(self.sphere.blocks().tangents(self.point).up),
+            Site::Moon { direction } => direction,
+        }
+    }
+
     fn step_on_planet(&mut self, delta: DVec3, generator: &Generator, built: Built<'_>) {
-        let up = DVec3::from(self.sphere.blocks().tangents(self.point).up);
+        let up = self.height_up();
         let (du, dv) = self.address_step(delta);
 
         let held = self.built(built);
@@ -3700,14 +3720,62 @@ mod tests {
     fn a_pegasus_at_its_ceiling_says_so() {
         on_a_pegasus(None, |controller, generator, built| {
             assert_eq!(controller.take_off(true, generator, built), Ok(()));
-            assert!(!controller.at_ceiling(generator), "rising");
+            assert!(!controller.at_ceiling(), "rising");
             run(controller, 3.0, Wish::default(), generator, built);
             let ceiling_m = controller.mount_aloft().unwrap().0.ceiling_m;
+            controller.height_m = ceiling_m - 10.0;
+            assert!(!controller.at_ceiling());
+            controller.height_m = ceiling_m;
+            assert!(controller.at_ceiling());
+        });
+    }
+
+    /// Flown up, a pegasus climbs through the clouds to their top over the
+    /// sea and no higher, and says there it is at its ceiling. Put higher
+    /// by a far move, it arrives at its ceiling; landed, it is down in
+    /// seconds, never under the ground.
+    #[test]
+    fn a_pegasus_flies_up_to_the_clouds_top_and_no_higher() {
+        on_a_pegasus(None, |controller, generator, built| {
+            let top_m = f64::from(scene::CLOUD_TOP_M);
+            assert_eq!(controller.take_off(true, generator, built), Ok(()));
+            run(controller, 3.0, Wish::default(), generator, built);
+            let up = Wish {
+                up: true,
+                sprint: true,
+                movement: [0.0, 1.0],
+                ..Wish::default()
+            };
+            let mut highest_m = 0.0f64;
+            for _ in 0..90 * 60 {
+                controller.update(1.0 / 60.0, up, generator, built);
+                highest_m = highest_m.max(controller.height_m);
+            }
+            assert!(
+                controller.at_ceiling(),
+                "{} m over the sea",
+                controller.height_m
+            );
+            assert!(highest_m <= top_m + 1.0, "{highest_m} m over the sea");
+
+            controller.stand_at(Some(top_m + 2000.0), generator);
+            assert_eq!(controller.height_m, top_m);
+            assert!(controller.aloft() && controller.at_ceiling());
+
+            // From there it comes down to the ground in seconds, as from
+            // anywhere: slower the nearer.
             let ground_m = controller.ground_m(generator);
-            controller.height_m = ground_m + ceiling_m - 10.0;
-            assert!(!controller.at_ceiling(generator));
-            controller.height_m = ground_m + ceiling_m;
-            assert!(controller.at_ceiling(generator));
+            assert_eq!(controller.land(generator, built), Ok(()));
+            let mut s = 0.0;
+            while controller.aloft() && s < 20.0 {
+                controller.update(1.0 / 60.0, Wish::default(), generator, built);
+                assert!(
+                    controller.height_m >= ground_m - 0.01,
+                    "under the ground at {s} s"
+                );
+                s += 1.0 / 60.0;
+            }
+            assert!(controller.grounded(), "still aloft after {s} s");
         });
     }
 

@@ -191,6 +191,9 @@ pub fn run(shot: Shot) -> Result<(), String> {
     if let Some(dir) = &shot.takeoff {
         return crate::takeoff::run(&mut client, shot.size, dir);
     }
+    if let Some(dir) = &shot.clouds {
+        return crate::clouds::run(&mut client, shot.size, shot.boom_m, dir);
+    }
     let mut headless = Headless::new(width, height)?;
     if let Some(cabinet) = &shot.cabinet {
         crate::play::run(&mut client, &mut headless, cabinet)?;
@@ -303,7 +306,7 @@ pub(crate) fn drawn(
 }
 
 /// The same, into a renderer that may already hold what was drawn before.
-fn drawn_into(client: &mut Client, headless: &mut Headless) -> scene::Frame {
+pub(crate) fn drawn_into(client: &mut Client, headless: &mut Headless) -> scene::Frame {
     let frame = client.settled_frame();
     let renderer = &mut headless.renderer;
     renderer.apply(client.drain_terrain_changes());

@@ -212,6 +212,12 @@ pub const SAND_WANDER_M: f32 = 1.05;
 pub const SAND_EDGE_M: f32 = 0.35;
 pub const SAND_HIGHEST_M: f32 = SAND_TOP_M + SAND_WANDER_M + SAND_EDGE_M;
 
+/// The shell of weather clouds fill, metres over the sea, from its base to
+/// its top: where a renderer draws them, and where what flies on wings
+/// meets them. The atmosphere ends over it.
+pub const CLOUD_BASE_M: f32 = 1100.0;
+pub const CLOUD_TOP_M: f32 = 3000.0;
+
 /// How far the densest grass tier is seen, metres. Each sparser tier doubles
 /// it. Bounded by the terrain LOD: a patch must split before the tiers it
 /// lacks come into reach (`client::grass`).

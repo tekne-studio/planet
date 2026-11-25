@@ -8,13 +8,12 @@
 const NOISE_SIZE: u32 = 64;
 /// Slices along each side of the atlas they are drawn into: 8 x 8 = 64.
 const ATLAS_SIDE: u32 = 8;
-/// The layer, metres above the sea. The atmosphere ends at 3600.
-const BASE_M: f32 = 1100.0;
-const TOP_M: f32 = 3000.0;
 /// What the shaders must agree on, stated once: prepended to every module.
+/// The layer is the scene's, so what flies meets it where it is drawn.
 pub fn prelude() -> String {
+    use scene::{CLOUD_BASE_M, CLOUD_TOP_M};
     format!(
-        "const CLOUD_BASE_M: f32 = {BASE_M:?};\nconst CLOUD_TOP_M: f32 = {TOP_M:?};\n\
+        "const CLOUD_BASE_M: f32 = {CLOUD_BASE_M:?};\nconst CLOUD_TOP_M: f32 = {CLOUD_TOP_M:?};\n\
          const CLOUD_SHAPE_TILE_M: f32 = {SHAPE_TILE_M:?};\n\
          const CLOUD_DETAIL_TILE_M: f32 = {DETAIL_TILE_M:?};\n"
     )

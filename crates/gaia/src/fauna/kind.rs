@@ -195,7 +195,8 @@ pub struct Flight {
     /// The fastest it flies, metres a second, however high and with sprint
     /// held: what the herds and the ground drawn about it keep up with.
     pub top_mps: f64,
-    /// The highest it flies over the ground under it, metres.
+    /// The highest it flies, metres over the sea, wherever the ground
+    /// under it is.
     pub ceiling_m: f64,
     /// How high it climbs as it takes off, metres over the ground, and the
     /// room it needs over its head for that.

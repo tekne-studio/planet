@@ -3504,11 +3504,9 @@ impl Client {
                     _ => {}
                 }
                 if self.controller.aloft() {
-                    return flight.map(|flight| {
-                        match self.controller.at_ceiling(&self.generator) {
-                            true => flight.ceiling,
-                            false => flight.name,
-                        }
+                    return flight.map(|flight| match self.controller.at_ceiling() {
+                        true => flight.ceiling,
+                        false => flight.name,
                     });
                 }
                 match (self.controller.backs(), &paces.backing) {

@@ -108,7 +108,8 @@ pub struct Flight {
     /// The fastest it flies, metres a second, however high and with sprint
     /// held.
     pub top_mps: f64,
-    /// The highest it flies over the ground, metres.
+    /// The highest it flies, metres over the sea, wherever the ground under
+    /// it is.
     pub ceiling_m: f64,
     /// How high it climbs taking off, metres over the ground: the room it
     /// needs over its head, past its own.
@@ -170,7 +171,7 @@ impl Flight {
     /// How fast it flies `clearance_m` over the ground, metres per second,
     /// never past its top.
     pub(crate) fn speed_at(&self, clearance_m: f64, sprint: bool) -> f64 {
-        let speed = self.speed_mps + self.per_m * clearance_m.min(self.ceiling_m);
+        let speed = self.speed_mps + self.per_m * clearance_m;
         let speed = if sprint { speed * self.sprint } else { speed };
         speed.min(self.top_mps)
     }

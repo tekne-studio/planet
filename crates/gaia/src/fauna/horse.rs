@@ -676,7 +676,8 @@ pub const HORSE: Kind = Kind {
             per_m: 0.25,
             sprint: 2.5,
             top_mps: 150.0,
-            ceiling_m: 500.0,
+            // Up to the clouds' top, and over them; never yet past it.
+            ceiling_m: scene::CLOUD_TOP_M as f64,
             takeoff_m: 3.0,
             // A gallop's gather and a jump's arc: the press is answered at
             // once, and the wings are out in under two thirds of a second.

@@ -74,6 +74,9 @@ pub struct Shot {
     pub herd: Option<PathBuf>,
     /// Where the frames of a pegasus taking off go: `crate::takeoff`.
     pub takeoff: Option<PathBuf>,
+    /// Where the pictures of a pegasus flown to the clouds go:
+    /// `crate::clouds`.
+    pub clouds: Option<PathBuf>,
     pub view: crate::animals::View,
     /// A cabinet placed before the body, its game running, played or not.
     pub cabinet: Option<crate::play::Cabinet>,
@@ -134,6 +137,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
         saddle: None,
         herd: None,
         takeoff: None,
+        clouds: None,
         view: crate::animals::View::default(),
         cabinet: None,
         clear: None,
@@ -206,6 +210,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
             "--saddle" if is_shot => shot.saddle = Some(PathBuf::from(value()?)),
             "--herd" if is_shot => shot.herd = Some(PathBuf::from(value()?)),
             "--takeoff" if is_shot => shot.takeoff = Some(PathBuf::from(value()?)),
+            "--clouds" if is_shot => shot.clouds = Some(PathBuf::from(value()?)),
             "--yaw" if is_shot => shot.view.yaw_deg = number(&value()?, "--yaw")?,
             "--against-sun" if is_shot => shot.view.against_sun = true,
             "--cabinet" if is_shot => {
