@@ -1,6 +1,7 @@
 //! Wings of boxes: data any flier fills, a [`Wing`], and a pair of them on
-//! an animal, [`Wings`], swept open as it takes off, beaten as hard as its
-//! flight asks, held out to glide and folded away as it lands.
+//! an animal, [`Wings`], unfolded from its flanks as it takes off, beaten
+//! as hard as its flight asks, held out to glide and folded back away as it
+//! lands.
 //!
 //! A wing is three bones from the shoulder, arm, forearm and hand, along a
 //! leading edge thick at the shoulder and thin at the tip, and rows of
@@ -13,7 +14,7 @@
 
 use core::f64::consts::TAU;
 
-use glam::{DAffine3, DMat3, DVec3, Vec3};
+use glam::{DAffine3, DMat3, DQuat, DVec3, Vec3};
 use scene::BoxPart;
 
 use crate::fauna::ease::smoothstep;
@@ -83,8 +84,6 @@ const EFFORT_PER_S: f64 = 3.0;
 const HELD_EFFORT: (f64, f64) = (0.05, 0.3);
 /// How far up the wing is held, gliding, radians: a shallow dihedral.
 const DIHEDRAL: f64 = 0.1;
-/// How far each bone sweeps back as the wing folds away, radians.
-const FOLD_SWEEP: [f64; 3] = [1.1, 2.2, 1.0];
 /// Each bone's sweep back held out, radians: the arm back, the forearm a
 /// little forward, the hand back again.
 const SWEEP: [f64; 3] = [0.25, -0.12, 0.2];
@@ -104,18 +103,79 @@ const STRIKE: f64 = 0.5;
 /// Where in a beat wings open from folded: raised, so the first downstroke
 /// takes the air.
 const OPEN_BEAT: f64 = 0.25;
-/// Opening, the feathers fan out in this share of the time the bones take.
-const FAN_LEAD: f64 = 0.6;
+
+/// Folded at rest, as a bird's, the right wing in the rig: in a plane along
+/// the flank whose foot leans out from upright by `FOLD_LEAN`, radians. Each
+/// bone's way, back along the body, down that plane and out of it: the arm
+/// back from the shoulder, and out as far as the body is broad, so the
+/// plane clears the barrel at every build; the forearm forward and down,
+/// so the wrist sits under the shoulder; the hand back along the flank.
+const FOLD_LEAN: f64 = 0.2;
+const FOLDED: [[f64; 3]; 3] = [[1.0, 0.12, 0.27], [-0.74, 0.67, 0.0], [0.97, -0.26, 0.0]];
+/// Folded, its feathers lie back toward the tail in that plane, this far
+/// down it for each unit back.
+const TAIL_DOWN: f64 = 0.05;
+/// Coming out, how far the folded wing lifts off the flank, turned about
+/// the body's length, before it swings out, radians.
+const LIFT: f64 = 0.9;
+/// Coming out, the share of the way from gone to spread where each part
+/// moves, from and to: it grows from nothing at the shoulder, folded along
+/// the flank, and goes on growing as it lifts, the shoulder swings it out
+/// as the elbow and the wrist straighten after it, and the feathers fan
+/// last, the tip trailing. Folding away plays it back, shrinking into the
+/// shoulder as it folds.
+const GROWS: [f64; 2] = [0.0, 0.7];
+const LIFTS: [f64; 2] = [0.1, 0.42];
+const JOINTS: [[f64; 2]; 3] = [[0.25, 0.66], [0.3, 0.8], [0.4, 0.92]];
+const FANS: [f64; 2] = [0.58, 1.0];
+
+/// How far along a wing is in coming out, each part 0 folded to 1 spread:
+/// one description, read opening and folding alike, of how far out it is.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Out {
+    /// How big it has grown, from nothing to its full size.
+    size: f64,
+    /// How far it has lifted off the flank, folded.
+    lift: f64,
+    /// How far its shoulder, elbow and wrist have opened.
+    joints: [f64; 3],
+    /// How far its feathers have fanned.
+    fan: f64,
+}
+
+impl Out {
+    /// How far each part is out when the wing is `grown` out.
+    fn of(grown: f64) -> Out {
+        let turn = |[from, to]: [f64; 2]| smoothstep(from, to, grown);
+        Out {
+            size: turn(GROWS),
+            lift: turn(LIFTS),
+            joints: JOINTS.map(turn),
+            fan: turn(FANS),
+        }
+    }
+}
+
+/// A wing's bones as drawn, the right one's in the rig.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Pose {
+    /// Each bone's turn: its length along `x`, the wing's up along `y` and
+    /// back from its leading edge along `z`.
+    turns: [DQuat; 3],
+    /// Its joints: the shoulder, the elbow, the wrist and the tip.
+    at: [DVec3; 4],
+    /// How far the hand folds back rising, 0 to 1.
+    flex: f64,
+}
 
 /// A pair of wings on an animal: how far open and where in a beat.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Wings {
     pub wing: &'static Wing,
-    /// How far out, 0 folded away to 1 spread.
+    /// How far out, 0 gone to 1 spread: it comes out folded, unfolds and
+    /// fans over the wing's `open_s`, and folds away over its `fold_s` the
+    /// same way back.
     pub grown: f64,
-    /// How far its feathers are fanned out, 0 closed to 1 spread: ahead of
-    /// the bones as they open, with them as they fold.
-    pub fanned: f64,
     /// Where in a beat, in beats: up at a quarter, down at three.
     pub beat: f64,
     /// How hard they beat, 0 held out to glide to 1 beating hard.
@@ -128,7 +188,6 @@ impl Wings {
         Wings {
             wing,
             grown: 0.0,
-            fanned: 0.0,
             beat: 0.0,
             effort: 0.0,
         }
@@ -153,18 +212,17 @@ impl Wings {
         if !out && self.grown < 1e-9 {
             self.grown = 0.0;
         }
-        self.fanned = match out {
-            true => (self.fanned + rate / FAN_LEAD).clamp(self.grown, 1.0),
-            false => self.grown,
-        };
         let want = if out { want.clamp(0.0, 1.0) } else { 0.0 };
         self.effort += (want - self.effort) * (1.0 - libm::exp(-EFFORT_PER_S * dt));
         let (held, hard) = self.wing.beat_hz;
         let was = self.beat;
-        // A wing held out still stirs: a slow beat, a little stroke.
-        self.beat += dt * (held + (hard - held) * self.effort) * self.grown;
+        // A wing held out still stirs: a slow beat, a little stroke. One
+        // coming out or folding away holds where it is in its beat, so it
+        // opens raised for the first downstroke.
+        let spread = f64::from(u8::from(self.grown >= 1.0));
+        self.beat += dt * (held + (hard - held) * self.effort) * spread;
         let struck = libm::floor(self.beat - STRIKE) > libm::floor(was - STRIKE);
-        struck && out && self.grown > 0.5 && self.effort > 0.2
+        struck && out && self.effort > 0.2
     }
 
     /// How far they are held out to glide, 0 to 1: grown out and beating
@@ -188,73 +246,38 @@ impl Wings {
             return;
         }
         let wing = self.wing;
-        let grow = smoothstep(0.0, 1.0, self.grown);
-        let fold = 1.0 - grow;
-        let fan = smoothstep(0.0, 1.0, self.fanned);
-        let flap = libm::sin(TAU * self.beat);
-        let (held, hard) = wing.stroke;
-        let stroke = held + (hard - held) * self.effort;
-        // Rising, the hand folds back at the wrist and its feathers close;
-        // gliding, they part at the tips.
-        let flex = self.effort * libm::cos(TAU * self.beat).max(0.0);
+        let Pose { turns, at, flex } = self.pose(build);
+        let Out { size, fan, .. } = Out::of(self.grown);
+        let (_, tail) = folded(build);
         let glide = 1.0 - self.effort;
-        let lift = DIHEDRAL + stroke * flap;
-        let rises = [
-            lift,
-            lift + 0.15 * stroke * flap,
-            1.1 * lift + 0.25 * stroke * flap - 0.3 * flex,
-        ];
-        let sweeps = [
-            SWEEP[0],
-            SWEEP[1] + ELBOW_FOLD * flex,
-            SWEEP[2] + WRIST_FOLD * flex,
-        ];
         for side in [-1.0, 1.0] {
-            let mut put = |transform: DAffine3, color: Vec3| {
+            // The left wing is the right one mirrored.
+            let mirror = |v: DVec3| DVec3::new(side * v.x, v.y, v.z);
+            let mut put = |from: DVec3,
+                           toward: DVec3,
+                           up: DVec3,
+                           [long, wide, thick]: [f64; 3],
+                           color: Vec3| {
                 out.push(BoxPart {
-                    transform: body * transform,
+                    transform: body
+                        * plate(mirror(from), mirror(toward), mirror(up), long, wide, thick),
                     color,
                     shine: 0.0,
                     shadow_only: false,
                     sheet: true,
                 });
             };
-            // Folding away, each bone sweeps back along the flank, lies
-            // flat and shrinks into the shoulder.
-            let ways: [DVec3; 3] = core::array::from_fn(|bone| {
-                let (sweep, rise) = (sweeps[bone] + fold * FOLD_SWEEP[bone], rises[bone] * grow);
-                DVec3::new(
-                    side * libm::cos(rise) * libm::cos(sweep),
-                    libm::sin(rise),
-                    libm::cos(rise) * libm::sin(sweep),
-                )
-            });
-            let shoulder = DVec3::new(
-                side * wing.shoulder.x * build,
-                wing.shoulder.y,
-                wing.shoulder.z,
-            );
-            let mut joints = [shoulder; 4];
             for bone in 0..3 {
-                joints[bone + 1] = joints[bone] + ways[bone] * wing.bones_m[bone] * grow;
-            }
-            // Out of the wing's plane along a bone, and back from it in
-            // that plane; folded `folded`, what lies back comes to lie
-            // along it.
-            let normal = |way: DVec3| (DVec3::Y - way * way.y).normalize_or(DVec3::Y);
-            let back = |way: DVec3, folded: f64| {
-                (way.cross(normal(way)) * side)
-                    .normalize_or(DVec3::Z)
-                    .lerp(way, folded)
-                    .normalize_or(DVec3::Z)
-            };
-            for bone in 0..3 {
-                let way = ways[bone];
-                let [deep, thick] = wing.edge_m[bone].map(|m| m * grow);
-                let long = wing.bones_m[bone] * grow;
-                let from = joints[bone] + back(way, fold) * deep * 0.45 - way * thick;
+                let turn = turns[bone];
+                let (way, normal, back) = (turn * DVec3::X, turn * DVec3::Y, turn * DVec3::Z);
+                let [deep, thick] = wing.edge_m[bone].map(|m| m * size);
+                let long = wing.bones_m[bone] * size;
+                let from = at[bone] + back * deep * 0.45 - way * thick;
                 put(
-                    plate(from, way, normal(way), long + 2.0 * thick, deep, thick),
+                    from,
+                    way,
+                    normal,
+                    [long + 2.0 * thick, deep, thick],
                     paint[0],
                 );
             }
@@ -267,35 +290,109 @@ impl Wings {
                     };
                     let along = first + (last - first) * t;
                     let bone = (libm::floor(along) as usize).min(2);
-                    let at = joints[bone].lerp(joints[bone + 1], along - bone as f64);
-                    let way = ways[bone];
-                    let plane = normal(way);
-                    let turn = row.fan[0] + (row.fan[1] - row.fan[0]) * t;
+                    let base = at[bone].lerp(at[bone + 1], along - bone as f64);
+                    let turn = turns[bone];
+                    let (way, plane, back) = (turn * DVec3::X, turn * DVec3::Y, turn * DVec3::Z);
+                    // Fanned, it turns from straight back toward the tip;
+                    // closed, it lies back along the flank whatever its
+                    // bone does, as it trails coming out.
                     let spread =
-                        (turn * (1.0 - 0.45 * flex) + row.fingers * k as f64 * glide) * fan;
-                    let back = back(way, 1.0 - fan);
-                    let toward = (back * libm::cos(spread) + way * libm::sin(spread)).normalize();
-                    let (wide, thick) = (row.wide_m * fan, row.thick_m * fan);
-                    let from = at + plane * (row.over_m * fan + SHINGLE * thick * k as f64);
-                    let long = (row.long_m[0] + (row.long_m[1] - row.long_m[0]) * t) * fan;
+                        turn_of(row, t) * (1.0 - 0.45 * flex) + row.fingers * k as f64 * glide;
+                    let fanned = back * libm::cos(spread) + way * libm::sin(spread);
+                    let toward = tail.lerp(fanned, fan).normalize_or(fanned);
+                    let (wide, thick) = (row.wide_m * size, row.thick_m * size);
+                    let from = base + plane * (row.over_m * size + SHINGLE * thick * k as f64);
+                    let long = (row.long_m[0] + (row.long_m[1] - row.long_m[0]) * t) * size;
                     let color = paint[row.paint.min(2)];
-                    put(plate(from, toward, plane, long, wide, thick), color);
+                    put(from, toward, plane, [long, wide, thick], color);
                     let [cap_long, cap_wide] = CAP;
                     put(
-                        plate(
-                            from + toward * long,
-                            toward,
-                            plane,
-                            wide * cap_long,
-                            wide * cap_wide,
-                            thick,
-                        ),
+                        from + toward * long,
+                        toward,
+                        plane,
+                        [wide * cap_long, wide * cap_wide, thick],
                         color,
                     );
                 }
             }
         }
     }
+
+    /// The right wing's bones now, in the rig, as big as it has grown:
+    /// spread as the beat has it; folded, as at rest; between, each joint
+    /// turned from its folded bend to its spread one, the shoulder lifting
+    /// the folded wing first and the wrist last.
+    fn pose(&self, build: f64) -> Pose {
+        let wing = self.wing;
+        let Out {
+            size, lift, joints, ..
+        } = Out::of(self.grown);
+        let (spread, flex) = self.spread();
+        let (folded, ..) = folded(build);
+        let bends = |turns: [DQuat; 3]| {
+            [
+                turns[0],
+                turns[0].inverse() * turns[1],
+                turns[1].inverse() * turns[2],
+            ]
+        };
+        let (from, to) = (bends(folded), bends(spread));
+        let raised = from[0].slerp(DQuat::from_rotation_z(LIFT) * from[0], lift);
+        let mut turns = [raised.slerp(to[0], joints[0]); 3];
+        for bone in 1..3 {
+            turns[bone] = turns[bone - 1] * from[bone].slerp(to[bone], joints[bone]);
+        }
+        let mut at = [DVec3::new(wing.shoulder.x * build, wing.shoulder.y, wing.shoulder.z); 4];
+        for bone in 0..3 {
+            at[bone + 1] = at[bone] + turns[bone] * DVec3::X * wing.bones_m[bone] * size;
+        }
+        Pose { turns, at, flex }
+    }
+
+    /// Each bone's turn spread, as the beat has it, and how far the hand
+    /// folds back rising, 0 to 1.
+    fn spread(&self) -> ([DQuat; 3], f64) {
+        let flap = libm::sin(TAU * self.beat);
+        let (held, hard) = self.wing.stroke;
+        let stroke = held + (hard - held) * self.effort;
+        // Rising, the hand folds back at the wrist and its feathers close;
+        // gliding, they part at the tips.
+        let flex = self.effort * libm::cos(TAU * self.beat).max(0.0);
+        let lift = DIHEDRAL + stroke * flap;
+        let rises = [
+            lift,
+            lift + 0.15 * stroke * flap,
+            1.1 * lift + 0.25 * stroke * flap - 0.3 * flex,
+        ];
+        let sweeps = [
+            SWEEP[0],
+            SWEEP[1] + ELBOW_FOLD * flex,
+            SWEEP[2] + WRIST_FOLD * flex,
+        ];
+        let turns = core::array::from_fn(|bone| {
+            DQuat::from_rotation_y(-sweeps[bone]) * DQuat::from_rotation_z(rises[bone])
+        });
+        (turns, flex)
+    }
+}
+
+/// Each bone's turn folded at `build`, the right wing's in the rig, and the
+/// way its feathers lie.
+fn folded(build: f64) -> ([DQuat; 3], DVec3) {
+    let (sin, cos) = (libm::sin(FOLD_LEAN), libm::cos(FOLD_LEAN));
+    let (down, out) = (DVec3::new(sin, -cos, 0.0), DVec3::new(cos, sin, 0.0));
+    let turn = |[back, along, off]: [f64; 3]| {
+        let way = (DVec3::Z * back + down * along + out * off * build).normalize();
+        let up = (out - way * way.dot(out)).normalize();
+        DQuat::from_mat3(&DMat3::from_cols(way, up, way.cross(up)))
+    };
+    (FOLDED.map(turn), (DVec3::Z + down * TAIL_DOWN).normalize())
+}
+
+/// How far the `t`th of a row's feathers turns from straight back toward
+/// the tip, fanned, radians.
+fn turn_of(row: &Row, t: f64) -> f64 {
+    row.fan[0] + (row.fan[1] - row.fan[0]) * t
 }
 
 /// A flat box from `from` along `toward` for `length`, `width` across it in
@@ -342,7 +439,6 @@ mod tests {
     fn a_pegasus_spans_half_again_its_length() {
         let wings = Wings {
             grown: 1.0,
-            fanned: 1.0,
             beat: 0.0,
             ..Wings::new(&WING)
         };
@@ -367,11 +463,10 @@ mod tests {
         }
     }
 
-    /// Out, they open in the time the wing says, their feathers fanned
-    /// ahead of the bones, raised, so the first downstroke strikes within
-    /// a beat; a beat hard enough strikes once a beat; held out to glide,
-    /// none strikes. They fold in their own time, the feathers with the
-    /// bones. Folded, none is drawn.
+    /// Out, they unfold in the time the wing says, raised, so the first
+    /// downstroke strikes within a beat of their being out; a beat hard
+    /// enough strikes once a beat; held out to glide, none strikes. They
+    /// fold away in their own time. Folded away, none is drawn.
     #[test]
     fn they_open_beat_and_fold_away() {
         let mut wings = Wings::new(&WING);
@@ -387,11 +482,8 @@ mod tests {
             if struck && first.is_none() {
                 first = Some(frame as f64 * dt);
             }
-            if frame == 0 {
-                assert!(wings.fanned > wings.grown, "{wings:?}");
-            }
             if frame == (WING.open_s / dt).ceil() as usize {
-                assert_eq!((wings.grown, wings.fanned), (1.0, 1.0));
+                assert_eq!(wings.grown, 1.0);
             }
         }
         let first = first.expect("a first downstroke");
@@ -413,7 +505,6 @@ mod tests {
         assert!(gliding <= 2, "{gliding} strikes gliding");
         for frame in 0..(WING.fold_s / dt).ceil() as usize {
             wings.update(dt, false, 0.0);
-            assert_eq!(wings.fanned, wings.grown, "folding, frame {frame}");
             assert!(wings.grown > 0.0 || frame + 1 >= (WING.fold_s / dt) as usize);
         }
         assert_eq!(wings.grown, 0.0);
@@ -446,5 +537,185 @@ mod tests {
             last = held_out;
         }
         assert_eq!(last, 0.0, "beating again");
+    }
+
+    /// Every build a herd of horses has, the narrowest and the broadest of
+    /// each.
+    fn builds() -> impl Iterator<Item = f64> {
+        HORSE
+            .builds
+            .iter()
+            .flat_map(|build| [build.build.0, build.build.1])
+    }
+
+    /// The right wing's boxes at `build`, `grown` out, raised where it
+    /// opens in its beat: its edge, then its feathers.
+    fn right(grown: f64, build: f64) -> Vec<BoxPart> {
+        let wings = Wings {
+            grown,
+            beat: OPEN_BEAT,
+            ..Wings::new(&WING)
+        };
+        let mut boxes = Vec::new();
+        wings.boxes(DAffine3::IDENTITY, build, [Vec3::ONE; 3], &mut boxes);
+        boxes.split_off(boxes.len() / 2)
+    }
+
+    /// A box's eight corners.
+    fn corners(part: &BoxPart) -> impl Iterator<Item = DVec3> + '_ {
+        (0..8).map(|corner| {
+            let at = |bit: u32| f64::from((corner >> bit) & 1) - 0.5;
+            part.transform
+                .transform_point3(DVec3::new(at(0), at(1), at(2)))
+        })
+    }
+
+    /// How deep a box goes into an upright one from `lo` to `hi`: the least
+    /// overlap along the axes that could part them, below zero when apart.
+    fn depth(part: &BoxPart, lo: DVec3, hi: DVec3) -> f64 {
+        let edges = part.transform.matrix3;
+        let edges = [edges.x_axis, edges.y_axis, edges.z_axis];
+        let half = (hi - lo) / 2.0;
+        let apart = (lo + hi) / 2.0 - part.transform.translation;
+        let upright = [DVec3::X, DVec3::Y, DVec3::Z];
+        let crossed = edges
+            .iter()
+            .flat_map(|edge| upright.map(|axis| edge.cross(axis)));
+        upright
+            .into_iter()
+            .chain(edges)
+            .chain(crossed)
+            .filter(|axis| axis.length() > 1e-9)
+            .map(|axis| {
+                let axis = axis.normalize();
+                let its: f64 = edges.iter().map(|edge| (edge.dot(axis) / 2.0).abs()).sum();
+                its + half.dot(axis.abs()) - apart.dot(axis).abs()
+            })
+            .fold(f64::MAX, f64::min)
+    }
+
+    /// The deepest each of the right wing's boxes goes into the horse's
+    /// trunk at `build`, `grown` out.
+    fn into_trunk(grown: f64, build: f64) -> Vec<f64> {
+        right(grown, build)
+            .iter()
+            .map(|part| {
+                HORSE.rig.trunk.iter().fold(f64::MIN, |deepest, section| {
+                    let x = section.width / 2.0 * build;
+                    let lo = DVec3::new(-x, section.bottom, section.from_z);
+                    let hi = DVec3::new(x, section.top, section.to_z);
+                    deepest.max(depth(part, lo, hi))
+                })
+            })
+            .collect()
+    }
+
+    /// Folded, and just out before it lifts, every feather lies close
+    /// along the flank, no further out of the trunk's widest than
+    /// `CLOSE_M`, and behind the shoulder, but for the half of a feather's
+    /// width that a covert rooted at the shoulder reaches ahead of it.
+    #[test]
+    fn folded_it_lies_along_the_flank() {
+        const CLOSE_M: f64 = 0.3;
+        let ahead = WING.rows.iter().map(|row| row.wide_m).fold(0.0, f64::max) / 2.0;
+        for build in builds() {
+            let widest = HORSE
+                .rig
+                .trunk
+                .iter()
+                .map(|section| section.width)
+                .fold(0.0, f64::max)
+                / 2.0
+                * build;
+            for grown in [0.01, 0.05, LIFTS[0]] {
+                for part in &right(grown, build)[3..] {
+                    for corner in corners(part) {
+                        assert!(
+                            corner.x < widest + CLOSE_M,
+                            "build {build}, {grown} out: {corner:.2} is {:.2} m out of the flank",
+                            corner.x - widest
+                        );
+                        assert!(
+                            corner.z > WING.shoulder.z - ahead,
+                            "build {build}, {grown} out: {corner:.2} is ahead of the shoulder"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Open, the wing is the table's spread as the beat has it: each bone
+    /// its length from the joint before and turned as spread, nothing of
+    /// the fold left in it.
+    #[test]
+    fn open_it_is_the_tables_spread() {
+        for beat in [0.0, OPEN_BEAT, 0.5, 0.75] {
+            let wings = Wings {
+                grown: 1.0,
+                beat,
+                effort: 0.7,
+                ..Wings::new(&WING)
+            };
+            let Pose { turns, at, .. } = wings.pose(1.0);
+            let (spread, _) = wings.spread();
+            for bone in 0..3 {
+                let long = at[bone + 1].distance(at[bone]);
+                assert!(
+                    (long - WING.bones_m[bone]).abs() < 1e-9,
+                    "bone {bone}: {long}"
+                );
+                for axis in [DVec3::X, DVec3::Y] {
+                    let (now, spread) = (turns[bone] * axis, spread[bone] * axis);
+                    assert!(
+                        now.distance(spread) < 1e-9,
+                        "bone {bone} at {beat}: {now} against {spread}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Coming out, the wing's tip only ever moves out from the body,
+    /// frame by frame; folding away it plays back, so it only moves in.
+    #[test]
+    fn coming_out_the_tip_moves_out() {
+        let wings = |grown| Wings {
+            grown,
+            beat: OPEN_BEAT,
+            ..Wings::new(&WING)
+        };
+        let frames = (WING.open_s * 60.0).round() as usize;
+        let mut last = f64::MIN;
+        for frame in 1..=frames {
+            let grown = frame as f64 / frames as f64;
+            let tip = wings(grown).pose(1.0).at[3].x;
+            assert!(
+                tip >= last,
+                "{grown:.3} out: the tip at {tip:.3} from {last:.3}"
+            );
+            last = tip;
+        }
+    }
+
+    /// Coming out, no box of a wing passes through the horse's trunk, at
+    /// every build a herd has, deeper than the same box does open: the root
+    /// is where the wing meets the body, and lies into it. A feather may
+    /// touch the trunk by its own thickness more.
+    #[test]
+    fn coming_out_it_passes_through_no_body() {
+        let touch = WING.rows.iter().map(|row| row.thick_m).fold(0.0, f64::max);
+        for build in builds() {
+            let open = into_trunk(1.0, build);
+            for step in 1..100 {
+                let grown = f64::from(step) / 100.0;
+                for (part, (now, open)) in into_trunk(grown, build).iter().zip(&open).enumerate() {
+                    assert!(
+                        *now <= open.max(0.0) + touch,
+                        "build {build}, {grown} out: box {part} {now:.3} m in, open {open:.3}"
+                    );
+                }
+            }
+        }
     }
 }
