@@ -59,6 +59,7 @@ use crate::cells::{
     Ask, LAMP_FAR_M, LAMP_GAIN, LAMP_GROWS_M, LAMP_REACH_M, LAMP_SIDES, paint_look, paint_rgb,
 };
 use crate::collision::{BODY_HALF, Footing, STEP_M};
+use crate::controls::Pad;
 use crate::marker::{Choice as MarkerChoice, Marked, Marker};
 use crate::model3d::{self, ModelRefusal, PICTURE_SIDE};
 use crate::pictures::Placed;
@@ -158,6 +159,13 @@ const CABINET: u64 = 2;
 /// The model of a cabinet dressed in its skin: one for every skin, each
 /// draw naming the picture it shows.
 const DRESSED: ModelId = ModelId(3 << 8);
+/// The cabinet played here is bare of its stations' moving controls, drawn
+/// apart: its body in a paint, one model a paint, its dressed body, and
+/// the stick and the button each station's are drawn of.
+const BARE: u64 = 4;
+const BARE_DRESSED: ModelId = ModelId(5 << 8);
+const STICK: ModelId = ModelId(6 << 8);
+const BUTTON: ModelId = ModelId(7 << 8);
 /// The bit that marks the model of a file, and the one that marks a 3D
 /// model's among them.
 const FILE: u64 = 1 << 63;
@@ -1416,6 +1424,8 @@ impl Parts {
     /// drawn. `body` is where the client's own body is, from the centre of
     /// the body it stands on. `skins`: the picture each skin shows this
     /// frame, by its original's id, as `Pictures::dress` answered.
+    /// `played`: the cabinet played here and what each of its stations
+    /// holds, whose sticks lean and whose buttons sink with it.
     pub fn drawn(
         &self,
         generator: &Generator,
@@ -1423,9 +1433,10 @@ impl Parts {
         reach_per_block_m: f64,
         clock_s: f64,
         skins: &HashMap<ContentId, PictureId>,
+        played: Option<(PartId, [Pad; arcade::PADS])>,
     ) -> Vec<ModelDraw> {
         let mut drawn = Vec::new();
-        for (_, seat, part) in self.all() {
+        for (id, seat, part) in self.all() {
             if away_m(generator, seat, &part.pose, body) > reach_of(reach_per_block_m, &part.pose) {
                 continue;
             }
@@ -1460,13 +1471,27 @@ impl Parts {
                 Shape::Cabinet(cabinet) => cabinet.skin.and_then(|skin| skins.get(&skin.full)),
                 _ => None,
             };
-            let mesh = match skin {
-                Some(_) => Some(DRESSED),
-                None => model_of(part),
+            let pads = played.and_then(|(cabinet, pads)| (cabinet == id).then_some(pads));
+            let mesh = match (skin, pads) {
+                (Some(_), None) => Some(DRESSED),
+                (Some(_), Some(_)) => Some(BARE_DRESSED),
+                (None, None) => model_of(part),
+                (None, Some(_)) => Some(ModelId((BARE << 8) | u64::from(part.paint))),
             };
             let Some(mesh) = mesh else {
                 continue;
             };
+            for (station, pad) in pads.into_iter().flatten().enumerate() {
+                drawn.extend(cabinet::pieces(station, pad).map(|(piece, at)| ModelDraw {
+                    mesh: match piece {
+                        cabinet::Piece::Stick => STICK,
+                        cabinet::Piece::Button => BUTTON,
+                    },
+                    transform: transform * at,
+                    pass: ModelPass::Solid,
+                    picture: None,
+                }));
+            }
             // A landmark, a portal, a 3D model and a cabinet are solid to the
             // eye whatever their paint says.
             let glass = Paint::of(part.paint).finish == Finish::Glass
@@ -1665,14 +1690,32 @@ impl Parts {
                 }
                 // A cabinet stands in its paint until a level of its skin
                 // is held, then is the dressed body every skin shares.
+                // Each body comes with its bare twin, for whichever is
+                // played here.
                 Shape::Cabinet(_) => {
-                    self.meshed.push(id);
-                    let mesh = cabinet::body(cabinet::Dress::Paint(paint_rgb(paint)));
-                    self.changes.push(ModelChange::Textured(id, mesh));
+                    use cabinet::{Dress, Piece, Pieces};
+                    let bare = ModelId((BARE << 8) | u64::from(paint));
+                    let mut bodies = vec![
+                        (
+                            id,
+                            cabinet::body(Dress::Paint(paint_rgb(paint)), Pieces::AtRest),
+                        ),
+                        (
+                            bare,
+                            cabinet::body(Dress::Paint(paint_rgb(paint)), Pieces::Apart),
+                        ),
+                    ];
                     if !self.meshed.contains(&DRESSED) {
-                        self.meshed.push(DRESSED);
-                        let mesh = cabinet::body(cabinet::Dress::Skin);
-                        self.changes.push(ModelChange::Textured(DRESSED, mesh));
+                        bodies.extend([
+                            (DRESSED, cabinet::body(Dress::Skin, Pieces::AtRest)),
+                            (BARE_DRESSED, cabinet::body(Dress::Skin, Pieces::Apart)),
+                            (STICK, cabinet::piece(Piece::Stick)),
+                            (BUTTON, cabinet::piece(Piece::Button)),
+                        ]);
+                    }
+                    for (id, mesh) in bodies {
+                        self.meshed.push(id);
+                        self.changes.push(ModelChange::Textured(id, mesh));
                     }
                 }
                 // A picture is no model: drawn by `pictures`. A sound is

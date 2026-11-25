@@ -1,10 +1,10 @@
 //! A cabinet in front of the body, its game running on the native engine as
 //! the window runs it: how a cabinet's screen is looked at headless, from
-//! afar or played.
+//! afar or played, and its stations with a body at each.
 
 use std::time::Duration;
 
-use client::{Client, Input, PartPose, Seat, Shape};
+use client::{Client, Input, PartId, PartPose, Seat, Shape};
 use glam::DQuat;
 use render::Headless;
 
@@ -27,16 +27,26 @@ pub struct Cabinet {
     pub cart: client::ContentId,
     /// Metres from the body to the cabinet's front.
     pub ahead_m: f64,
-    /// How far the eye is swung round the body, degrees: the cabinet faces it.
+    /// How far the eye is swung round the body, degrees: the cabinet faces
+    /// it, but for one played, which faces the body, as one walks up to a
+    /// machine to play it.
     pub yaw_deg: f64,
     /// Whether the body plays it: the controls lent, the eye on its screen.
     pub played: bool,
+    /// Whether, played, the body leaves it: it stands at its station, and
+    /// the eye is home.
+    pub left: bool,
+    /// Whether a second player stands at player 2's station.
+    pub paired: bool,
+    /// What the player holds down once playing, by the names a command
+    /// gives the controls: a stick leant, a button sunk.
+    pub pressed: Vec<String>,
 }
 
 /// Places the cabinet facing the eye, runs its game until its screen
 /// shows, and plays it when asked; what is drawn lands in `headless`.
 pub fn run(client: &mut Client, headless: &mut Headless, cabinet: &Cabinet) -> Result<(), String> {
-    place(client, cabinet)?;
+    let id = place(client, cabinet)?;
     let mut carts = Carts::default();
     let mut input = Input::default();
     let mut frame = |client: &mut Client, headless: &mut Headless| {
@@ -53,6 +63,9 @@ pub fn run(client: &mut Client, headless: &mut Headless, cabinet: &Cabinet) -> R
     if cabinet.played {
         client.drain_events();
         client.command_json(r#"{"type":"act"}"#);
+        frame(client, headless);
+        let pressed = format!(r#"{{"type":"press","controls":{:?}}}"#, cabinet.pressed);
+        client.command_json(&pressed);
         for _ in 0..EASE {
             frame(client, headless);
         }
@@ -63,13 +76,64 @@ pub fn run(client: &mut Client, headless: &mut Headless, cabinet: &Cabinet) -> R
         if !lent {
             return Err("--play: the cabinet in front lent no controls".into());
         }
+        if cabinet.left {
+            client.command_json(r#"{"type":"leave"}"#);
+            for _ in 0..EASE {
+                frame(client, headless);
+            }
+        }
     }
+    if cabinet.paired {
+        pair(client, id)?;
+        for _ in 0..EASE {
+            frame(client, headless);
+        }
+    }
+    Ok(())
+}
+
+/// A second player at player 2's station, square on to the screen: a peer
+/// joined there, as the world says one to every client near.
+fn pair(client: &mut Client, cabinet: PartId) -> Result<(), String> {
+    let host = client.host("shot");
+    let world = host
+        .part_transform(cabinet)
+        .ok_or("--pair: the cabinet is gone")?;
+    let station = client::cabinet::station(1).ok_or("--pair: the console has one pad")?;
+    let feet = host.feet_at(world.transform_point3(station.feet));
+    let facing = world.transform_vector3(station.facing).normalize();
+    let stance = protocol::Stance {
+        body: protocol::Body::Planet.into(),
+        sector: feet.seat.sector().index() as u32,
+        u: feet.point.u as f32,
+        v: feet.point.v as f32,
+        height_m: feet.height_m as f32,
+        facing_x: facing.x as f32,
+        facing_y: facing.y as f32,
+        facing_z: facing.z as f32,
+        ..protocol::Stance::default()
+    };
+    let joined = protocol::ServerMessage {
+        message: Some(protocol::server_message::Message::Joined(
+            protocol::Joined {
+                peer: Some(protocol::Peer {
+                    session: 2,
+                    stance: Some(stance),
+                    ..protocol::Peer::default()
+                }),
+            },
+        )),
+    };
+    client.receive(&protocol::encode(&joined));
+    // What it wears comes from disk, as the body's own did.
+    client.update(1.0 / 60.0, &mut Input::default());
+    while crate::assets::serve(client) {}
     Ok(())
 }
 
 /// The cabinet stands `ahead_m` before the body, its front turned to the
 /// eye: the body's back, or where `--yaw` swings the eye round it.
-fn place(client: &mut Client, cabinet: &Cabinet) -> Result<(), String> {
+fn place(client: &mut Client, cabinet: &Cabinet) -> Result<PartId, String> {
     let mut host = client.host("shot");
     let body = host.body();
     let centre = body.position + body.facing * (cabinet.ahead_m + DEPTH_M / 2.0);
@@ -99,7 +163,6 @@ fn place(client: &mut Client, cabinet: &Cabinet) -> Result<(), String> {
         volume: 0.0,
     };
     host.place_part(Seat::Sector(at.seat.sector()), part)
-        .map(|_| ())
         .map_err(|refusal| format!("--play: the cabinet was refused: {refusal:?}"))
 }
 

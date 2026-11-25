@@ -2846,6 +2846,7 @@ dependencies = [
  "log",
  "plugins-client",
  "pollster",
+ "protocol",
  "render",
  "scene",
  "softbuffer",

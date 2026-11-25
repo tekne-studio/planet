@@ -13,7 +13,7 @@ const EMULATOR: &str = "../../arcade/emulator";
 
 /// A number of the manifest: its field, the constant it becomes, its type,
 /// and what it is.
-const NUMBERS: [(&str, &str, &str, &str); 12] = [
+const NUMBERS: [(&str, &str, &str, &str); 13] = [
     (
         "contract",
         "CONTRACT",
@@ -25,6 +25,12 @@ const NUMBERS: [(&str, &str, &str, &str); 12] = [
         "ENGINE",
         "u32",
         "The version of the imports the runner asks of a host's engine, module `engine`: a host refuses a runner that asks for another.",
+    ),
+    (
+        "pads",
+        "PADS",
+        "usize",
+        "The pads a game may play, one a player: a cabinet has a station for each.",
     ),
     ("width", "WIDTH", "u32", "A screen's pixels across."),
     ("height", "HEIGHT", "u32", "A screen's pixels down."),

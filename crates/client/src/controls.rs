@@ -3,7 +3,8 @@
 //! is, as in a passage, and takes no movement; what the person presses goes
 //! to the holder as a [`Pad`], each turn, in place of moving the body. The
 //! eye goes with them: the holder gives a [`Look`], and the camera eases to
-//! it, and back once the controls come home.
+//! it from what the person saw, though the holder steps the body somewhere
+//! as it takes them, and back to the body's camera once they come home.
 //!
 //! A key always leaves (`Key::Leave`), and so does the shell letting every
 //! key go, a passage taking the body and the holder switched off: nothing
@@ -151,6 +152,14 @@ pub(crate) struct Controls {
     looking: bool,
     /// How far the eye has eased to the look, 0 to 1.
     eased: f64,
+    /// What the eye eased from in the last frame drawn: the body's camera,
+    /// or [`Controls::from`] while it holds.
+    base: Option<scene::Camera>,
+    /// What the eye eases in from while it does: the camera the person saw
+    /// when the controls were lent, before a holder moved the body. Taken
+    /// back before the eye arrived, it carries how far the eye had eased:
+    /// from there home, it fades into the body's own camera.
+    from: Option<(scene::Camera, f64)>,
     /// What a command holds down, until a command changes it.
     commanded: Pad,
     /// Who the front end was last told holds them.
@@ -176,6 +185,9 @@ impl Controls {
         if self.holder != Some(plugin) {
             self.commanded = Pad::NONE;
         }
+        if look.is_some() && !self.looking {
+            self.from = self.base.map(|base| (base, 1.0));
+        }
         self.holder = Some(plugin);
         self.looking = look.is_some();
         if let Some(look) = look {
@@ -190,6 +202,14 @@ impl Controls {
     /// Takes the controls home: the body moves again at once, and the eye
     /// eases back.
     pub(crate) fn take_back(&mut self) {
+        if self.looking
+            && let Some((_, left)) = &mut self.from
+        {
+            *left = self.eased;
+        }
+        if self.eased == 0.0 {
+            self.from = None;
+        }
         self.holder = None;
         self.looking = false;
         self.commanded = Pad::NONE;
@@ -223,6 +243,10 @@ impl Controls {
         if self.eased == 0.0 && !self.looking {
             self.look = None;
         }
+        // Arrived, or home, the eye eases from the body's camera again.
+        if self.eased == toward {
+            self.from = None;
+        }
     }
 
     /// Whether the eye is more the holder's than the body's: the body's own
@@ -232,8 +256,18 @@ impl Controls {
         self.eased > 0.5
     }
 
-    /// The camera, eased toward the holder's look as far as the eye is.
-    pub(crate) fn eye(&self, camera: scene::Camera) -> scene::Camera {
+    /// The camera, eased toward the holder's look as far as the eye is:
+    /// from `camera`, the body's, or from what the person saw when the
+    /// controls were lent while the eye eases in from it.
+    pub(crate) fn eye(&mut self, camera: scene::Camera) -> scene::Camera {
+        let camera = match self.from {
+            None => camera,
+            Some((from, _)) if self.looking => from,
+            // Home from partway in: the body's own camera by the time the
+            // eye is.
+            Some((from, left)) => between(&camera, &from, smooth(self.eased) / smooth(left)),
+        };
+        self.base = Some(camera);
         let Some(look) = self.look.filter(|_| self.eased > 0.0) else {
             return camera;
         };
@@ -246,13 +280,12 @@ impl Controls {
                 ..camera
             };
         }
-        // Slow out of the start and into the end.
-        let t = self.eased * self.eased * (3.0 - 2.0 * self.eased);
-        scene::Camera {
-            position: camera.position.lerp(look.position, t),
-            rotation: camera.rotation.slerp(look.rotation, t),
+        let to = scene::Camera {
+            position: look.position,
+            rotation: look.rotation,
             ..camera
-        }
+        };
+        between(&camera, &to, smooth(self.eased))
     }
 
     /// The part whose screen the look shows, and how far its picture is
@@ -270,6 +303,21 @@ impl Controls {
             self.told = self.holder;
             self.holder
         })
+    }
+}
+
+/// How far along an ease `eased` of the way is: slow out of the start and
+/// into the end.
+fn smooth(eased: f64) -> f64 {
+    eased * eased * (3.0 - 2.0 * eased)
+}
+
+/// The camera `t` of the way from `from` to `to`, seeing as `from` does.
+fn between(from: &scene::Camera, to: &scene::Camera, t: f64) -> scene::Camera {
+    scene::Camera {
+        position: from.position.lerp(to.position, t),
+        rotation: from.rotation.slerp(to.rotation, t),
+        ..*from
     }
 }
 
@@ -379,6 +427,68 @@ mod tests {
         assert!(controls.eye(camera()).position.z > 0.0, "it eases back");
         controls.ease(EASE_S);
         assert_eq!(controls.eye(camera()).position, DVec3::ZERO);
+    }
+
+    /// The body's camera `x` metres along.
+    fn moved(x: f64) -> scene::Camera {
+        scene::Camera {
+            position: DVec3::X * x,
+            ..camera()
+        }
+    }
+
+    #[test]
+    fn the_eye_eases_in_from_what_was_seen_though_the_body_stepped_away() {
+        let mut controls = Controls::default();
+        let look = Look {
+            position: DVec3::new(0.0, 0.0, 2.0),
+            rotation: DQuat::IDENTITY,
+            shows: None,
+        };
+        // Seen from where the body stood, then lent as the holder steps it
+        // a metre along.
+        assert_eq!(controls.eye(camera()).position, DVec3::ZERO);
+        controls.lend("p", Some(look));
+        assert_eq!(controls.eye(moved(1.0)).position, DVec3::ZERO, "no cut");
+        let mut last = DVec3::ZERO;
+        for _ in 0..30 {
+            controls.ease(EASE_S / 30.0);
+            let now = controls.eye(moved(1.0)).position;
+            assert_eq!(now.x, 0.0, "from where it was seen, never the body's step");
+            assert!(now.z >= last.z);
+            last = now;
+        }
+        assert_eq!(last, look.position);
+        // Home, it eases to where the body now stands.
+        controls.take_back();
+        controls.ease(EASE_S);
+        assert_eq!(controls.eye(moved(1.0)).position, DVec3::X);
+    }
+
+    #[test]
+    fn taken_back_partway_in_the_eye_turns_round_where_it_is_and_ends_with_the_body() {
+        let mut controls = Controls::default();
+        let look = Look {
+            position: DVec3::new(0.0, 0.0, 2.0),
+            rotation: DQuat::IDENTITY,
+            shows: None,
+        };
+        controls.eye(camera());
+        controls.lend("p", Some(look));
+        controls.ease(EASE_S / 2.0);
+        let there = controls.eye(moved(1.0)).position;
+        controls.take_back();
+        assert_eq!(controls.eye(moved(1.0)).position, there, "no cut");
+        let mut last = there;
+        for _ in 0..15 {
+            controls.ease(EASE_S / 30.0);
+            let now = controls.eye(moved(1.0)).position;
+            assert!((now - last).length() < 0.25, "{last} to {now}");
+            last = now;
+        }
+        assert!((last - DVec3::X).length() < 1e-9, "{last}");
+        controls.ease(EASE_S);
+        assert_eq!(controls.eye(moved(1.0)).position, DVec3::X);
     }
 
     #[test]

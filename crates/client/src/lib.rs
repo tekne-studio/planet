@@ -2359,11 +2359,14 @@ impl Client {
             self.events.push(Event::Settled);
         }
         self.settled = settled;
+        // What the game played here was told, before the games' frame
+        // closes: its controls are drawn as it holds them.
+        let played = self.carts.pads_played();
         // A game waits as long on a slow screen as on a fast one, and the
         // time a hidden page drew nothing counts at its first frame back.
         let pictures = self.pictures_drawn(&camera, elapsed_s);
         self.waiting(&camera);
-        self.frame(camera, patches, pictures, through.zip(seen))
+        self.frame(camera, patches, pictures, through.zip(seen), played)
     }
 
     /// Says where the body is born once the first chart in a world answers,
@@ -2570,8 +2573,9 @@ impl Client {
         let through = self.through(&camera);
         self.ease_seen(f64::INFINITY, through.as_ref().map(|seen| seen.portal));
         let (patches, seen) = self.stream(&camera, through.as_ref(), None);
+        let played = self.carts.pads_played();
         let pictures = self.pictures_drawn(&camera, 0.0);
-        self.frame(camera, patches, pictures, through.zip(seen))
+        self.frame(camera, patches, pictures, through.zip(seen), played)
     }
 
     /// Eases how much each portal's pane shows the world seen through it:
@@ -3112,12 +3116,15 @@ impl Client {
         drawn
     }
 
+    /// The frame drawn: `played`, the cabinet played here and what each of
+    /// its stations holds ([`carts::Carts::pads_played`]).
     fn frame(
         &self,
         camera: scene::Camera,
         patches: Vec<scene::PatchDraw>,
         pictures: Vec<scene::PictureDraw>,
         through: Option<(Seen, Vec<scene::PatchDraw>)>,
+        played: Option<(PartId, [Pad; arcade::PADS])>,
     ) -> Frame {
         let overlay = self.overlay(&camera, &pictures);
         let angle = self.noon_offset + self.clock_s / DAY_S * core::f64::consts::TAU;
@@ -3242,6 +3249,7 @@ impl Client {
                 f64::from(self.effects.model_reach_m),
                 self.clock_s,
                 &self.skins,
+                played,
             ),
             ghost: self.cells.ghost(),
             guides: self.cells.guides_drawn(),

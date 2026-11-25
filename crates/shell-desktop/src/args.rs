@@ -75,6 +75,9 @@ pub struct Shot {
     pub view: crate::animals::View,
     /// A cabinet placed before the body, its game running, played or not.
     pub cabinet: Option<crate::play::Cabinet>,
+    /// The part of the view the shell leaves clear of what it lays over it,
+    /// pixels from its top left: what a page with keys over a phone says.
+    pub clear: Option<[f64; 4]>,
 }
 
 /// One thing a hand does before a shot is taken.
@@ -130,8 +133,10 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
         herd: None,
         view: crate::animals::View::default(),
         cabinet: None,
+        clear: None,
     };
-    let mut played = false;
+    let (mut played, mut left, mut paired) = (false, false, false);
+    let mut pressed = Vec::new();
     let mut ahead_m = 1.0;
 
     while let Some(flag) = args.next() {
@@ -208,10 +213,26 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
                     ahead_m: 0.0,
                     yaw_deg: 0.0,
                     played: false,
+                    left: false,
+                    paired: false,
+                    pressed: Vec::new(),
                 });
             }
             "--ahead" if is_shot => ahead_m = number(&value()?, "--ahead")?,
             "--play" if is_shot => played = true,
+            "--leave" if is_shot => left = true,
+            "--pair" if is_shot => paired = true,
+            "--press" if is_shot => pressed = value()?.split(',').map(str::to_owned).collect(),
+            "--clear" if is_shot => {
+                let parts: Vec<f64> = value()?
+                    .split(',')
+                    .map(|part| number(part, "--clear"))
+                    .collect::<Result<_, _>>()?;
+                let part: [f64; 4] = parts
+                    .try_into()
+                    .map_err(|_| "--clear wants LEFT,TOP,RIGHT,BOTTOM".to_owned())?;
+                shot.clear = Some(part);
+            }
             "--look" if is_shot => shot.view.seed = number(&value()?, "--look")?,
             other => return Err(format!("unknown argument {other}")),
         }
@@ -225,13 +246,19 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
             at: shot.at,
         });
     }
+    if !played && (left || !pressed.is_empty()) {
+        return Err("--leave and --press need --play".into());
+    }
     match &mut shot.cabinet {
         Some(cabinet) => {
             cabinet.ahead_m = ahead_m;
-            cabinet.yaw_deg = shot.view.yaw_deg;
+            cabinet.yaw_deg = if played { 0.0 } else { shot.view.yaw_deg };
             cabinet.played = played;
+            cabinet.left = left;
+            cabinet.paired = paired;
+            cabinet.pressed = pressed;
         }
-        None if played => return Err("--play needs --cabinet".into()),
+        None if played || paired => return Err("--play and --pair need --cabinet".into()),
         None => {}
     }
     if shot.out.as_os_str().is_empty() {

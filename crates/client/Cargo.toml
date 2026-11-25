@@ -23,14 +23,14 @@ seat.workspace = true
 gaia.workspace = true
 synth.workspace = true
 glam.workspace = true
+# The console a cabinet is drawn for: its screen's shape and its stations,
+# one a pad, are the numbers its manifest gives.
+arcade.workspace = true
 serde.workspace = true
 # Exact floats: what a page keeps comes back to the bit (a pet's traits).
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 
 [dev-dependencies]
-# The emulator a cabinet's screen is shaped to and its controls play, held
-# by tests: the client draws a game without knowing the contract it runs by.
-arcade.workspace = true
 topology.workspace = true
 worldgen.workspace = true
 protocol.workspace = true

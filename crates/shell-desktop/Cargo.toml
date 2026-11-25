@@ -19,6 +19,8 @@ client.workspace = true
 gaia.workspace = true
 glam.workspace = true
 plugins-client.workspace = true
+# A shot's second player at a cabinet comes as the world says one joined.
+protocol.workspace = true
 render.workspace = true
 scene.workspace = true
 ui-native.workspace = true

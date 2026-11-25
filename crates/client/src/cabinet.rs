@@ -20,9 +20,24 @@
 //!
 //! The game runs on a quad over the glass, in the middle of the screen face
 //! ([`screen`], `crate::carts`).
+//!
+//! The deck under the screen is the control panel: a station for each pad
+//! the console has, side by side, player 1's on the left as one faces the
+//! screen. Each is a dark plate with a stick, A, B and start on it, a few
+//! boxes in the trim's dark and the marquee's white, never dressed by a
+//! skin. On the cabinet played here they are drawn apart ([`pieces`]), so a
+//! stick leans and a button sinks with what is pressed; on every other the
+//! body carries them at rest, and costs no draw more. A body stands to play
+//! at a station's spot before the machine ([`station`]).
 
-use glam::{DAffine3, DMat3, DVec3};
+use core::f64::consts::SQRT_2;
+
+use glam::{DAffine3, DMat3, DQuat, DVec3};
 use scene::{Image, RunImage, TexturedMesh, TexturedRun, TexturedVertex};
+use topology::BLOCK_M;
+
+use crate::collision::BODY_HALF;
+use crate::controls::Pad;
 
 /// A cabinet's size as a hand places it, metres: across, deep and tall.
 pub const SIZE_M: [f64; 3] = [0.8, 0.7, 1.8];
@@ -64,6 +79,7 @@ const FRONT_POINTS: usize = 8;
 /// The faces of the front by their first point.
 const MARQUEE: usize = 0;
 const SCREEN_FACE: usize = 2;
+const DECK: usize = 3;
 
 /// How far the front stands back of the side panels, and how thick a side
 /// panel is, metres.
@@ -75,10 +91,8 @@ const SIDE_M: f32 = 0.025;
 const SCREEN_FILL: f64 = 0.8;
 const GLASS_OVER_M: f64 = 0.002;
 const PICTURE_OVER_M: f64 = 0.004;
-/// The game's width over its height, the emulator's `arcade::WIDTH` by
-/// `HEIGHT`, which a test holds it to: the client draws a game's screen without knowing
-/// the contract it runs by.
-const SCREEN_ASPECT: f64 = 4.0 / 3.0;
+/// The game's width over its height, the console's.
+const SCREEN_ASPECT: f64 = arcade::WIDTH as f64 / arcade::HEIGHT as f64;
 
 /// How much the marquee shines with its own colour: a lamp, brighter than
 /// any sunlit white, so it is seen lit by day and glows by night.
@@ -165,6 +179,34 @@ const TRIM_RGB: [u8; 3] = [38, 38, 44];
 const BEZEL_RGB: [u8; 3] = [20, 20, 24];
 const GLASS_RGB: [u8; 3] = [8, 10, 12];
 const MARQUEE_RGB: [u8; 3] = [240, 236, 224];
+
+/// A station's controls on the deck, metres. Its plate leaves a margin
+/// round it, across and along the deck, and stands this thick over it.
+const PLATE_MARGIN_M: [f64; 2] = [0.03, 0.012];
+const PLATE_M: f64 = 0.004;
+/// Where the stick and the buttons stand across a station, from its
+/// middle, and along the deck, of its length: in a row, the stick on the
+/// left, then A, B and start.
+const STICK_ACROSS_M: f64 = -0.085;
+const BUTTONS_ACROSS_M: [f64; 3] = [0.0, 0.045, 0.11];
+const CONTROLS_ALONG: f64 = 0.5;
+/// The stick: a shaft this thick and tall, a ball this wide round its top.
+const SHAFT_M: [f64; 2] = [0.012, 0.04];
+const BALL_M: f64 = 0.03;
+/// The buttons, across, along and tall: A and B, and start, smaller.
+const BUTTON_M: [f64; 3] = [0.026, 0.026, 0.012];
+const START_M: [f64; 3] = [0.02, 0.014, 0.008];
+/// How far a held stick leans, radians, and how much of its height a
+/// pressed button sinks.
+const LEAN: f64 = 0.35;
+const SINKS: f64 = 2.0 / 3.0;
+
+/// The stations' spots: a body's width apart across the machine's middle,
+/// so two bodies side by side never stand in each other, and far enough
+/// before its front that a body's square there clears the cabinet at any
+/// turn of it on the grid, its half diagonal and a little.
+const APART_M: f64 = 2.0 * BODY_HALF * BLOCK_M;
+const STANDS_OFF_M: f64 = BODY_HALF * BLOCK_M * SQRT_2 + 0.02;
 
 /// The profile in the unit box, `[y, z]`: the front at `y = -0.5`, the
 /// floor at `z = 0`. `front` sets the front back between the panels.
@@ -262,6 +304,41 @@ impl Builder {
         }
     }
 
+    /// A box from `low` to `high`, placed by `frame`, each face counter
+    /// clockwise seen from outside; its `ends`, as many as are seen.
+    fn cuboid(&mut self, frame: &DAffine3, [low, high]: [DVec3; 2], ends: Ends, rgb: [u8; 3]) {
+        // Each face by the way it looks out and two ways across it, the
+        // first crossed with the second looking out.
+        const FACES: [[DVec3; 3]; 6] = [
+            [DVec3::Z, DVec3::X, DVec3::Y],
+            [DVec3::NEG_Z, DVec3::Y, DVec3::X],
+            [DVec3::X, DVec3::Y, DVec3::Z],
+            [DVec3::NEG_X, DVec3::Z, DVec3::Y],
+            [DVec3::Y, DVec3::Z, DVec3::X],
+            [DVec3::NEG_Y, DVec3::X, DVec3::Z],
+        ];
+        let (middle, half) = ((low + high) / 2.0, (high - low) / 2.0);
+        for [out, u, v] in FACES {
+            let shown = match out {
+                DVec3::Z => ends != Ends::None,
+                DVec3::NEG_Z => ends == Ends::Both,
+                _ => true,
+            };
+            if !shown {
+                continue;
+            }
+            let (centre, u, v) = (middle + out * half, u * half, v * half);
+            let corners = [
+                centre - u - v,
+                centre + u - v,
+                centre + u + v,
+                centre - u + v,
+            ]
+            .map(|corner| frame.transform_point3(corner).as_vec3().to_array());
+            self.quad(corners, [[0.0; 2]; 4], rgb);
+        }
+    }
+
     /// Closes the run of every index since the last, drawn with `image`.
     fn run(&mut self, image: RunImage, shine: f32) {
         let start = self.runs.last().map_or(0, |run| run.indices.end);
@@ -272,6 +349,15 @@ impl Builder {
             shine,
         });
     }
+}
+
+/// The ends of a box that are seen: its top and bottom, its top alone, where
+/// it stands on something, or neither, where both are covered.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ends {
+    Both,
+    Top,
+    None,
 }
 
 fn normal_of(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
@@ -304,9 +390,18 @@ pub(crate) enum Dress {
     Skin,
 }
 
+/// Whether a body carries the moving controls of its stations at rest, or
+/// is bare of them, for the cabinet played here, whose controls are drawn
+/// apart and moved by what is pressed ([`pieces`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Pieces {
+    AtRest,
+    Apart,
+}
+
 /// A cabinet's body, in three runs: the body, then the marquee, then the
-/// screen's glass, which no skin dresses.
-pub(crate) fn body(dress: Dress) -> TexturedMesh {
+/// screen's glass and the stations' controls, which no skin dresses.
+pub(crate) fn body(dress: Dress, pieces: Pieces) -> TexturedMesh {
     let (dressed, paint_rgb) = match dress {
         Dress::Paint(rgb) => (false, rgb),
         Dress::Skin => (true, [u8::MAX; 3]),
@@ -449,6 +544,26 @@ pub(crate) fn body(dress: Dress) -> TexturedMesh {
     ]
     .map(|corner| corner.to_array());
     mesh.quad(corners, [[0.0; 2]; 4], GLASS_RGB);
+    let (deck, deck_m) = deck();
+    let plate = [
+        station_wide_m() - 2.0 * PLATE_MARGIN_M[0],
+        deck_m - 2.0 * PLATE_MARGIN_M[1],
+    ];
+    for station in 0..arcade::PADS {
+        let on_deck = DVec3::new(station_middle_m(station), deck_m / 2.0, 0.0);
+        let half = DVec3::new(plate[0] / 2.0, plate[1] / 2.0, 0.0);
+        mesh.cuboid(
+            &(box_from_metres() * deck * DAffine3::from_translation(on_deck)),
+            [-half, half + DVec3::Z * PLATE_M],
+            Ends::Top,
+            TRIM_RGB,
+        );
+        if pieces == Pieces::AtRest {
+            for (piece, at) in self::pieces(station, Pad::NONE) {
+                piece_into(&mut mesh, piece, &at);
+            }
+        }
+    }
     mesh.run(RunImage::Plain, 0.0);
 
     TexturedMesh {
@@ -457,6 +572,163 @@ pub(crate) fn body(dress: Dress) -> TexturedMesh {
         runs: mesh.runs,
         images: Vec::new(),
     }
+}
+
+/// A moving control of a station: its stick, or one of its buttons.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Piece {
+    Stick,
+    Button,
+}
+
+/// A piece's mesh, in its own metres, standing on its foot at the origin,
+/// `+z` out of the deck: what the cabinet played here draws apart.
+pub(crate) fn piece(piece: Piece) -> TexturedMesh {
+    let mut mesh = Builder::default();
+    piece_into(&mut mesh, piece, &DAffine3::IDENTITY);
+    mesh.run(RunImage::Plain, 0.0);
+    TexturedMesh {
+        vertices: mesh.vertices,
+        indices: mesh.indices,
+        runs: mesh.runs,
+        images: Vec::new(),
+    }
+}
+
+/// A piece placed by `frame`, added to `mesh`: the stick a dark shaft under
+/// a white ball, a button the white unit box, sized where it stands.
+fn piece_into(mesh: &mut Builder, piece: Piece, frame: &DAffine3) {
+    match piece {
+        Piece::Stick => {
+            let ([thick, tall], ball) = (SHAFT_M, BALL_M / 2.0);
+            let shaft = DVec3::new(thick / 2.0, thick / 2.0, 0.0);
+            mesh.cuboid(
+                frame,
+                [-shaft, shaft + DVec3::Z * tall],
+                Ends::None,
+                BEZEL_RGB,
+            );
+            let top = DVec3::Z * tall;
+            mesh.cuboid(
+                frame,
+                [top - DVec3::splat(ball), top + DVec3::splat(ball)],
+                Ends::Both,
+                MARQUEE_RGB,
+            );
+        }
+        Piece::Button => mesh.cuboid(
+            frame,
+            [DVec3::new(-0.5, -0.5, 0.0), DVec3::new(0.5, 0.5, 1.0)],
+            Ends::Top,
+            MARQUEE_RGB,
+        ),
+    }
+}
+
+/// Where each moving control of the station `station` stands in the
+/// cabinet's box with `pad` held: the stick leaned the way it is pushed,
+/// forward toward the screen, and each button held sunk. A piece's own
+/// metres ([`piece`]) to the box.
+pub(crate) fn pieces(station: usize, pad: Pad) -> [(Piece, DAffine3); 4] {
+    let (deck, deck_m) = deck();
+    let on = |across_m: f64| {
+        let foot = DVec3::new(
+            station_middle_m(station) + across_m,
+            deck_m * CONTROLS_ALONG,
+            PLATE_M,
+        );
+        box_from_metres() * deck * DAffine3::from_translation(foot)
+    };
+    let pushed =
+        |less: Pad, more: Pad| f64::from(i8::from(pad.has(more)) - i8::from(pad.has(less)));
+    let way = DVec3::new(
+        pushed(Pad::LEFT, Pad::RIGHT),
+        pushed(Pad::DOWN, Pad::UP),
+        0.0,
+    );
+    let lean = way.try_normalize().map_or(DQuat::IDENTITY, |way| {
+        DQuat::from_axis_angle(DVec3::Z.cross(way), LEAN)
+    });
+    let button = |across_m: f64, size: [f64; 3], control: Pad| {
+        let sunk_m = if pad.has(control) {
+            size[2] * SINKS
+        } else {
+            0.0
+        };
+        on(across_m)
+            * DAffine3::from_translation(DVec3::NEG_Z * sunk_m)
+            * DAffine3::from_scale(DVec3::from(size))
+    };
+    let [a, b, start] = BUTTONS_ACROSS_M;
+    [
+        (Piece::Stick, on(STICK_ACROSS_M) * DAffine3::from_quat(lean)),
+        (Piece::Button, button(a, BUTTON_M, Pad::JUMP)),
+        (Piece::Button, button(b, BUTTON_M, Pad::SPRINT)),
+        (Piece::Button, button(start, START_M, Pad::START)),
+    ]
+}
+
+/// Where a body stands to play at a station: its feet on the floor before
+/// the machine, and the way it faces, to the screen, both in the cabinet's
+/// box, which the part's pose places in the world.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Station {
+    pub feet: DVec3,
+    pub facing: DVec3,
+}
+
+/// The station `index`, one for each pad the console has
+/// ([`arcade::PADS`]), the first player 1's: their spots side by side
+/// before the machine, a body's width apart, player 1 on the left as one
+/// faces the screen. `None` past the last.
+pub fn station(index: usize) -> Option<Station> {
+    (index < arcade::PADS).then(|| {
+        let across_m = (index as f64 - (arcade::PADS - 1) as f64 / 2.0) * APART_M;
+        Station {
+            feet: box_from_metres().transform_point3(DVec3::new(across_m, -STANDS_OFF_M, 0.0)),
+            facing: DVec3::Y,
+        }
+    })
+}
+
+/// A station's share of the deck across, metres: the front between the
+/// panels, cut evenly.
+fn station_wide_m() -> f64 {
+    f64::from(inner_half()) * SIZE_M[0] * 2.0 / arcade::PADS as f64
+}
+
+/// The middle of a station across the machine, metres from its middle.
+fn station_middle_m(station: usize) -> f64 {
+    let wide_m = station_wide_m();
+    (station as f64 + 0.5) * wide_m - wide_m * arcade::PADS as f64 / 2.0
+}
+
+/// The cabinet's box from its metres: across from its middle, back from
+/// its front, up from its floor, at the size a hand places it.
+fn box_from_metres() -> DAffine3 {
+    DAffine3::from_mat3_translation(
+        DMat3::from_diagonal(DVec3::from(SIZE_M).recip()),
+        DVec3::new(0.0, -0.5, 0.0),
+    )
+}
+
+/// A point of the profile on the front set back between the panels,
+/// metres in the cabinet's frame.
+fn front_m([d, h]: [f32; 2]) -> DVec3 {
+    DVec3::new(0.0, f64::from(d) + f64::from(SET_BACK_M), f64::from(h))
+}
+
+/// The deck, metres: its frame, from the middle of its front edge, across,
+/// back up its slope toward the screen and out of it, and how long it is
+/// along that slope.
+fn deck() -> (DAffine3, f64) {
+    let (front, back) = (front_m(PROFILE[DECK + 1]), front_m(PROFILE[DECK]));
+    let along = (back - front).normalize();
+    let frame = DMat3::from_cols(DVec3::X, along, DVec3::X.cross(along));
+    (
+        DAffine3::from_mat3_translation(frame, front),
+        (back - front).length(),
+    )
 }
 
 /// Where the game's picture stands in a cabinet's box: the unit quad,
@@ -468,29 +740,21 @@ pub fn screen() -> DAffine3 {
 
 /// The game's rectangle on the screen face, `over_m` out of it.
 fn screen_at(over_m: f64) -> DAffine3 {
-    let size = DVec3::from(SIZE_M);
-    // Metres from the box's front and floor, and back into the box.
-    let metres =
-        |[d, h]: [f32; 2]| DVec3::new(0.0, f64::from(d) + f64::from(SET_BACK_M), f64::from(h));
-    let boxed = |m: DVec3| DVec3::new(m.x / size.x, m.y / size.y - 0.5, m.z / size.z);
     let (top, foot) = (
-        metres(PROFILE[SCREEN_FACE]),
-        metres(PROFILE[SCREEN_FACE + 1]),
+        front_m(PROFILE[SCREEN_FACE]),
+        front_m(PROFILE[SCREEN_FACE + 1]),
     );
     let up = (top - foot).normalize();
     // Out of the face: toward the front, and up as the face leans back.
-    let out = DVec3::new(0.0, -up.z, up.y);
+    let out = DVec3::X.cross(up);
     let tall_m = (top - foot).length() * SCREEN_FILL;
     let wide_m = tall_m * SCREEN_ASPECT;
     let centre = (top + foot) / 2.0 + out * over_m;
-    DAffine3 {
-        matrix3: DMat3::from_cols(
-            DVec3::new(wide_m / size.x, 0.0, 0.0),
-            DVec3::new(0.0, up.y * tall_m / size.y, up.z * tall_m / size.z),
-            DVec3::new(0.0, out.y / size.y, out.z / size.z) * 0.01,
-        ),
-        translation: boxed(centre),
-    }
+    box_from_metres()
+        * DAffine3::from_mat3_translation(
+            DMat3::from_cols(DVec3::X * wide_m, up * tall_m, out * 0.01),
+            centre,
+        )
 }
 
 /// The layout a skin is painted on, drawn for a person to paint over, and
@@ -681,7 +945,7 @@ mod tests {
 
     #[test]
     fn the_body_fills_its_box_and_every_face_looks_out() {
-        let mesh = body(Dress::Paint([200, 40, 40]));
+        let mesh = body(Dress::Paint([200, 40, 40]), Pieces::AtRest);
         let (mut low, mut high) = ([f32::MAX; 3], [f32::MIN; 3]);
         for vertex in &mesh.vertices {
             for i in 0..3 {
@@ -721,14 +985,15 @@ mod tests {
     }
 
     #[test]
-    fn a_dressed_body_shows_its_skin_and_its_glass_stays_dark() {
-        let mesh = body(Dress::Skin);
+    fn a_dressed_body_shows_its_skin_and_its_glass_and_controls_stay_their_own() {
+        let mesh = body(Dress::Skin, Pieces::AtRest);
         let runs: Vec<_> = mesh.runs.iter().map(|run| run.image).collect();
         assert_eq!(runs, [RunImage::Drawn, RunImage::Drawn, RunImage::Plain]);
         assert!(mesh.images.is_empty());
-        let glass = &mesh.runs[2];
-        for &index in &mesh.indices[glass.indices.start as usize..glass.indices.end as usize] {
-            assert_eq!(mesh.vertices[index as usize].color, [8, 10, 12, 255]);
+        let plain = &mesh.runs[2];
+        let own = [GLASS_RGB, TRIM_RGB, BEZEL_RGB, MARQUEE_RGB].map(|[r, g, b]| [r, g, b, 255]);
+        for &index in &mesh.indices[plain.indices.start as usize..plain.indices.end as usize] {
+            assert!(own.contains(&mesh.vertices[index as usize].color));
         }
         for vertex in &mesh.vertices {
             assert!(vertex.uv.iter().all(|t| (0.0..=1.0).contains(t)));
@@ -737,8 +1002,6 @@ mod tests {
 
     #[test]
     fn the_screen_lies_on_its_face_facing_out_and_shaped_as_a_game() {
-        let game = f64::from(arcade::WIDTH) / f64::from(arcade::HEIGHT);
-        assert!((SCREEN_ASPECT - game).abs() < 1e-12);
         let quad = screen();
         let size = DVec3::from(SIZE_M);
         let metres = |v: DVec3| v * size;
@@ -783,7 +1046,7 @@ mod tests {
     #[test]
     fn every_face_of_the_body_lands_on_its_place_in_the_template() {
         let template = template().image;
-        let mesh = body(Dress::Skin);
+        let mesh = body(Dress::Skin, Pieces::AtRest);
         let tints: Vec<[u8; 3]> = REGIONS
             .iter()
             .map(|region| region.tint)
@@ -841,5 +1104,107 @@ mod tests {
                 label.name
             );
         }
+    }
+
+    /// The triangles of a mesh.
+    fn triangles(mesh: &TexturedMesh) -> usize {
+        mesh.indices.len() / 3
+    }
+
+    #[test]
+    fn each_station_s_controls_cost_sixty_triangles_and_the_bare_body_drops_its_pieces() {
+        let at_rest = body(Dress::Paint([200, 40, 40]), Pieces::AtRest);
+        let bare = body(Dress::Paint([200, 40, 40]), Pieces::Apart);
+        let (stick, button) = (piece(Piece::Stick), piece(Piece::Button));
+        // A plate is a box seen but from under: ten. A stick, a shaft's four
+        // sides and a ball, twenty; a button, ten.
+        assert_eq!((triangles(&stick), triangles(&button)), (20, 10));
+        let pieces = triangles(&stick) + 3 * triangles(&button);
+        assert_eq!(
+            triangles(&at_rest) - triangles(&bare),
+            arcade::PADS * pieces
+        );
+        let glass = 2;
+        let controls = triangles(&at_rest) - TRIANGLES.len() * 2 - glass;
+        assert!(controls >= arcade::PADS * 60, "{controls}");
+    }
+
+    /// Where a point of a piece lands in metres on the deck: across from
+    /// the machine's middle, along the deck from its front edge, and out of
+    /// it.
+    fn on_deck(at: DAffine3, point: DVec3) -> DVec3 {
+        let (deck, _) = deck();
+        (box_from_metres() * deck)
+            .inverse()
+            .transform_point3(at.transform_point3(point))
+    }
+
+    #[test]
+    fn the_stations_stand_side_by_side_player_one_s_on_the_left() {
+        let middles: Vec<f64> = (0..arcade::PADS)
+            .map(|station| on_deck(pieces(station, Pad::NONE)[0].1, DVec3::ZERO).x)
+            .collect();
+        assert!(
+            middles.windows(2).all(|pair| pair[0] < pair[1]),
+            "{middles:?}"
+        );
+        // Facing the screen, along +y in the box, the left is -x.
+        assert!(middles[0] < 0.0);
+        let half_m = f64::from(inner_half()) * SIZE_M[0];
+        let (_, deck_m) = deck();
+        for station in 0..arcade::PADS {
+            for (_, at) in pieces(station, Pad::NONE) {
+                let foot = on_deck(at, DVec3::ZERO);
+                assert!(foot.x.abs() < half_m && (0.0..deck_m).contains(&foot.y));
+                assert!((foot.z - PLATE_M).abs() < 1e-9, "on its plate");
+            }
+        }
+    }
+
+    #[test]
+    fn a_held_stick_leans_the_way_it_is_pushed_and_a_pressed_button_sinks() {
+        let top = DVec3::Z * SHAFT_M[1];
+        let rest = on_deck(pieces(0, Pad::NONE)[0].1, top);
+        let lean = |pad: Pad| on_deck(pieces(0, pad)[0].1, top) - rest;
+        assert!(lean(Pad::LEFT).x < -0.01 && lean(Pad::RIGHT).x > 0.01);
+        // Forward is toward the screen, up the deck.
+        assert!(lean(Pad::UP).y > 0.01 && lean(Pad::DOWN).y < -0.01);
+        let both = lean(Pad::UP | Pad::RIGHT);
+        assert!(both.x > 0.0 && both.y > 0.0 && (both.x - both.y).abs() < 1e-9);
+        // A and B and start: each sinks alone, two thirds of its height.
+        for (i, control) in [Pad::JUMP, Pad::SPRINT, Pad::START].into_iter().enumerate() {
+            let height = |pad: Pad| on_deck(pieces(0, pad)[i + 1].1, DVec3::Z).z;
+            let tall = height(Pad::NONE) - PLATE_M;
+            assert!((height(control) - height(Pad::NONE) + tall * SINKS).abs() < 1e-9);
+            assert_eq!(height(Pad::LEFT), height(Pad::NONE));
+        }
+    }
+
+    #[test]
+    fn each_station_stands_a_body_square_on_before_the_machine_clear_of_it() {
+        assert_eq!(station(arcade::PADS), None);
+        let metres = |at: DVec3| box_from_metres().inverse().transform_point3(at);
+        let spots: Vec<DVec3> = (0..arcade::PADS)
+            .map(|index| metres(station(index).unwrap().feet))
+            .collect();
+        let body_m = BODY_HALF * BLOCK_M;
+        for (index, spot) in spots.iter().enumerate() {
+            let Station { facing, .. } = station(index).unwrap();
+            assert_eq!(facing, DVec3::Y, "to the screen");
+            // Before the front, by more than a body's half diagonal: its
+            // square clears the machine however it is turned.
+            assert!(-spot.y > body_m * SQRT_2, "{spot}");
+            assert_eq!(spot.z, 0.0);
+            // Its own controls within the body's width, in reach of its
+            // hands.
+            let (deck, _) = deck();
+            let middle_m = deck.transform_point3(DVec3::new(station_middle_m(index), 0.0, 0.0));
+            assert!((spot.x - middle_m.x).abs() < body_m, "{spot} {middle_m}");
+        }
+        // Side by side, a body's width apart: never one inside the other.
+        for pair in spots.windows(2) {
+            assert!((pair[1].x - pair[0].x - 2.0 * body_m).abs() < 1e-9);
+        }
+        assert!(spots[0].x < 0.0, "player 1 on the left");
     }
 }

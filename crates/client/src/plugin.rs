@@ -540,6 +540,22 @@ impl Host<'_> {
         )
     }
 
+    /// Steps the body on foot to `at`, world space, and turns it and its
+    /// view to `facing`: how a body takes its place at a thing, a cabinet's
+    /// station. Placed at once where a walk from where it stands reaches,
+    /// the same for a person and an agent; false, and the body as it was,
+    /// when it rides, flies or goes in a way, or something stops the walk.
+    pub fn step_to(&mut self, at: DVec3, facing: DVec3) -> bool {
+        let built = Built {
+            cells: self.lent.cells,
+            parts: self.lent.parts,
+            trunks: self.lent.trunks,
+        };
+        self.lent
+            .controller
+            .step_to(at, facing, self.lent.generator, built)
+    }
+
     /// The animals drawn near this client's body this frame, in no order:
     /// what a plugin offers to ride, and an agent reads.
     pub fn animals(&self) -> &[Near] {

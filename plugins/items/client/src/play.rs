@@ -1,17 +1,22 @@
 //! Playing a cabinet. In front of a cabinet with a game, its cover on its
 //! glass, the prompt offers "Cabinet [E] Play"; a tap runs the game, lends
 //! the body's controls to it and the eye with them, eased to face its
-//! screen. While it is played, what the controls press is the game's
+//! screen as from the player's head, and steps the body to player 1's
+//! station, square on to the machine ([`step_to_station`]). While it is
+//! played, what the controls press is the game's
 //! buttons, held each turn, and the body's own offer is "Cabinet [E]
 //! Leave". The controls come back by that offer, by the key that always
 //! leaves, and whenever the game stops or the cabinet goes: nothing holds a
 //! person in a cabinet. Left, the game waits for them where it stopped, and
 //! the cabinet offers "Cabinet [E] Resume" while it does
 //! ([`client::GAME_WAITS_S`]); past that it stops, and its cover shows
-//! again.
+//! again. Left, the body stands where it played, free, and the eye eases
+//! back to the camera the person keeps.
 //!
 //! Each client runs its own copy of a game from the same seed: the one
 //! playing sees their game, and those near see its cover on theirs.
+
+use core::f64::consts::FRAC_1_SQRT_2;
 
 use client::{Act, Eye, Host, Look, Offer, On, PartId, Shape, Turn, cabinet};
 use glam::{DAffine3, DMat3, DQuat, DVec3};
@@ -107,6 +112,7 @@ impl Items {
             return host.reject("its game does not play".into());
         }
         if host.hold_controls(self.look(host, cabinet)) {
+            step_to_station(host, cabinet, 0);
             host.play_game(cabinet);
             self.played = Some(cabinet);
         }
@@ -127,6 +133,26 @@ impl Items {
         self.played = None;
         host.let_controls_go();
     }
+}
+
+/// Steps the body to the station `index` of the cabinet `cabinet`, square
+/// on to its screen ([`cabinet::station`]), as a step of its own
+/// ([`Host::step_to`]). False, and the body where it stood, past the last
+/// station, for a cabinet more on a side than standing, or where the step
+/// is stopped, by a wall or a volume: whoever plays plays all the same.
+pub(crate) fn step_to_station(host: &mut Host<'_>, cabinet: PartId, index: usize) -> bool {
+    let (Some(world), Some(station)) = (host.part_transform(cabinet), cabinet::station(index))
+    else {
+        return false;
+    };
+    let standing = world.matrix3.z_axis.normalize_or_zero().dot(host.body().up);
+    if standing < FRAC_1_SQRT_2 {
+        return false;
+    }
+    host.step_to(
+        world.transform_point3(station.feet),
+        world.transform_vector3(station.facing),
+    )
 }
 
 /// Every cabinet near the body holding a cartridge, with where its prompt
@@ -188,7 +214,11 @@ fn facing(screen: DAffine3, eye: &Eye) -> Option<Look> {
 
 #[cfg(test)]
 mod tests {
+    use client::{Client, Input};
+    use topology::SurfacePoint;
+
     use super::*;
+    use crate::tests::{client, games, placed, update};
 
     /// A screen half a metre wide and 0.375 tall, facing +y: its across
     /// runs toward -x, as the right of one looking at it from +y.
@@ -278,5 +308,138 @@ mod tests {
             "{top} {bottom}"
         );
         assert!(((left + right) / 2.0 - 0.5).abs() < 1e-9);
+    }
+
+    /// A client before a cabinet it may play, its hand put away.
+    fn before_a_cabinet() -> (Client, Input) {
+        let mut client = client();
+        games(&mut client);
+        placed(&mut client);
+        client.command_json(r#"{"type":"items.edit","on":false}"#);
+        let mut input = Input::default();
+        update(&mut client, &mut input);
+        (client, input)
+    }
+
+    fn cabinet_of(client: &Client) -> PartId {
+        client
+            .parts()
+            .all()
+            .find(|(_, _, part)| matches!(part.shape, Shape::Cabinet(_)))
+            .map(|(id, ..)| id)
+            .unwrap()
+    }
+
+    fn feet(client: &mut Client) -> SurfacePoint {
+        client.host("items").feet().point
+    }
+
+    #[test]
+    fn played_the_body_steps_to_player_one_s_station_facing_the_screen_and_stays_there_left() {
+        let (mut client, mut input) = before_a_cabinet();
+        let id = cabinet_of(&client);
+        let host = client.host("items");
+        let world = host.part_transform(id).unwrap();
+        let station = cabinet::station(0).unwrap();
+        let spot = world.transform_point3(station.feet);
+        let toward = world.transform_vector3(station.facing);
+        let up = host.body().up;
+        let flat = |v: DVec3| v - up * up.dot(v);
+        assert!(
+            flat(host.body().position - spot).length() > 0.5,
+            "it stood away"
+        );
+
+        client.command_json(r#"{"type":"act"}"#);
+        update(&mut client, &mut input);
+        assert!(client.controls_lent());
+        let body = client.host("items").body();
+        let off_m = flat(body.position - spot).length();
+        assert!(off_m < 0.05, "{off_m} metres off its spot");
+        let square = body.facing.dot(flat(toward).normalize());
+        assert!(square > 0.9999, "faces the screen: {square}");
+
+        // Left, it stands where it played, free.
+        client.command_json(r#"{"type":"leave"}"#);
+        for _ in 0..30 {
+            update(&mut client, &mut input);
+        }
+        assert!(!client.controls_lent());
+        let off_m = flat(client.host("items").body().position - spot).length();
+        assert!(off_m < 0.05, "{off_m} metres off where it played");
+    }
+
+    #[test]
+    fn a_station_walled_off_leaves_the_body_where_it_stood_and_the_game_plays() {
+        // Where the body steps to, as a twin finds by playing.
+        let (mut twin, mut input) = before_a_cabinet();
+        let from = feet(&mut twin);
+        twin.command_json(r#"{"type":"act"}"#);
+        update(&mut twin, &mut input);
+        let to = feet(&mut twin);
+        assert_ne!(from, to);
+
+        // A wall halfway there, two metres tall.
+        let (mut client, mut input) = before_a_cabinet();
+        assert_eq!(feet(&mut client), from);
+        let h = client.parts().all().next().unwrap().2.pose.at[2];
+        let [u, v] = [(from.u + to.u) / 2.0, (from.v + to.v) / 2.0];
+        client.command_json(r#"{"type":"items.take","item":"cube","ahead":true}"#);
+        client.command_json(&format!(
+            r#"{{"type":"items.set","at":[{u},{v},{h}],"scale":[1,1,4]}}"#
+        ));
+        client.command_json(r#"{"type":"items.edit","on":false}"#);
+        update(&mut client, &mut input);
+        client.command_json(r#"{"type":"act"}"#);
+        update(&mut client, &mut input);
+        assert!(client.controls_lent(), "the game plays");
+        assert_eq!(feet(&mut client), from, "the body stood still");
+    }
+
+    #[test]
+    fn a_cabinet_tipped_more_on_a_side_than_standing_has_no_station_and_plays_where_one_stands() {
+        let mut client = client();
+        games(&mut client);
+        placed(&mut client);
+        client.command_json(r#"{"type":"items.set","rotation":[-60,0,0]}"#);
+        client.command_json(r#"{"type":"items.edit","on":false}"#);
+        let mut input = Input::default();
+        update(&mut client, &mut input);
+        let from = feet(&mut client);
+        client.command_json(r#"{"type":"act"}"#);
+        update(&mut client, &mut input);
+        assert!(client.controls_lent(), "the game plays");
+        assert_eq!(feet(&mut client), from);
+    }
+
+    #[test]
+    fn played_here_its_sticks_and_buttons_are_drawn_apart_and_move_with_what_is_held() {
+        let (mut client, mut input) = before_a_cabinet();
+        let stations = (0..).take_while(|&i| cabinet::station(i).is_some()).count();
+        let idle = client.update(1.0 / 60.0, &mut input).models;
+        client.command_json(r#"{"type":"act"}"#);
+        update(&mut client, &mut input);
+        update(&mut client, &mut input);
+        let rest = client.update(1.0 / 60.0, &mut input).models;
+        // A stick and three buttons a station, over the body bare of them.
+        assert_eq!(rest.len(), idle.len() + 4 * stations);
+        // Held left, player 1's stick leans, and nothing else moves.
+        input.key(client::Key::Left, true);
+        update(&mut client, &mut input);
+        update(&mut client, &mut input);
+        let held = client.update(1.0 / 60.0, &mut input).models;
+        let moved: Vec<usize> = (0..rest.len())
+            .filter(|&i| held[i].transform != rest[i].transform)
+            .collect();
+        assert_eq!(moved.len(), 1, "{moved:?}");
+        assert_eq!(held[moved[0]].mesh, rest[moved[0]].mesh);
+        // Left, the cabinet is drawn whole again.
+        client.command_json(r#"{"type":"leave"}"#);
+        update(&mut client, &mut input);
+        update(&mut client, &mut input);
+        assert_eq!(
+            client.update(1.0 / 60.0, &mut input).models.len(),
+            idle.len()
+        );
     }
 }

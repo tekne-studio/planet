@@ -720,6 +720,32 @@ impl Controller {
         true
     }
 
+    /// On foot, steps the body to `at`, world space, standing on what is
+    /// under it there, and turns it and its view to `facing`: where a body
+    /// takes its place at something, a cabinet's station. The step is
+    /// placed at once, where a walk from where the body stands reaches. False,
+    /// and the body as it was, when it rides, flies or goes in a way, when
+    /// something stops the walk there, or off the planet.
+    pub fn step_to(
+        &mut self,
+        at: DVec3,
+        facing: DVec3,
+        generator: &Generator,
+        built: Built<'_>,
+    ) -> bool {
+        if !matches!(self.moves, Moves::Walk) {
+            return false;
+        }
+        let Some(point) = self.reaches(at - self.position(), generator, built) else {
+            return false;
+        };
+        if !self.set_down(point, facing, generator, built) {
+            return false;
+        }
+        self.view = self.facing;
+        true
+    }
+
     /// The point of the planet a body on foot walks to, `offset` from where
     /// it stands, world space, when nothing stops it on the way there: none
     /// when a wall, a rise of more than a step or a roof too low does, or

@@ -690,6 +690,16 @@ impl Carts {
             .collect()
     }
 
+    /// The cabinet whose game is played here, and what each of its
+    /// stations holds on it, as its game was last told: this client's at
+    /// player 1's, nothing at the others.
+    pub(crate) fn pads_played(&self) -> Option<(PartId, [Pad; arcade::PADS])> {
+        let key = self.played?;
+        let mut pads = [Pad::NONE; arcade::PADS];
+        pads[0] = self.games.get(&key)?.held;
+        Some((PartId(key.0), pads))
+    }
+
     /// Holds `pad` down on the game `key` this frame. What nobody presses
     /// in a frame is let go at its end.
     pub(crate) fn press(&mut self, key: GameId, pad: Pad) {
