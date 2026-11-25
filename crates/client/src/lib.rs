@@ -82,7 +82,7 @@ use live::Live;
 use marker::Markers;
 pub use marker::{At as MarkerAt, Choice as MarkerChoice, Marked, Marker, Said as MarkerSaid};
 pub use model3d::ModelRefusal;
-pub use offer::{Act, Hold, Offer, On, Prompt, Reached, Stands};
+pub use offer::{Act, Hold, Offer, On, Prompt, Reached, Stands, TAP_S};
 use offer::{Offered, Press, Pressed};
 pub use paces::{Backing, Flight, Jump, Pace, Paces, Spring};
 pub use part::{

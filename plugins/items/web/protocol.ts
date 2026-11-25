@@ -209,6 +209,21 @@ export function parseNear(event: Record<string, unknown>): NearOne[] | null {
 	return rows;
 }
 
+/** The reset's ring over the game played while Start is held: how far it has closed, and the game's middle on the view. */
+export interface Resetting {
+	closed: number;
+	/** Fractions of the view from its left and its top. */
+	x: number;
+	y: number;
+}
+
+/** Reads a `reset` event. Null once the ring is gone, or for one that is no ring. */
+export function parseReset(event: Record<string, unknown>): Resetting | null {
+	const { closed, x, y } = event;
+	if (typeof closed !== 'number' || typeof x !== 'number' || typeof y !== 'number') return null;
+	return { closed, x, y };
+}
+
 /** Reads a `refused` event. Null for a reason this front end has no words for. */
 export function parseRefused(event: Record<string, unknown>): Refusal | null {
 	return refusals.find((reason) => reason === event.reason) ?? null;

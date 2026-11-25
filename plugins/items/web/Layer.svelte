@@ -3,7 +3,8 @@
 	import Drop from './Drop.svelte';
 	import { games } from './games';
 	import Panel from './Panel.svelte';
-	import { parseHand, parseLandmarks, parseNear, parsePicked, parseRefused, type Edge, type Finish, type Item, type LandmarkOne, type Mode, type NearOne, type Picked, type Refusal } from './protocol';
+	import { parseHand, parseLandmarks, parseNear, parsePicked, parseRefused, parseReset, type Edge, type Finish, type Item, type LandmarkOne, type Mode, type NearOne, type Picked, type Refusal, type Resetting } from './protocol';
+	import Reset from './Reset.svelte';
 
 	// Items over the world: what the plugin says is in hand, which part is
 	// picked and how it stands, and why it last refused. A front end only:
@@ -15,7 +16,8 @@
 	// it a favourite and a house makes it the home, the world's to keep for
 	// an account and the engine's to hand this browser for a visitor. While
 	// a touch screen plays a game, the game has the glass: the menu and its
-	// buttons wait for the controls to come back.
+	// buttons wait for the controls to come back. Start held at a cabinet
+	// fills a ring over the game until it starts over.
 	let { seam, builds: builder, palette, lent, touch }: LayerProps = $props();
 
 	let editing = $state(false);
@@ -28,6 +30,7 @@
 	let finish = $state<Finish>('matte');
 	let edge = $state<Edge>('none');
 	let refused = $state<Refusal | null>(null);
+	let resetting = $state<Resetting | null>(null);
 	/** Whether the list of what is near is open, and what it says. */
 	let listing = $state(false);
 	let near = $state<NearOne[]>([]);
@@ -76,6 +79,7 @@
 			else if (kind === 'refused') refused = parseRefused(event);
 			else if (kind === 'near') near = parseNear(event) ?? near;
 			else if (kind === 'landmarks') landmarks = parseLandmarks(event) ?? landmarks;
+			else if (kind === 'reset') resetting = parseReset(event);
 		});
 		// What is in hand was said before this layer listened: ask for it.
 		seam.command('state');
@@ -98,6 +102,9 @@
 
 {#if builder}
 	<Drop {seam} {picked} />
+{/if}
+{#if resetting}
+	<Reset {resetting} />
 {/if}
 {#if !(lent && touch)}
 	<Panel

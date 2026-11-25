@@ -28,6 +28,11 @@
 //! one who stepped away or whose window lost the keys: their machine writes
 //! their pad released, and the other plays on.
 //!
+//! A Start held long enough resets the game ([`crate::reset`]): each machine
+//! finds the reset in the buttons agreed, at the same update, and the game
+//! here starts over from there. The history keeps every update as pressed,
+//! so one who sits beside the game finds the same resets in it.
+//!
 //! Nothing a peer sends is trusted to be well made: bytes past a pad's
 //! bits, a pad its sender does not hold, a gap, the past, a flood of the
 //! future and a Start never asked for are each dropped, and what a machine
@@ -39,6 +44,8 @@ use std::collections::VecDeque;
 use client::{GAME_LONGEST, PADS, Pad, RELAY_BYTES, UPDATES_PER_S};
 use items_world::wire::{self, versus};
 use prost::Message;
+
+use crate::reset::Starts;
 
 /// How many updates ahead of the one due a holder writes its buttons: what
 /// it presses now is pressed in the game this many updates later, 100 ms.
@@ -107,10 +114,6 @@ impl Runs {
     /// The updates it holds.
     pub(crate) fn len(&self) -> u64 {
         self.len
-    }
-
-    pub(crate) fn push(&mut self, word: u32) {
-        self.extend(word, 1);
     }
 
     fn extend(&mut self, word: u32, count: u64) {
@@ -210,6 +213,45 @@ impl Runs {
     }
 }
 
+/// How a game ran: every update agreed, as its players pressed it, and
+/// those since the game last started over, as it is given them.
+#[derive(Clone, Default, Debug)]
+struct Ran {
+    history: Runs,
+    game: Runs,
+    /// Each pad's Start along the history.
+    starts: Starts,
+    /// The update of the history the game last started over at.
+    start: u64,
+}
+
+impl Ran {
+    /// The game as it ran through `history`, its resets found again.
+    fn new(history: &Runs) -> Ran {
+        let mut ran = Ran::default();
+        for &(word, count) in &history.runs {
+            ran.give(word, count);
+        }
+        ran
+    }
+
+    /// `count` updates of `word` agreed, given to the game: whether a Start
+    /// held reset it among them, the game started over there.
+    fn give(&mut self, word: u32, count: u64) -> bool {
+        self.history.extend(word, count);
+        let given = self.starts.given(word);
+        let Some(at) = self.starts.run(word, count) else {
+            self.game.extend(given, count);
+            return false;
+        };
+        let rest = count - at;
+        self.start = self.history.len() - rest;
+        self.game = Runs::default();
+        self.game.extend(self.starts.given(word), rest);
+        true
+    }
+}
+
 fn encode(message: versus::Message) -> Vec<u8> {
     wire::Versus {
         message: Some(message),
@@ -230,11 +272,10 @@ pub(crate) struct Versus {
     plays: usize,
     holders: Holders,
     mode: Mode,
-    /// The buttons of every update given to the game.
-    history: Runs,
+    ran: Ran,
     /// How many of the game's first updates still hold since a Start
-    /// replaced the history: a game here that ran more starts over. `None`
-    /// while all it ran is the history's.
+    /// replaced the history or a reset started it over: a game here that
+    /// ran more starts over. `None` while all it ran is the game's.
     kept: Option<u64>,
     /// The update due by this machine's clock, and part of the next.
     clock: f64,
@@ -351,14 +392,15 @@ impl Versus {
     /// it plays on from there at once; beside another, it waits to be sent
     /// how the game ran.
     pub(crate) fn new(me: u32, mine: usize, plays: usize, holders: Holders, ran: Runs) -> Versus {
+        let ran = Ran::new(&ran);
         let mut versus = Versus {
             me,
             mine,
             plays: plays.min(PADS),
             holders,
             mode: Mode::Alone,
-            clock: ran.len() as f64,
-            history: ran,
+            clock: ran.history.len() as f64,
+            ran,
             kept: None,
             last_s: None,
             heard_ms: [None; PADS],
@@ -385,20 +427,32 @@ impl Versus {
         self.mine
     }
 
-    /// The updates given to the game.
+    /// The updates agreed.
     pub(crate) fn fed(&self) -> u64 {
-        self.history.len()
+        self.ran.history.len()
     }
 
-    /// The buttons of every update given to the game, in order.
+    /// The buttons of every update agreed, in order, as pressed.
     pub(crate) fn history(&self) -> &Runs {
-        &self.history
+        &self.ran.history
+    }
+
+    /// The buttons of the updates since the game last started over, as it
+    /// is given them: what the game here runs.
+    pub(crate) fn game(&self) -> &Runs {
+        &self.ran.game
+    }
+
+    /// How far a Start held toward a reset has gone, by the updates agreed:
+    /// every machine shows the same.
+    pub(crate) fn closed(&self) -> Option<f32> {
+        self.ran.starts.closed()
     }
 
     /// Whether a game here given `given` updates runs on: all it ran is the
-    /// history's. One that does not starts over.
+    /// game's. One that does not starts over.
     pub(crate) fn runs_on(&self, given: u64) -> bool {
-        given <= self.kept.unwrap_or(self.fed())
+        given <= self.kept.unwrap_or(self.ran.game.len())
     }
 
     /// The game here was given all of the history up to now.
@@ -440,7 +494,7 @@ impl Versus {
             // The one who ran the game sends it to the one who sat.
             (Mode::Alone, false) => {
                 for pad in others {
-                    let parts = self.history.parts(holders[pad]);
+                    let parts = self.ran.history.parts(holders[pad]);
                     self.out.extend(parts);
                 }
                 self.mode = Mode::Together(Lockstep::new(self.fed()));
@@ -515,9 +569,15 @@ impl Versus {
         let Some(gathered) = gathering.take().filter(|g| g.runs.len() == g.at) else {
             return;
         };
-        let kept = self.history.agrees(&gathered.runs);
+        // What the game here ran holds where it started over at the same
+        // update and was given the same since.
+        let ran = Ran::new(&gathered.runs);
+        let kept = match ran.start == self.ran.start {
+            true => self.ran.game.agrees(&ran.game),
+            false => 0,
+        };
         self.kept = Some(self.kept.map_or(kept, |was| was.min(kept)));
-        self.history = gathered.runs;
+        self.ran = ran;
         self.clock = gathered.at as f64;
         self.mode = Mode::Together(Lockstep::new(gathered.at));
     }
@@ -602,11 +662,12 @@ impl Versus {
             // Alone, a game holds while its player is away.
             Mode::Alone => match pad.filter(|_| ready) {
                 Some(pad) => {
-                    let fed = self.fed() as f64;
-                    self.clock = (self.clock + dt * f64::from(UPDATES_PER_S)).min(fed + OWED_MOST);
-                    let word = pad.at(self.mine);
-                    while self.clock >= self.fed() as f64 + 1.0 && self.fed() < GAME_LONGEST {
-                        self.history.push(word);
+                    let fed = self.fed();
+                    self.clock =
+                        (self.clock + dt * f64::from(UPDATES_PER_S)).min(fed as f64 + OWED_MOST);
+                    let due = (self.clock as u64).min(GAME_LONGEST);
+                    if due > fed && self.ran.give(pad.at(self.mine), due - fed) {
+                        self.kept = Some(0);
                     }
                 }
                 None => self.clock = self.fed() as f64,
@@ -670,7 +731,9 @@ impl Versus {
         if ready {
             for _ in fed..due.min(agreed) {
                 let word = lockstep.ahead.pop_front().unwrap_or(0);
-                self.history.push(word);
+                if self.ran.give(word, 1) {
+                    self.kept = Some(0);
+                }
             }
         }
         (!pads.is_empty()).then(|| encode(versus::Message::Pads(wire::Pads { pads })))
@@ -1046,7 +1109,7 @@ mod tests {
         let mut b = Versus::new(B, 1, 2, [A, B], Runs::default());
         let mut runs = Runs::default();
         for word in 0..2000 {
-            runs.push(word % 3);
+            runs.extend(word % 3, 1);
         }
         let parts = runs.parts(B);
         assert!(parts.len() > 1);
@@ -1085,7 +1148,7 @@ mod tests {
         let game = |runs: u32| {
             let mut game = Runs::default();
             for word in 0..runs {
-                game.push(word % 2);
+                game.extend(word % 2, 1);
             }
             game
         };
@@ -1104,22 +1167,123 @@ mod tests {
         );
     }
 
+    /// Every machine's game since it last started over: the same, from
+    /// the same update of the history.
+    fn games_agree(net: &Net) -> u64 {
+        let first = net.machines[0].versus.ran.start;
+        let len = net
+            .machines
+            .iter()
+            .map(|machine| machine.versus.game().len())
+            .min()
+            .unwrap();
+        let words = net.machines[0].versus.game().words(0, len);
+        for machine in &net.machines {
+            assert_eq!(machine.versus.ran.start, first, "started over apart");
+            assert_eq!(machine.versus.game().words(0, len), words, "games differ");
+        }
+        first
+    }
+
+    /// `holder` holds Start, the other plays its pattern.
+    fn holding(holder: u32) -> impl Fn(u32, u64) -> Pad {
+        move |session, turn| match session == holder {
+            true => Pad::START,
+            false => played(session, turn),
+        }
+    }
+
+    #[test]
+    fn start_held_by_either_resets_the_game_on_both_at_one_update() {
+        for holder in [A, B] {
+            let mut net = Net::new(0.05);
+            net.sit(B, 1, [A, B], Runs::default());
+            net.turns(120, played);
+            net.agree();
+            assert_eq!(games_agree(&net), 0);
+            net.turns(150, holding(holder));
+            net.turns(120, played);
+            let fed = net.agree();
+            let start = games_agree(&net);
+            assert!(
+                start > 120 && start < fed - 60,
+                "started over at {start} of {fed}"
+            );
+            for machine in &net.machines {
+                assert!(!machine.versus.runs_on(1), "the game here starts over");
+                // The Start that reset it is given released.
+                let pad = (holder == B) as usize;
+                let first = machine.versus.game().words(0, 1)[0];
+                assert!(!Pad::of_pad(first, pad).has(Pad::START), "{first:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn start_let_go_sooner_resets_nothing_and_the_game_has_it() {
+        let mut net = Net::new(0.05);
+        net.sit(B, 1, [A, B], Runs::default());
+        net.turns(120, played);
+        net.turns(100, holding(B));
+        net.turns(60, played);
+        net.agree();
+        assert_eq!(games_agree(&net), 0);
+        let versus = net.versus(A);
+        assert_eq!(versus.game().len(), versus.fed());
+        assert!(versus.runs_on(versus.fed()));
+        assert!(versus.closed().is_none());
+        assert_eq!(pads(versus, 1) & Pad::START.bits(), Pad::START.bits());
+    }
+
+    #[test]
+    fn one_who_sits_beside_a_game_reset_finds_the_same_reset_in_it() {
+        let mut net = Net::new(0.05);
+        net.turns(60, played);
+        net.turns(150, holding(A));
+        net.turns(30, played);
+        let start = net.versus(A).ran.start;
+        assert!(start > 60, "alone, reset at {start}");
+        net.sit(B, 1, [A, B], Runs::default());
+        net.turns(120, played);
+        net.agree();
+        assert_eq!(games_agree(&net), start);
+    }
+
+    #[test]
+    fn one_back_after_a_reset_runs_on_what_the_game_here_ran() {
+        let mut net = Net::new(0.05);
+        net.sit(B, 1, [A, B], Runs::default());
+        net.turns(60, played);
+        net.turns(150, holding(B));
+        net.turns(60, played);
+        net.agree();
+        let left = net.versus(B).history().clone();
+        let ran = net.versus(B).game().len();
+        net.rise(B, [A, 0]);
+        net.turns(60, played);
+        net.sit(B, 1, [A, B], left);
+        net.turns(60, played);
+        assert!(net.versus(B).runs_on(ran), "replayed from there");
+        net.agree();
+        games_agree(&net);
+    }
+
     #[test]
     fn runs_say_their_words_and_how_far_two_agree() {
         let mut runs = Runs::default();
         for word in [1, 1, 1, 2, 2, 3] {
-            runs.push(word);
+            runs.extend(word, 1);
         }
         assert_eq!(runs.words(2, 5), [1, 2, 2]);
         assert_eq!(runs.words(0, 9), [1, 1, 1, 2, 2, 3]);
         assert_eq!(runs.words(3, 4), [2]);
         assert!(runs.words(5, 5).is_empty());
         let mut other = runs.clone();
-        other.push(9);
+        other.extend(9, 1);
         assert_eq!(runs.agrees(&other), 6);
         let mut fork = Runs::default();
         for word in [1, 1, 1, 2, 7] {
-            fork.push(word);
+            fork.extend(word, 1);
         }
         assert_eq!(runs.agrees(&fork), 4);
     }

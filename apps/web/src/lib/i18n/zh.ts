@@ -62,6 +62,7 @@ export const zh: Messages = {
 	'engine.controls.sprint': '跑',
 	'engine.controls.start.keys': 'Enter',
 	'engine.controls.start': '开始',
+	'engine.controls.held': '按住：{does}',
 	'engine.waiting': '{s} 秒',
 	'engine.controls.leave.keys': 'Esc',
 	'engine.controls.leave': '离开',

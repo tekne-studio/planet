@@ -22,8 +22,11 @@ pub mod wire {
 
 /// What the world's statement calls the plugin.
 pub const NAME: &str = "items";
-/// The version of its wire and of its seam.
-pub const VERSION: u32 = 2;
+/// The version of its wire and of its seam, and of what a game of several
+/// pads reads in the buttons its players agree: a client that reads them
+/// otherwise, a held Start that resets, speaks another version and pairs
+/// with no one of this one.
+pub const VERSION: u32 = 3;
 
 /// The ops a session asks: to take a station, to let it go, and to hear who
 /// holds every station there is.

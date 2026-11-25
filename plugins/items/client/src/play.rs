@@ -8,11 +8,11 @@
 //! buttons, held each turn, and the body's own offer is "Cabinet [E]
 //! Leave". The controls come back by that offer, by the key that always
 //! leaves, and whenever the game stops or the cabinet goes: nothing holds a
-//! person in a cabinet. Left, the game waits for them where it stopped, and
-//! the cabinet offers "Cabinet [E] Resume" while it does
-//! ([`client::GAME_WAITS_S`]); past that it stops, and its cover shows
-//! again. Left, the body stands where it played, free, and the eye eases
-//! back to the camera the person keeps.
+//! person in a cabinet. Start held resets the game ([`crate::reset`]).
+//! Left, the game waits for them where it stopped, and the cabinet offers
+//! "Cabinet [E] Resume" while it does ([`client::GAME_WAITS_S`]); past that
+//! it stops, and its cover shows again. Left, the body stands where it
+//! played, free, and the eye eases back to the camera the person keeps.
 //!
 //! Each client runs its own copy of a game of one pad from the same seed:
 //! the one playing sees their game, and those near see its cover on
@@ -20,10 +20,12 @@
 
 use core::f64::consts::FRAC_1_SQRT_2;
 
-use client::{Act, Eye, Host, Look, Offer, On, PartId, Shape, Turn, cabinet};
+use client::{Act, Eye, Host, Look, Offer, On, Pad, PartId, Shape, Turn, cabinet};
 use glam::{DAffine3, DMat3, DQuat, DVec3};
 
 use crate::Items;
+use crate::reset;
+use crate::stations::stations_of;
 
 /// The words its offers say, keys of the panel's words.
 pub mod word {
@@ -56,12 +58,11 @@ impl Items {
         {
             self.leave(host);
         }
+        let mut resetting = None;
         let offers = match self.played {
             Some(played) => {
                 host.play_game(played);
-                if let Some(pad) = turn.controls {
-                    host.press_game(played, pad);
-                }
+                resetting = self.press(turn, host, played);
                 // The cabinet may move while played, and the view change
                 // shape: the eye goes with them.
                 if let Some(look) = self.look(host, played) {
@@ -98,6 +99,32 @@ impl Items {
             }
         };
         host.offer(offers);
+        // Over the game, laid in the middle of what the view leaves clear.
+        let [left, top, right, bottom] = turn.eye.clear;
+        let middle = [(left + right) / 2.0, (top + bottom) / 2.0];
+        self.ring.say(host, resetting, middle);
+    }
+
+    /// Presses the controls on the game `played`, and the reset they hold:
+    /// a game of stations finds it in the buttons its machines agreed, a
+    /// game of one pad by the clock, run again from its start when due.
+    /// Says how far the reset's ring has closed.
+    fn press(&mut self, turn: &Turn<'_>, host: &mut Host<'_>, played: PartId) -> Option<f32> {
+        if stations_of(host, played).is_some() {
+            if let Some(pad) = turn.controls {
+                host.press_game(played, pad);
+            }
+            return self.resetting(host, played);
+        }
+        let held = turn.controls.unwrap_or(Pad::NONE);
+        let (pad, reset) = self.start.turn(turn.now_s, held);
+        if reset {
+            host.restart_game(played);
+        }
+        if turn.controls.is_some() {
+            host.press_game(played, pad);
+        }
+        self.start.closed(turn.now_s)
     }
 
     /// An act on one of its offers: a cabinet played, again where its game
@@ -138,6 +165,7 @@ impl Items {
     /// Gives the controls back, and lets the game go.
     pub(crate) fn leave(&mut self, host: &mut Host<'_>) {
         self.played = None;
+        self.start = reset::Held::default();
         host.let_controls_go();
     }
 }

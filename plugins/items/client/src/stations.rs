@@ -107,11 +107,20 @@ const NO_WORLD: u32 = u32::MAX;
 
 /// The pads `cabinet`'s game reads, when it reads more than one: a game of
 /// stations.
-fn stations_of(host: &Host<'_>, cabinet: PartId) -> Option<usize> {
+pub(crate) fn stations_of(host: &Host<'_>, cabinet: PartId) -> Option<usize> {
     host.game_plays(cabinet).filter(|&plays| plays > 1)
 }
 
 impl Items {
+    /// How far a Start held toward a reset has gone at the game of
+    /// stations `cabinet` this machine plays, by the updates its machines
+    /// agreed: every machine shows the same.
+    pub(crate) fn resetting(&self, host: &Host<'_>, cabinet: PartId) -> Option<f32> {
+        let named = host.parts().known_as(cabinet)?;
+        let playing = self.stations.playing.as_ref()?;
+        (playing.cabinet == named).then(|| playing.versus.closed())?
+    }
+
     /// Whether this machine holds or asked for a station of `cabinet`.
     pub(crate) fn sits_at(&self, host: &Host<'_>, cabinet: PartId) -> bool {
         let named = host.parts().known_as(cabinet);
@@ -275,10 +284,10 @@ impl Items {
         if !versus.runs_on(given) {
             return host.restart_game(cabinet);
         }
-        let fed = versus.fed();
-        if fed > given {
-            let words = versus.history().words(given, fed);
-            host.feed_game(cabinet, &words, fed - given > BEHIND_AT_ONCE);
+        let game = versus.game();
+        if game.len() > given {
+            let words = game.words(given, game.len());
+            host.feed_game(cabinet, &words, game.len() - given > BEHIND_AT_ONCE);
         }
         versus.given_all();
     }

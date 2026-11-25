@@ -130,7 +130,7 @@ func TestTheModuleSaysWhatItCarries(t *testing.T) {
 		}
 		stations = append(stations, op.Kind)
 	}
-	if items.Name() != "items" || items.Version() != 2 || !plugins[2].On || strings.Join(stations, " ") != "sit rise look" {
+	if items.Name() != "items" || items.Version() != 3 || !plugins[2].On || strings.Join(stations, " ") != "sit rise look" {
 		t.Fatalf("items is on and offers a cabinet's stations: %s %d %v", items.Name(), items.Version(), items.Ops())
 	}
 	// And ride: a body in a way moves in the client, and goes out in its

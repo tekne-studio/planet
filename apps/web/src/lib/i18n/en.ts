@@ -65,6 +65,7 @@ export const en = {
 	'engine.controls.sprint': 'run',
 	'engine.controls.start.keys': 'Enter',
 	'engine.controls.start': 'start',
+	'engine.controls.held': 'hold: {does}',
 	'engine.waiting': '{s} s',
 	'engine.controls.leave.keys': 'Esc',
 	'engine.controls.leave': 'leave',

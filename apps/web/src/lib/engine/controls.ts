@@ -31,3 +31,17 @@ export function said(
   const own = words?.(key);
   return own && own !== key ? own : t(`engine.controls.${control}`);
 }
+
+/**
+ * What holding `control` down does, in the holder's words,
+ * `control.start.hold` for a cabinet's reset: null when the holder gives
+ * it nothing to do.
+ */
+export function held(
+  control: Control,
+  words?: (key: string) => string,
+): string | null {
+  const key = `control.${control}.hold`;
+  const own = words?.(key);
+  return own && own !== key ? own : null;
+}

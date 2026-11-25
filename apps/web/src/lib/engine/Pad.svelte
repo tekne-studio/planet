@@ -2,7 +2,7 @@
 	import { Icon } from '$lib/ds';
 	import { t } from '$lib/i18n';
 	import { keep, kept } from '$lib/kept';
-	import { LEAVE_KEY, PAD_KEYS, said, type Control } from './controls';
+	import { LEAVE_KEY, PAD_KEYS, held, said, type Control } from './controls';
 	import { Fingers } from './fingers';
 	import type { Clear } from './index';
 	import { WAY_KEYS, crossed, readWays, type Way, type Ways } from './ways';
@@ -18,7 +18,8 @@
 	// shell's, as on foot: the left thumb opens it anywhere on the left
 	// half, and while no finger holds it a disc says where a thumb goes. A
 	// and B stand large and apart under the right thumb, which rolls from
-	// one to the other; leave and start sit small over them.
+	// one to the other; leave and start sit small over them, start saying
+	// what holding it does when the holder gives it something.
 	//
 	// The pad keeps to the foot of the screen held upright and to its two
 	// sides held sideways, and what it leaves clear between is the game's:
@@ -119,8 +120,10 @@
 			<Icon name="log-out" />{t('engine.controls.leave')}
 		</button>
 		{#each buttons as control (control)}
+			{@const does = held(control, words)}
 			<button type="button" class={control} class:held={fingers.holds(PAD_KEYS[control])} {...fingers.hold(PAD_KEYS[control], control !== 'start')}>
 				{said(control, words)}
+				{#if does}<small class="does">{t('engine.controls.held', { does })}</small>{/if}
 			</button>
 		{/each}
 	</div>
@@ -263,6 +266,21 @@
 	}
 	.start {
 		grid-area: start;
+	}
+	/* What holding it does, a quiet line under its name: the button grows
+	   to hold it, its name where it was. */
+	.start:has(.does) {
+		flex-direction: column;
+		gap: 0;
+		height: auto;
+		min-height: var(--control-h);
+		padding: var(--sp-1) 0;
+	}
+	.does {
+		font-size: var(--fs);
+		font-weight: var(--fw-regular);
+		line-height: 1.2;
+		opacity: 0.8;
 	}
 	.jump,
 	.sprint {

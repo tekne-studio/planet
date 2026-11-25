@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { t } from '$lib/i18n';
-	import { CONTROLS, said } from './controls';
+	import { CONTROLS, held, said } from './controls';
 
 	// The keys while the controls are lent: a row at the top of the world,
 	// clear of the prompt's card and the bars below, each key and what it
-	// presses, in the holder's words (`said`). Leaving is always the last.
+	// presses, in the holder's words (`said`), and what holding it does
+	// when the holder gives it something (`held`). Leaving is always the
+	// last.
 	interface Props {
 		/** Reads a key of the holder's words; a key it lacks comes back as it went. */
 		words?: (key: string) => string;
@@ -15,7 +17,11 @@
 
 <ul class="controls" aria-label={t('engine.controls')}>
 	{#each CONTROLS as control (control)}
+		{@const does = held(control, words)}
 		<li><kbd>{t(`engine.controls.${control}.keys`)}</kbd> {said(control, words)}</li>
+		{#if does}
+			<li><kbd>{t(`engine.controls.${control}.keys`)}</kbd> {t('engine.controls.held', { does })}</li>
+		{/if}
 	{/each}
 	<li><kbd>{t('engine.controls.leave.keys')}</kbd> {t('engine.controls.leave')}</li>
 </ul>

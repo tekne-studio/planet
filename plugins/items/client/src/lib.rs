@@ -32,6 +32,7 @@ mod facing;
 mod gizmo;
 mod place;
 mod play;
+mod reset;
 mod stations;
 mod versus;
 
@@ -661,6 +662,10 @@ pub struct Items {
     played: Option<PartId>,
     /// The stations of games of several pads, and the one held.
     stations: stations::Stations,
+    /// Start held on the game of one pad played, toward a reset.
+    start: reset::Held,
+    /// The reset's ring over the game played, as last said.
+    ring: reset::Ring,
     /// The cabinets near the body with a cartridge, as last offered.
     near: Vec<(PartId, DVec3)>,
     /// The eye as last seen: the view a look is framed in.
@@ -696,6 +701,8 @@ impl Default for Items {
             using: false,
             played: None,
             stations: stations::Stations::default(),
+            start: reset::Held::default(),
+            ring: reset::Ring::default(),
             near: Vec::new(),
             eye: None,
             games: Vec::new(),
@@ -1983,6 +1990,80 @@ mod tests {
             ]
         );
         assert!(client.controls_lent());
+    }
+
+    #[test]
+    fn start_held_on_a_game_of_one_pad_runs_it_again_from_its_cover() {
+        let mut client = client();
+        games(&mut client);
+        let picture = running(&mut client);
+        let mut input = Input::default();
+        client.drain_events();
+        let ring = |client: &mut Client| {
+            client
+                .drain_events()
+                .into_iter()
+                .rev()
+                .find_map(|event| match event {
+                    Event::Plugin(event) if event["type"] == "items.reset" => {
+                        Some(event["closed"].as_f64())
+                    }
+                    _ => None,
+                })
+        };
+        // Held short of the reset: the game is pressed Start, and the ring
+        // over it fills.
+        input.key(Key::Start, true);
+        for _ in 0..60 {
+            update(&mut client, &mut input);
+        }
+        assert_eq!(
+            client.drain_running(),
+            [client::Running::Press {
+                picture,
+                pad: client::Pad::START
+            }]
+        );
+        let closed = ring(&mut client).flatten().expect("the ring shows");
+        assert!(closed > 0.4 && closed < 0.5, "{closed}");
+        // Held on past the reset: the game stops and opens again from its
+        // seed, and the ring goes.
+        for _ in 0..62 {
+            update(&mut client, &mut input);
+        }
+        assert_eq!(client.drain_running(), [client::Running::Close(picture)]);
+        assert_eq!(ring(&mut client), Some(None), "said gone once");
+        update(&mut client, &mut input);
+        let again = shown(&mut client).expect("it opens again");
+        // The Start that reset it is the game's no more until let go.
+        for _ in 0..180 {
+            update(&mut client, &mut input);
+        }
+        assert!(client.drain_running().is_empty(), "nothing pressed");
+        assert_eq!(ring(&mut client), None, "no ring while it is held still");
+        input.key(Key::Start, false);
+        update(&mut client, &mut input);
+        input.key(Key::Start, true);
+        update(&mut client, &mut input);
+        assert_eq!(
+            client.drain_running(),
+            [client::Running::Press {
+                picture: again,
+                pad: client::Pad::START
+            }]
+        );
+        // An agent holds it by the same controls, and resets it the same.
+        input.key(Key::Start, false);
+        update(&mut client, &mut input);
+        client.command_json(r#"{"type":"press","controls":["start"]}"#);
+        for _ in 0..124 {
+            update(&mut client, &mut input);
+        }
+        let running = client.drain_running();
+        assert!(
+            running.contains(&client::Running::Close(again)),
+            "{running:?}"
+        );
     }
 
     /// A plugin that takes the controls when told to, with no look.

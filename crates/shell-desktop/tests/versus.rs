@@ -2,7 +2,8 @@
 //! Go server serves, each a whole client with every plugin, its game run by
 //! the console as the desktop shell runs it: the frames each draws agree,
 //! update by update. One whose window loses the keys keeps its station, one
-//! drops and comes back, and a third finds no station.
+//! holds Start and the game starts over on both, one drops and comes back,
+//! and a third finds no station.
 //!
 //! It needs a world served, alone so every session is its admin, and a
 //! game of two pads built, so `cargo test` alone skips it: run it ignored,
@@ -92,7 +93,23 @@ fn two_machines_play_one_game_through_a_world_and_draw_the_same_frames() {
     turns(&mut [&mut a, &mut b], 120, pressed);
     let back = agree(&a, &b);
     assert!(back > away + 100, "back, B plays: {away} then {back}");
-    let agreed = back;
+
+    // A holds Start: the game starts over on both at one update, its cover
+    // shown between, and runs the same from there.
+    let closed = (a.closed, b.closed);
+    let held = move |turn: u64| [&["start"][..], pressed(turn)[1]];
+    turns(&mut [&mut a, &mut b], 150, held);
+    assert_eq!(
+        (a.closed, b.closed),
+        (closed.0 + 1, closed.1 + 1),
+        "reset once"
+    );
+    turns(&mut [&mut a, &mut b], 240, pressed);
+    let agreed = agree(&a, &b);
+    assert!(
+        agreed > 200 && agreed < back,
+        "started over: {agreed} updates agreed since, {back} before"
+    );
 
     // B's link drops; A plays on alone. B comes back and plays again from
     // the station it held, its game run at once through what it missed.
@@ -153,8 +170,11 @@ struct Machine {
     /// The games open, by the picture each is drawn in.
     opened: BTreeMap<PictureId, u32>,
     next: u32,
-    /// The frames hash of the game played by each update count it ran to.
+    /// The frames hash of the game played by each update count it ran to,
+    /// since it last opened.
     frames: BTreeMap<u64, String>,
+    /// How many times a game closed.
+    closed: u32,
     turn: u64,
     pressed: &'static [&'static str],
 }
@@ -176,6 +196,7 @@ impl Machine {
             opened: BTreeMap::new(),
             next: 1,
             frames: BTreeMap::new(),
+            closed: 0,
             turn: 0,
             pressed: &[],
         };
@@ -265,6 +286,8 @@ impl Machine {
                 if let Some(id) = self.opened.remove(&picture) {
                     self.emulator.close(id).unwrap();
                 }
+                self.frames.clear();
+                self.closed += 1;
             }
             _ => {}
         }

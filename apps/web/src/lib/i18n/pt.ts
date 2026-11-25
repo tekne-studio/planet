@@ -66,6 +66,7 @@ export const pt: Messages = {
 	'engine.controls.sprint': 'correr',
 	'engine.controls.start.keys': 'Enter',
 	'engine.controls.start': 'iniciar',
+	'engine.controls.held': 'segure: {does}',
 	'engine.waiting': '{s} s',
 	'engine.controls.leave.keys': 'Esc',
 	'engine.controls.leave': 'sair',
