@@ -94,15 +94,39 @@ fn play(client: &mut Client, plugin: &str) {
     assert_eq!(holder(client), Some(Some(plugin.to_owned())));
 }
 
+/// What the holder was last said pressed, in the events drained.
+fn pressed(client: &mut Client) -> Option<u8> {
+    client
+        .drain_events()
+        .into_iter()
+        .rev()
+        .find_map(|event| match event {
+            Event::Plugin(body) if body["type"] == "one.pressed" => {
+                body["pad"].as_u64().map(|pad| pad as u8)
+            }
+            _ => None,
+        })
+}
+
 #[test]
-fn the_shell_letting_every_key_go_takes_them_back() {
+fn away_from_the_world_the_holder_keeps_them_and_is_pressed_nothing() {
     let mut client = client();
     play(&mut client, "one");
     let mut input = Input::default();
-    input.release_all();
+    input.key(Key::Left, true);
     run(&mut client, &mut input, 1);
-    assert_eq!(holder(&mut client), Some(None));
-    assert!(!client.controls_lent());
+    assert_eq!(pressed(&mut client), Some(Pad::LEFT.bits()));
+    // The window left: every key let go, and the person away.
+    input.release_all();
+    client.away(true);
+    input.key(Key::Left, true);
+    run(&mut client, &mut input, 1);
+    assert!(client.controls_lent());
+    assert_eq!(pressed(&mut client), None, "nothing said pressed");
+    // Back: pressed again at once, nothing asked.
+    client.away(false);
+    run(&mut client, &mut input, 1);
+    assert_eq!(pressed(&mut client), Some(Pad::LEFT.bits()));
 }
 
 #[test]

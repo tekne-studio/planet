@@ -1,7 +1,8 @@
 //! Two machines play a game of two pads at one cabinet through a world the
 //! Go server serves, each a whole client with every plugin, its game run by
 //! the console as the desktop shell runs it: the frames each draws agree,
-//! update by update. One drops and comes back, and a third finds no station.
+//! update by update. One whose window loses the keys keeps its station, one
+//! drops and comes back, and a third finds no station.
 //!
 //! It needs a world served, alone so every session is its admin, and a
 //! game of two pads built, so `cargo test` alone skips it: run it ignored,
@@ -80,6 +81,18 @@ fn two_machines_play_one_game_through_a_world_and_draw_the_same_frames() {
     turns(&mut [&mut a, &mut b, &mut c], 60, pressed);
     assert!(c.opened.is_empty(), "a third plays nothing");
     drop(c);
+
+    // B's window loses the keys: its station kept, its pad released, the
+    // game runs on for both. The keys back, B presses again, nothing asked.
+    b.client.away(true);
+    turns(&mut [&mut a, &mut b], 120, pressed);
+    let away = agree(&a, &b);
+    assert!(away > agreed + 100, "away, B ran on: {agreed} then {away}");
+    b.client.away(false);
+    turns(&mut [&mut a, &mut b], 120, pressed);
+    let back = agree(&a, &b);
+    assert!(back > away + 100, "back, B plays: {away} then {back}");
+    let agreed = back;
 
     // B's link drops; A plays on alone. B comes back and plays again from
     // the station it held, its game run at once through what it missed.

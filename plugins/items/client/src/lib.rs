@@ -1958,17 +1958,31 @@ mod tests {
         assert_eq!(client.drain_running(), [client::Running::Resume(picture)]);
         assert!(client.controls_lent());
         assert_eq!(waiting(&mut client), Some(Vec::new()), "said once empty");
-        // Gone away, the page hidden: held at once, before any frame.
-        client.away();
+        // Away, the page hidden: held at once, before any frame, and the
+        // controls still lent, pressing nothing.
+        client.away(true);
         assert_eq!(client.drain_running(), [client::Running::Hold(picture)]);
+        input.key(Key::Left, true);
         update(&mut client, &mut input);
-        assert!(!client.controls_lent());
-        // Shown again past the window, its first frame carrying all the
-        // time it hid: it stops, and the cabinet offers a new game.
-        client.update(client::GAME_WAITS_AWAY_S + 1.0, &mut input);
-        assert_eq!(client.drain_running(), [client::Running::Close(picture)]);
+        assert!(client.controls_lent());
+        assert!(client.drain_running().is_empty(), "nothing pressed");
+        // Back after long, its first frame carrying all the time it hid:
+        // it runs on where it was, nothing to press to say so.
+        client.update(600.0, &mut input);
+        assert!(client.drain_running().is_empty(), "never stopped");
+        client.away(false);
         update(&mut client, &mut input);
-        assert_eq!(tap(&mut client), Some(play::word::PLAY));
+        assert_eq!(
+            client.drain_running(),
+            [
+                client::Running::Resume(picture),
+                client::Running::Press {
+                    picture,
+                    pad: client::Pad::LEFT
+                }
+            ]
+        );
+        assert!(client.controls_lent());
     }
 
     /// A plugin that takes the controls when told to, with no look.

@@ -6,9 +6,9 @@
 //! it from what the person saw, though the holder steps the body somewhere
 //! as it takes them, and back to the body's camera once they come home.
 //!
-//! A key always leaves (`Key::Leave`), and so does the shell letting every
-//! key go, a passage taking the body and the holder switched off: nothing
-//! holds a person.
+//! A key always leaves (`Key::Leave`), and so do a passage taking the body
+//! and the holder switched off: nothing holds a person. The person away,
+//! the page hidden or its window left, keeps them (`Client::away`).
 
 use core::ops::BitOr;
 

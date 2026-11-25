@@ -318,10 +318,14 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => stage.resize(size),
+            // Without the keys, the person is away from the world until
+            // they come back.
             WindowEvent::Focused(false) => {
                 self.input.release_all();
                 stage.set_looking(false);
+                self.client.away(true);
             }
+            WindowEvent::Focused(true) => self.client.away(false),
             // While a plugin has the pointer, the left button is its tool's
             // and the right one looks while it is held. Otherwise a click
             // captures the pointer, and the camera has it until Escape.

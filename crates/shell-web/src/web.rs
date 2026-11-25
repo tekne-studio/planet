@@ -928,7 +928,8 @@ fn listen(canvas: &HtmlCanvasElement, state: &Rc<RefCell<State>>) -> Vec<Listene
     // The canvas or the page losing focus lets every key go: what was held
     // cannot be heard up again. A finger lifting is always heard, so a
     // button of the page touched beside the stick leaves the stick held;
-    // the page itself going lets the fingers go too.
+    // the page itself going lets the fingers go too, and the person is
+    // away from the world until it comes back.
     let blur = |page: bool| {
         let state = state.clone();
         move |_: web_sys::Event| {
@@ -939,14 +940,23 @@ fn listen(canvas: &HtmlCanvasElement, state: &Rc<RefCell<State>>) -> Vec<Listene
             state.secondary_down = None;
             if page {
                 state.fingers.release(&mut state.input);
+                state.client.away(true);
+            }
+        }
+    };
+    let focus = {
+        let state = state.clone();
+        move |_: web_sys::Event| {
+            if !away() {
+                state.borrow_mut().client.away(false);
             }
         }
     };
 
     // A hidden page draws no frame, so nothing names a sustained voice,
-    // and no frame holds a game its player left: the page going and coming
-    // says so instead, a game held as the page hides, by the frame's own
-    // handing of what the games run.
+    // and no frame holds a game: the page going and coming says so
+    // instead, a game held as the page hides, by the frame's own handing
+    // of what the games run. Shown again, it is back only with the keys.
     let shown = {
         let state = state.clone();
         move |_: web_sys::Event| {
@@ -956,9 +966,7 @@ fn listen(canvas: &HtmlCanvasElement, state: &Rc<RefCell<State>>) -> Vec<Listene
             {
                 let mut state = state.borrow_mut();
                 state.audio.hidden(hidden);
-                if hidden {
-                    state.client.away();
-                }
+                state.client.away(away());
             }
             if hidden {
                 carts::tick(&state);
@@ -972,6 +980,7 @@ fn listen(canvas: &HtmlCanvasElement, state: &Rc<RefCell<State>>) -> Vec<Listene
         Listener::add(page, "keydown", key(true)),
         Listener::add(page, "keyup", key(false)),
         Listener::add(page, "blur", blur(true)),
+        Listener::add(page, "focus", focus),
         Listener::add(target, "pointerdown", down),
         Listener::add(target, "pointerup", up()),
         Listener::add(target, "pointercancel", up()),
@@ -989,6 +998,14 @@ fn press(state: &mut State, code: &str, chord: Chord, down: bool, repeat: bool) 
     let asked = state.client.asks(code, chord);
     let lent = state.client.controls_lent();
     keys::press(&mut state.input, code, chord, (down, repeat), asked, lent)
+}
+
+/// Whether the person is away from the world: the page hidden, or its
+/// window without the keys, the address bar or another app holding them.
+fn away() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .is_none_or(|d| d.hidden() || !d.has_focus().unwrap_or(true))
 }
 
 /// Whether a pointer is a finger on the glass.

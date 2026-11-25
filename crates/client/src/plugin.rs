@@ -187,7 +187,8 @@ pub struct Turn<'a> {
     /// not the pointer.
     pub using: bool,
     /// What the controls press, for the plugin they are lent to; `None`
-    /// for every other.
+    /// for every other, and for it while the person is away from the
+    /// world, the page hidden or its window left ([`crate::Client::away`]).
     pub controls: Option<Pad>,
     /// What is held right now, command and shift. The core's keys, so a
     /// plugin reads them here and never asks for them: a shift asked for
@@ -873,8 +874,8 @@ impl Host<'_> {
     }
 
     /// Whether this plugin holds the controls. They are taken back without
-    /// asking: by the key that leaves, a passage, or the shell letting
-    /// every key go, so a holder reads this in its turn.
+    /// asking, by the key that leaves or a passage, so a holder reads this
+    /// in its turn.
     pub fn holds_controls(&self) -> bool {
         self.lent.controls.holder() == Some(self.plugin)
     }
@@ -1422,7 +1423,7 @@ impl Plugins {
         &mut self,
         eye: &Eye,
         input: &Input,
-        pad: Pad,
+        pad: Option<Pad>,
         (interrupted, inspected): (bool, bool),
         mut lent: Lent<'_>,
     ) {
@@ -1438,7 +1439,7 @@ impl Plugins {
             let turn = Turn {
                 eye: *eye,
                 using: input.held(Key::Use) && *lent.pointer == Some(name),
-                controls: (lent.controls.holder() == Some(name)).then_some(pad),
+                controls: pad.filter(|_| lent.controls.holder() == Some(name)),
                 chord: input.chord,
                 keys: &keys,
                 interrupted,

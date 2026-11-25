@@ -11,15 +11,19 @@
 //! budget it shares with the moving pictures ([`crate::live`]).
 //!
 //! A game its player leaves waits for them: it stays open, and the same
-//! player sitting again within the window takes it back ([`GAME_WAITS_S`], or
-//! [`GAME_WAITS_AWAY_S`] for one who went away from the world). What the game
-//! does while it waits is its players' policy, apart from the waiting, so a
-//! game of several can run on while one of them is away: a game of one
-//! player is held ([`Running::Hold`]), no update run and its sound stopped
-//! where it is, and runs on from there as the player sits again
-//! ([`Running::Resume`]), as if never left. Past the window the game stops
-//! and its cover takes its place again. A game waiting keeps its place in
-//! the live budget and gives it to a game wanted first.
+//! player sitting again within the window takes it back ([`GAME_WAITS_S`]).
+//! What the game does while it waits is its players' policy, apart from the
+//! waiting, so a game of several can run on while one of them is away: a
+//! game of one player is held ([`Running::Hold`]), no update run and its
+//! sound stopped where it is, and runs on from there as the player sits
+//! again ([`Running::Resume`]), as if never left. Past the window the game
+//! stops and its cover takes its place again. A game waiting keeps its
+//! place in the live budget and gives it to a game wanted first.
+//!
+//! A player away from the world, the page hidden or its window left
+//! ([`Carts::away`]), has left nothing: a game of one player they play is
+//! held as one left is, for as long as they are away, and runs on as they
+//! come back, with no window and nothing to press.
 //!
 //! A game whose file plays several pads, as its cover says
 //! ([`crate::Client::running_plays`]), is fed: it runs only the updates its
@@ -75,12 +79,6 @@ pub(crate) const HEARD_M: f64 = 12.0;
 /// offer, the key that leaves or anything else that ends a game played,
 /// seconds: a slip of a key, and a step back to the cabinet.
 pub const GAME_WAITS_S: f64 = 5.0;
-
-/// How long a game waits for a player who went away from the world, the
-/// page hidden or covered or its window left, seconds: a while to answer
-/// someone and come back. Longer than [`GAME_WAITS_S`]: one called away
-/// has not walked off, and a game held costs no tick and no sound.
-pub const GAME_WAITS_AWAY_S: f64 = 60.0;
 
 /// The updates a second a game runs at: the console's.
 pub const UPDATES_PER_S: u32 = arcade::TICKS;
@@ -185,8 +183,12 @@ struct Game {
     at: DVec3,
     /// The size of its screen, once the shell said it.
     size: Option<(u32, u32)>,
-    /// Its player gone, while it waits for them.
-    left: Option<Left>,
+    /// Its player gone, since when on the games' clock, seconds, while it
+    /// waits for them.
+    left: Option<f64>,
+    /// Whether the shell was last told to hold it ([`Running::Hold`]): a
+    /// game of one player, left or its player away.
+    paused: bool,
     /// What a game fed was given since it opened: fed games only.
     fed: Option<Fed>,
 }
@@ -201,14 +203,6 @@ struct Fed {
     /// Whether the shell answered its open: what is fed before then is
     /// never given.
     ready: bool,
-}
-
-/// A player gone from a game that waits for them: since when on the
-/// games' clock, and for how long, seconds.
-#[derive(Clone, Copy)]
-struct Left {
-    at_s: f64,
-    for_s: f64,
 }
 
 /// A cartridge's cover, still ([`Running::Cover`]): one picture a
@@ -333,6 +327,24 @@ pub struct Carts {
     /// is as long on a slow screen as on a fast one, and a hidden page's
     /// time counts at its first frame back.
     now_s: f64,
+    /// Whether the player is away from the world ([`Carts::away`]).
+    away: bool,
+}
+
+impl Game {
+    /// What tells the shell to hold it or run it on, as it is `paused` or
+    /// not, once the shell `runs` it: nothing when it was told so already,
+    /// and nothing for a game fed, which holds where its feeding ends.
+    fn pause(&mut self, paused: bool, runs: bool) -> Option<Running> {
+        if self.fed.is_some() || self.stopped || !runs || self.paused == paused {
+            return None;
+        }
+        self.paused = paused;
+        Some(match paused {
+            true => Running::Hold(self.picture),
+            false => Running::Resume(self.picture),
+        })
+    }
 }
 
 impl Carts {
@@ -381,6 +393,7 @@ impl Carts {
                     at: centre,
                     size: None,
                     left: None,
+                    paused: false,
                     fed: None,
                 }
             });
@@ -656,22 +669,26 @@ impl Carts {
         self.playing.insert(key, self.frame);
     }
 
-    /// The player went away from the world, the page hidden or its window
-    /// left: every game played is left at once, each waiting for them
-    /// [`GAME_WAITS_AWAY_S`]. Called as it happens, a frame drawn after or
-    /// not, with whether a cabinet still runs a game ([`Carts::end_frame`]).
-    pub(crate) fn away(&mut self, live: &mut Live, runs: impl Fn(GameId) -> bool) {
-        let left: Vec<GameId> = self.playing.drain().map(|(key, _)| key).collect();
-        for key in left {
-            self.leave(key, GAME_WAITS_AWAY_S, live, runs(key));
+    /// Whether the player is `away` from the world, the page hidden or its
+    /// window left: every game of one player they play holds at once, a
+    /// frame drawn after or not, and runs on as they come back. None is
+    /// left: they come back to it however long they were away.
+    pub(crate) fn away(&mut self, away: bool, live: &Live) {
+        self.away = away;
+        for &key in self.playing.keys() {
+            let Some(game) = self.games.get_mut(&key).filter(|game| game.left.is_none()) else {
+                continue;
+            };
+            let runs = live.is_playing(Source::Game(key.0, key.1));
+            self.running.extend(game.pause(away, runs));
         }
     }
 
     /// The player of the game `key` left it: a game running waits for them
-    /// `for_s` seconds and, played by one, is held meanwhile; one the shell
-    /// has not opened yet, or whose cabinet no longer `runs` it, has
+    /// [`GAME_WAITS_S`] and, played by one, is held meanwhile; one the
+    /// shell has not opened yet, or whose cabinet no longer `runs` it, has
     /// nothing to come back to, and stops.
-    fn leave(&mut self, key: GameId, for_s: f64, live: &mut Live, runs: bool) {
+    fn leave(&mut self, key: GameId, live: &mut Live, runs: bool) {
         let source = Source::Game(key.0, key.1);
         let Some(game) = self.games.get_mut(&key) else {
             return;
@@ -685,17 +702,12 @@ impl Carts {
             self.running.push(Running::Close(game.picture));
             return;
         }
-        game.left = Some(Left {
-            at_s: self.now_s,
-            for_s,
-        });
+        game.left = Some(self.now_s);
         live.hold(source);
         self.waiting.push(key);
         // A game of one player holds while it waits; a game fed runs as it
         // is fed.
-        if game.fed.is_none() {
-            self.running.push(Running::Hold(game.picture));
-        }
+        self.running.extend(game.pause(true, true));
     }
 
     /// Whether the game `key` waits for the player who left it: sitting
@@ -715,9 +727,9 @@ impl Carts {
                 .games
                 .get(key)
                 .filter(|game| Some(game.seen) == closed)?;
-            let left = game.left?;
-            let remains_s = (left.at_s + left.for_s - self.now_s).max(0.0);
-            Some((key.0, game.at, remains_s, left.for_s))
+            let left_s = game.left?;
+            let remains_s = (left_s + GAME_WAITS_S - self.now_s).max(0.0);
+            Some((key.0, game.at, remains_s, GAME_WAITS_S))
         })
     }
 
@@ -855,6 +867,7 @@ impl Carts {
                         continue;
                     };
                     game.held = Pad::NONE;
+                    game.paused = false;
                     // A game of several pads is fed: its players' machines
                     // agree on each update before it runs.
                     let plays = self.covers.get(&cart).and_then(|cover| cover.plays);
@@ -907,7 +920,7 @@ impl Carts {
             kept
         });
         for key in left {
-            self.leave(key, GAME_WAITS_S, live, runs(key));
+            self.leave(key, live, runs(key));
         }
         // The window ends before a player sits again: the first frame back
         // from a hidden page carries all the time it hid.
@@ -921,10 +934,10 @@ impl Carts {
             let Some(game) = games.get_mut(&key) else {
                 return false;
             };
-            let Some(left) = game.left else {
+            let Some(left_s) = game.left else {
                 return false;
             };
-            if now_s - left.at_s <= left.for_s && runs(key) {
+            if now_s - left_s <= GAME_WAITS_S && runs(key) {
                 return true;
             }
             // It stops as a game nobody plays does.
@@ -935,16 +948,18 @@ impl Carts {
             false
         });
         // Asked again while it waits, its player sat again: wanted from
-        // now, so no game wanted meanwhile takes its place.
+        // now, so no game wanted meanwhile takes its place. A game played
+        // runs, or holds while its player is away, opened meanwhile too.
         for &key in self.playing.keys() {
-            if let Some(game) = self.games.get_mut(&key)
-                && game.left.take().is_some()
-            {
-                live.resume(Source::Game(key.0, key.1));
-                if game.fed.is_none() {
-                    self.running.push(Running::Resume(game.picture));
-                }
+            let Some(game) = self.games.get_mut(&key) else {
+                continue;
+            };
+            let source = Source::Game(key.0, key.1);
+            if game.left.take().is_some() {
+                live.resume(source);
             }
+            self.running
+                .extend(game.pause(self.away, live.is_playing(source)));
         }
         // What is pressed now, and what was held and is let go.
         let pressed = core::mem::take(&mut self.pressed);
@@ -1755,23 +1770,67 @@ mod tests {
     }
 
     #[test]
-    fn a_player_gone_away_leaves_every_game_at_once_for_the_away_window() {
+    fn a_player_away_holds_the_game_played_and_runs_it_on_as_they_come_back() {
         let mut carts = Held::default();
         let (picture, _) = carts.running(1, cart(1));
         carts.play(1, cart(1), at(3.0), &screen());
         carts.end_frame();
         carts.drain_running();
-        // Gone between frames: held then, before any frame is drawn.
-        carts.carts.away(&mut carts.live, |_| true);
+        // Gone between frames: held then, before any frame is drawn, and
+        // left not: it waits for no window.
+        carts.carts.away(true, &carts.live);
         assert_eq!(carts.drain_running(), [Running::Hold(picture)]);
-        for _ in 0..waits_frames(GAME_WAITS_AWAY_S) {
-            carts.draw(1, cart(1), at(3.0), &screen());
+        assert!(!carts.waits((1, cart(1))));
+        for _ in 0..waits_frames(GAME_WAITS_S) {
+            carts.play(1, cart(1), at(3.0), &screen());
             carts.end_frame();
         }
+        carts.play(1, cart(1), at(3.0), &screen());
+        carts.end_frame_after(3600.0);
+        assert!(carts.drain_running().is_empty(), "held, never stopped");
+        // Back: it runs on where it was, nothing pressed to say so.
+        carts.carts.away(false, &carts.live);
+        assert_eq!(carts.drain_running(), [Running::Resume(picture)]);
+        carts.play(1, cart(1), at(3.0), &screen());
+        carts.end_frame();
+        assert!(carts.drain_running().is_empty(), "said once");
+    }
+
+    #[test]
+    fn a_game_opened_while_its_player_is_away_holds_once_it_runs() {
+        let mut carts = Held::default();
+        carts.carts.away(true, &carts.live);
+        carts.play(1, cart(1), at(3.0), &screen());
+        carts.end_frame();
+        let picture = opened(&carts.drain_running())[0];
+        carts.opened(picture, Ok((160, 120))).unwrap();
+        carts.play(1, cart(1), at(3.0), &screen());
+        carts.end_frame();
+        assert_eq!(carts.drain_running(), [Running::Hold(picture)]);
+        carts.carts.away(false, &carts.live);
+        assert_eq!(carts.drain_running(), [Running::Resume(picture)]);
+    }
+
+    #[test]
+    fn a_game_left_while_its_player_is_away_waits_its_window_and_holds_once() {
+        let mut carts = Held::default();
+        let (picture, _) = carts.running(1, cart(1));
+        carts.play(1, cart(1), at(3.0), &screen());
+        carts.end_frame();
+        carts.drain_running();
+        carts.carts.away(true, &carts.live);
+        assert_eq!(carts.drain_running(), [Running::Hold(picture)]);
+        // Left by an agent's command meanwhile: held already, it waits.
+        carts.draw(1, cart(1), at(3.0), &screen());
+        carts.end_frame();
         assert!(carts.drain_running().is_empty());
-        // A hidden page's time comes at once: past the window, it stops.
-        carts.end_frame_after(GAME_WAITS_AWAY_S);
-        assert_eq!(carts.drain_running(), [Running::Close(picture)]);
+        assert!(carts.waits((1, cart(1))));
+        // Back: still left, it holds until sat at again.
+        carts.carts.away(false, &carts.live);
+        assert!(carts.drain_running().is_empty());
+        carts.play(1, cart(1), at(3.0), &screen());
+        carts.end_frame();
+        assert_eq!(carts.drain_running(), [Running::Resume(picture)]);
     }
 
     #[test]

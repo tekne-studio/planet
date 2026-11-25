@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 
-use client::{Host, PADS, Pad, PartId, Relayed, Turn};
+use client::{Host, PADS, PartId, Relayed, Turn};
 use items_world::{LOOK, RISE, SIT, wire};
 use prost::Message;
 
@@ -262,10 +262,9 @@ impl Items {
             return self.rise(host);
         }
         let given = host.game_given(cabinet);
-        let pad = turn
-            .controls
-            .filter(|_| played)
-            .or(played.then_some(Pad::NONE));
+        // Away or not playing, nothing pressed: alone the game holds, and
+        // with others this pad is written released.
+        let pad = turn.controls.filter(|_| played);
         for payload in playing.versus.turn(turn.now_s, pad, given.is_some()) {
             host.relay(named, payload);
         }

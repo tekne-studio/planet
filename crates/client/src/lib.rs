@@ -62,7 +62,7 @@ pub use animals::{BUILT, Keeping, Near};
 pub use assets::{AssetRequest, Form};
 use assets::{MANIFEST_PATH, Manifest, Purpose, Requests};
 use carts::Carts;
-pub use carts::{GAME_LONGEST, GAME_WAITS_AWAY_S, GAME_WAITS_S, PADS, Running, UPDATES_PER_S};
+pub use carts::{GAME_LONGEST, GAME_WAITS_S, PADS, Running, UPDATES_PER_S};
 pub use cells::{Aim, Cells, Guide, Met, PALETTE, REACH_M, Refusal, Seat, Sight};
 pub use collision::BODY_M;
 use controller::Refused;
@@ -325,6 +325,8 @@ pub struct Client {
     had_anchors: bool,
     had_labels: bool,
     had_waiting: bool,
+    /// Whether the person is away from the world ([`Client::away`]).
+    away: bool,
     /// A body's passage, through a portal or travelling, while it lasts.
     passage: Option<Passage>,
     /// A clip asked for over what the body moves by, while it plays.
@@ -430,6 +432,7 @@ impl Client {
             had_anchors: false,
             had_labels: false,
             had_waiting: false,
+            away: false,
             passage: None,
             played: None,
             seen: BTreeMap::new(),
@@ -2179,11 +2182,6 @@ impl Client {
         let (look, zoom) = (taken.look, taken.zoom);
         self.entropy = self.entropy.wrapping_add(dt.to_bits()).rotate_left(7);
         let struck = [Key::Forward, Key::Back].map(|key| taken.pressed.contains(&key));
-        // The shell letting every key go is the person gone: a hidden tab
-        // presses nothing.
-        if taken.interrupted {
-            self.away();
-        }
         let lent = self.controls_lent();
         let tapped = Pad::tapped(&taken.pressed);
         for key in taken.pressed {
@@ -2336,10 +2334,8 @@ impl Client {
         };
         // Each plugin's turn, then the cells drawn as the turns left them,
         // and kept in step with what the world holds near the body.
-        let pad = match self.controls_lent() {
-            true => self.controls.pad(input, tapped),
-            false => Pad::NONE,
-        };
+        // Away, the holder keeps the controls and is pressed nothing.
+        let pad = (self.controls_lent() && !self.away).then(|| self.controls.pad(input, tapped));
         let (plugins, lent) = self.lend();
         plugins.turn(&eye, input, pad, (taken.interrupted, taken.inspected), lent);
         self.tell_mode();
@@ -2554,16 +2550,15 @@ impl Client {
         self.events.push(Event::Waiting { waiting });
     }
 
-    /// The person went away from the world, the page hidden or its window
-    /// left: the controls come back, and every game played is left at
-    /// once, waiting for them [`GAME_WAITS_AWAY_S`]. A shell calls it as it
+    /// Whether the person is `away` from the world, the page hidden or its
+    /// window left: away is not gone. The controls stay lent and the eye
+    /// with them, their holder is pressed nothing, and a game of one player
+    /// they play holds, to run on as they come back. A shell calls it as it
     /// happens, and drains what the games run at once: a hidden page may
     /// draw no frame for long.
-    pub fn away(&mut self) {
-        self.controls.take_back();
-        let parts = &self.parts;
-        self.carts
-            .away(&mut self.live, |key| carts::runs(parts, key));
+    pub fn away(&mut self, away: bool) {
+        self.away = away;
+        self.carts.away(away, &self.live);
     }
 
     /// The frame as it would look once streaming caught up. Blocks until every

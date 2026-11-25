@@ -13,8 +13,8 @@
 //! to the level and tone it is named with each frame, and faded out the
 //! first frame it is not; while the page is hidden every sustained voice
 //! eases to silence, and back as it shows. A game's stream holds with its
-//! game, the page hidden among the ways a player leaves one, eased out and
-//! kept where it is, and eased in from there as it runs on. What else
+//! game, left by its player or its player away, eased out and kept where
+//! it is, and eased in from there as it runs on. What else
 //! sounds goes on hidden: a struck voice plays out, and a video or clip
 //! plays on as loud as it was.
 //! Positions are given relative to the

@@ -25,8 +25,8 @@
 //! them is sent how the game ran so far, its buttons as runs ([`Runs`]),
 //! runs it to the same update, and the two go on together: a game is
 //! joined where it is, never started again. A game of two does not hold for
-//! one who stepped away: their machine writes their pad released, and the
-//! other plays on.
+//! one who stepped away or whose window lost the keys: their machine writes
+//! their pad released, and the other plays on.
 //!
 //! Nothing a peer sends is trusted to be well made: bytes past a pad's
 //! bits, a pad its sender does not hold, a gap, the past, a flood of the
@@ -36,7 +36,7 @@
 
 use std::collections::VecDeque;
 
-use client::{GAME_LONGEST, GAME_WAITS_AWAY_S, PADS, Pad, RELAY_BYTES, UPDATES_PER_S};
+use client::{GAME_LONGEST, PADS, Pad, RELAY_BYTES, UPDATES_PER_S};
 use items_world::wire::{self, versus};
 use prost::Message;
 
@@ -74,9 +74,10 @@ const AHEAD_MOST: u64 = UPDATES_PER_S as u64;
 const LAG_MOST: u64 = 2 * DELAY;
 
 /// How far behind the update every pad has bytes for a machine may fall
-/// before it gives up its station: as long as a game waits for a player
-/// called away.
-const BEHIND_MOST: u64 = GAME_WAITS_AWAY_S as u64 * UPDATES_PER_S as u64;
+/// before it gives up its station, a minute: one whose page was hidden
+/// longer comes back to a game gone on without it, and rises rather than
+/// keep and run that much at once.
+const BEHIND_MOST: u64 = 60 * UPDATES_PER_S as u64;
 
 /// How far behind the update due a game runs what it missed at once, in
 /// place of at its pace: more than a link holds in flight.
