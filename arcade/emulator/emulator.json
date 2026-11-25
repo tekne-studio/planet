@@ -1,14 +1,15 @@
 {
 	"contract": 1,
 	"engine": 1,
-	"runner": "aa8ed22b5071653c35ad2daaa8acf7b843c284acfe55007f088ef8625731e308.wasm",
-	"host": "077b166683bac621e670df355fc9503d08fd83041578dbedcb61fe12bfaa94e7.js",
+	"runner": "abd01186e9c1dfc66ae2ce8bf5b31bc00f14c3ccd4648ab81de6e96d89027b8f.wasm",
+	"host": "0ed3f5195c41c223c7b8326cc8f07b4dd571fd04d9a980230da3a074ac8e4ab4.js",
 	"chip": "ae0bb019276abb9b7bd191f0eb83085ab5ac93134929abf293083ab47794642f.wasm",
 	"processor": "9051e374fa134b05079323c80d3ddad453c0c970f503d90dfa21368e00625d31.js",
 	"width": 160,
 	"height": 120,
 	"ticks": 60,
 	"most": 262144,
+	"longest": 4194304,
 	"tones": 16,
 	"pages": 16,
 	"table": 4096,
@@ -23,6 +24,8 @@
 		"b": 32,
 		"start": 64
 	},
+	"pads": 2,
+	"pad_bits": 8,
 	"keys": {
 		"ArrowLeft": 1,
 		"KeyA": 1,
@@ -40,5 +43,24 @@
 		"Enter": 64,
 		"NumpadEnter": 64
 	},
-	"cases": "a0d7b7a5321fcfb53441ad455b50d9dd478dcee2e113ef118df8cd133640e408.json"
+	"shared": {
+		"KeyA": 1,
+		"KeyD": 2,
+		"KeyW": 4,
+		"KeyS": 8,
+		"Space": 16,
+		"KeyZ": 16,
+		"ShiftLeft": 32,
+		"KeyX": 32,
+		"Digit1": 64,
+		"ArrowLeft": 256,
+		"ArrowRight": 512,
+		"ArrowUp": 1024,
+		"ArrowDown": 2048,
+		"KeyK": 4096,
+		"KeyL": 8192,
+		"Enter": 16384,
+		"NumpadEnter": 16384
+	},
+	"cases": "0ca31ecae54d245fa13f6447a1a059a4aed42eb861383e8b9c9e3e4fc40f1fdd.json"
 }

@@ -1,6 +1,6 @@
-//! The host's own calls past what a shell asks: a file too large, a step
-//! of every update there is, a window past a memory's end. Each answers,
-//! and the emulator runs on.
+//! The host's own calls past what a shell asks: a file too large, a script
+//! too long, a step of every update there is, a window past a memory's
+//! end. Each answers, and the emulator runs on.
 
 mod support;
 
@@ -31,6 +31,31 @@ fn a_file_past_the_most_is_refused_by_its_size() {
     let why = emulator.stop(1).unwrap().expect("it stops");
     assert!(why.contains("KB"), "{why}");
     assert_eq!(emulator.cover(&large, "ab").unwrap().said, None);
+    runs_on(&mut emulator, &game);
+}
+
+#[test]
+fn a_script_past_the_longest_gets_no_room() {
+    let (mut emulator, game) = hosted();
+    emulator.open(4, &game, 1, 0.0, false).unwrap();
+    emulator.script(4, &[1, 2]).unwrap();
+    let broken = emulator
+        .script(4, &vec![0; arcade::LONGEST + 1])
+        .unwrap_err();
+    assert!(
+        broken
+            .0
+            .ends_with(&format!("past the {} one holds", arcade::LONGEST)),
+        "{broken}"
+    );
+    // What it plays plays on, and a script of the longest is one.
+    assert_eq!(emulator.scripted(4).unwrap(), Some(2));
+    emulator.script(4, &vec![0; arcade::LONGEST]).unwrap();
+    assert_eq!(
+        emulator.scripted(4).unwrap(),
+        Some(2 + arcade::LONGEST as u32)
+    );
+    emulator.close(4).unwrap();
     runs_on(&mut emulator, &game);
 }
 

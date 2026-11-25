@@ -22,8 +22,8 @@ fn button(name: &str) -> u32 {
 }
 
 /// A while on the title, start, then the first choice taken a few times
-/// and the stick held each way, a byte an update.
-fn buttons() -> Vec<u8> {
+/// and the stick held each way.
+fn buttons() -> Vec<u32> {
     let [start, a, left, right] = ["start", "a", "left", "right"].map(button);
     (0..UPDATES)
         .map(|tick| match tick {
@@ -32,7 +32,7 @@ fn buttons() -> Vec<u8> {
             500..560 => left,
             600..660 => right,
             _ => 0,
-        } as u8)
+        })
         .collect()
 }
 

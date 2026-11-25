@@ -24,7 +24,7 @@ struct Case {
     test: String,
     file: Vec<u8>,
     seed: u32,
-    buttons: Vec<u8>,
+    buttons: Vec<u32>,
     check: String,
     run: String,
 }
@@ -41,7 +41,7 @@ impl Case {
             let [value, count] = held.as_array()?.as_slice() else {
                 return None;
             };
-            let value = u8::try_from(value.as_u64()?).ok()?;
+            let value = u32::try_from(value.as_u64()?).ok()?;
             buttons.extend(std::iter::repeat_n(value, count.as_u64()? as usize));
         }
         let run = &case["run"];

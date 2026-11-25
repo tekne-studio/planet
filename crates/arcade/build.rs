@@ -13,7 +13,7 @@ const EMULATOR: &str = "../../arcade/emulator";
 
 /// A number of the manifest: its field, the constant it becomes, its type,
 /// and what it is.
-const NUMBERS: [(&str, &str, &str, &str); 11] = [
+const NUMBERS: [(&str, &str, &str, &str); 12] = [
     (
         "contract",
         "CONTRACT",
@@ -39,6 +39,12 @@ const NUMBERS: [(&str, &str, &str, &str); 11] = [
         "MOST",
         "usize",
         "The most bytes a cartridge's file may have.",
+    ),
+    (
+        "longest",
+        "LONGEST",
+        "usize",
+        "The most updates a script holds, the longest session the console keeps: a script past it gets no room.",
     ),
     (
         "tones",
@@ -77,12 +83,12 @@ const TABLES: [(&str, &str, &str); 2] = [
     (
         "buttons",
         "BUTTONS",
-        "The contract's buttons, each by its name to its bit.",
+        "The contract's buttons, each by its name to its bit in the first pad's byte.",
     ),
     (
         "keys",
         "KEYS",
-        "The keys a keyboard plays the buttons by, by the names a page's keyboard events give them (`KeyboardEvent.code`), each to its button's bit.",
+        "The keys one person plays the buttons by, by the names a page's keyboard events give them (`KeyboardEvent.code`), each to its button's bit: the first pad's.",
     ),
 ];
 
@@ -96,7 +102,7 @@ const FILES: [(&str, &str, &str); 2] = [
     (
         "cases",
         "CASES",
-        "The cases every host is held to, a JSON array: each a game's file in hex, its seed, its buttons as runs of `[value, count]` a byte an update, and the run a host must give. A case a host cannot run is a host that fails.",
+        "The cases every host is held to, a JSON array: each a game's file in hex, its seed, its buttons as runs of `[value, count]`, each the number `update` takes, and the run a host must give. A case a host cannot run is a host that fails.",
     ),
 ];
 

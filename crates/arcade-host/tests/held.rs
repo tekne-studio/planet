@@ -31,18 +31,17 @@ fn tick_ms(k: u64) -> f64 {
 }
 
 /// The contract's button of `name`.
-fn button(name: &str) -> u8 {
+fn button(name: &str) -> u32 {
     arcade::BUTTONS
         .iter()
         .find(|(named, _)| *named == name)
-        .map(|(_, bit)| *bit as u8)
+        .map(|(_, bit)| *bit)
         .unwrap_or_else(|| panic!("no button {name}"))
 }
 
 /// A while on the title, start, then played: the first choice taken now
-/// and then, the stick swept each way, a byte an update, past every update
-/// the test runs.
-fn buttons() -> Vec<u8> {
+/// and then, the stick swept each way, past every update the test runs.
+fn buttons() -> Vec<u32> {
     let [start, a, left, right] = ["start", "a", "left", "right"].map(button);
     (0..(HELD_AT + AFTER + HELD_FOR) * 2)
         .map(|update| match update {

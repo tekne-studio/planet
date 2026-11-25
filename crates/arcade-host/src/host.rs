@@ -254,6 +254,7 @@ struct Exports {
     close: TypedFunc<i32, ()>,
     press: TypedFunc<(i32, i32), ()>,
     pace: TypedFunc<(i32, f64, f64), ()>,
+    script_room: TypedFunc<i32, i32>,
     script: TypedFunc<i32, ()>,
     scripted: TypedFunc<i32, i32>,
     step: TypedFunc<(i32, i32), i32>,
@@ -340,6 +341,7 @@ impl Emulator {
             close: instance.get_typed_func(&store, "close")?,
             press: instance.get_typed_func(&store, "press")?,
             pace: instance.get_typed_func(&store, "pace")?,
+            script_room: instance.get_typed_func(&store, "script_room")?,
             script: instance.get_typed_func(&store, "script")?,
             scripted: instance.get_typed_func(&store, "scripted")?,
             step: instance.get_typed_func(&store, "step")?,
@@ -608,9 +610,28 @@ impl Emulator {
         Ok(self.runner.pace.call(&mut self.store, args)?)
     }
 
-    /// Plays `buttons` on `id`, a byte an update, after any script it plays.
-    pub fn script(&mut self, id: u32, buttons: &[u8]) -> Result<(), Broken> {
-        self.room(buttons)?;
+    /// Plays `buttons` on `id`, one an update, after any script it plays:
+    /// each the number `update` takes, every pad's buttons. A script past
+    /// the most one holds (`arcade::LONGEST`) gets no room, and is broken.
+    pub fn script(&mut self, id: u32, buttons: &[u32]) -> Result<(), Broken> {
+        // Past 4 G updates, any count past the longest is refused the same.
+        let count = u32::try_from(buttons.len()).unwrap_or(u32::MAX) as i32;
+        let at = self.runner.script_room.call(&mut self.store, count)?;
+        if at == 0 {
+            return Err(Broken(format!(
+                "a script of {} updates, past the {} one holds",
+                buttons.len(),
+                arcade::LONGEST
+            )));
+        }
+        // Given room, the count is at most the longest: its bytes fit an i32.
+        let len = count * 4;
+        let data = self.memory.data_mut(&mut self.store);
+        let range = limits::range(at, len, data.len())
+            .ok_or_else(|| Broken(outside(at, len).to_string()))?;
+        for (word, held) in data[range].chunks_exact_mut(4).zip(buttons) {
+            word.copy_from_slice(&held.to_le_bytes());
+        }
         Ok(self.runner.script.call(&mut self.store, id as i32)?)
     }
 
