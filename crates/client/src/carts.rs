@@ -536,7 +536,8 @@ impl Carts {
     pub(crate) fn given(&self, key: GameId, live: &Live) -> Option<u64> {
         let game = self.games.get(&key).filter(|game| !game.stopped)?;
         let fed = game.fed.filter(|fed| fed.ready)?;
-        live.is_open(Source::Game(key.0, key.1)).then_some(fed.given)
+        live.is_open(Source::Game(key.0, key.1))
+            .then_some(fed.given)
     }
 
     /// Gives the game `key`, fed, its next updates' buttons, run at its pace
@@ -1534,20 +1535,26 @@ mod tests {
         carts.play(7, cart(2), at(3.0), &screen());
         carts.end_frame();
         let running = carts.drain_running();
-        let [Running::Open {
-            picture, fed: true, ..
-        }] = running.as_slice()
+        let [
+            Running::Open {
+                picture, fed: true, ..
+            },
+        ] = running.as_slice()
         else {
             panic!("{running:?}");
         };
         let picture = *picture;
         // Nothing is given before the shell answers.
-        let Held { carts: fed, live, .. } = &mut carts;
+        let Held {
+            carts: fed, live, ..
+        } = &mut carts;
         assert_eq!(fed.given(game, live), None);
         fed.feed(game, &[1, 2], false, live);
         assert!(carts.drain_running().is_empty());
         carts.opened(picture, Ok((160, 120))).unwrap();
-        let Held { carts: fed, live, .. } = &mut carts;
+        let Held {
+            carts: fed, live, ..
+        } = &mut carts;
         assert_eq!(fed.given(game, live), Some(0));
         fed.feed(game, &[1, 0x100], false, live);
         fed.feed(game, &[0x101; 3], true, live);
@@ -1575,7 +1582,9 @@ mod tests {
         carts.draw(7, cart(2), at(3.0), &screen());
         carts.end_frame();
         assert!(carts.waits(game));
-        let Held { carts: fed, live, .. } = &mut carts;
+        let Held {
+            carts: fed, live, ..
+        } = &mut carts;
         fed.feed(game, &[0x100], false, live);
         assert_eq!(fed.given(game, live), Some(6));
         carts.play(7, cart(2), at(3.0), &screen());

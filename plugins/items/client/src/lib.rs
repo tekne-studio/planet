@@ -32,10 +32,12 @@ mod facing;
 mod gizmo;
 mod place;
 mod play;
+mod stations;
+mod versus;
 
 use client::{
     Act, Cabinet, Clip, ContentId, Eye, Host, ImageKind, KeyAsk, Landmarked, Media, Name, Part,
-    PartId, PictureLevel, Plugin, Portal, Shape, Someone, Turn,
+    PartId, PictureLevel, Plugin, Portal, Relayed, Shape, Someone, Turn,
 };
 
 use glam::{DQuat, DVec3, EulerRot};
@@ -657,6 +659,8 @@ pub struct Items {
     using: bool,
     /// The cabinet played, while the controls are lent to its game.
     played: Option<PartId>,
+    /// The stations of games of several pads, and the one held.
+    stations: stations::Stations,
     /// The cabinets near the body with a cartridge, as last offered.
     near: Vec<(PartId, DVec3)>,
     /// The eye as last seen: the view a look is framed in.
@@ -691,6 +695,7 @@ impl Default for Items {
             ahead: false,
             using: false,
             played: None,
+            stations: stations::Stations::default(),
             near: Vec::new(),
             eye: None,
             games: Vec::new(),
@@ -1470,6 +1475,20 @@ impl Plugin for Items {
         }
     }
 
+    fn receive(&mut self, kind: &str, payload: &[u8], host: &mut Host<'_>) {
+        if kind == items_world::STATIONS {
+            self.stations_said(payload, host);
+        }
+    }
+
+    fn relayed(&mut self, relayed: Relayed<'_>, _host: &mut Host<'_>) {
+        self.stations_relayed(&relayed);
+    }
+
+    fn left(&mut self, session: u32, _host: &mut Host<'_>) {
+        self.stations_left(session);
+    }
+
     fn act(&mut self, id: u64, act: Act, host: &mut Host<'_>) {
         self.play_act(id, act, host);
         // A cabinet played takes the pointer's place: the menu closes.
@@ -1537,6 +1556,7 @@ impl Plugin for Items {
     fn rest(&mut self, host: &mut Host<'_>) {
         self.using = false;
         self.leave(host);
+        self.rise(host);
         if self.editing {
             self.edit(false, host);
         }

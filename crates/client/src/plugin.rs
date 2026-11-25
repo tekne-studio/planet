@@ -939,9 +939,7 @@ impl Host<'_> {
     /// Nothing while [`Host::game_given`] says nothing.
     pub fn feed_game(&mut self, id: PartId, buttons: &[u32], at_once: bool) {
         if let Some(key) = self.game_of(id) {
-            self.lent
-                .carts
-                .feed(key, buttons, at_once, self.lent.live);
+            self.lent.carts.feed(key, buttons, at_once, self.lent.live);
         }
     }
 

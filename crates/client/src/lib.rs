@@ -97,9 +97,7 @@ pub use pets::{Pet, Spot};
 use pictures::Pictures;
 pub use pictures::{FULL_SIDE, LOW_SIDE, Moving, Screen, THUMB_SIDE};
 pub use place::Pose;
-pub use plugin::{
-    Eye, Feet, Host, InWay, PartHit, Plugin, RELAY_BYTES, Relayed, Standing, Turn,
-};
+pub use plugin::{Eye, Feet, Host, InWay, PartHit, Plugin, RELAY_BYTES, Relayed, Standing, Turn};
 use plugin::{Lent, Plugins};
 pub use scene::{Effects, Frame, ToneMap};
 pub use seam::{

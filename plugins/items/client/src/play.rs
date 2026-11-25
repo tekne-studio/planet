@@ -48,6 +48,7 @@ impl Items {
     /// controls press, and the eye follows its screen; with none played,
     /// every cabinet near whose game may be played is offered.
     pub(crate) fn play_turn(&mut self, turn: &Turn<'_>, host: &mut Host<'_>) {
+        self.stations_turn(turn, host);
         if let Some(played) = self.played
             && !(host.holds_controls() && host.game_playable(played))
         {
@@ -78,11 +79,12 @@ impl Items {
                     .iter()
                     .zip(1..)
                     .filter_map(|(&(id, top), offer)| {
-                        let tap = match host.game_waits(id) {
+                        let tap = match host.game_waits(id) || self.stations.sits_at(id) {
                             true => word::RESUME,
                             false => word::PLAY,
                         };
-                        host.game_playable(id).then_some(Offer {
+                        let open = host.game_playable(id) && self.station_open(host, id);
+                        open.then_some(Offer {
                             id: offer,
                             on: On::Point(top),
                             thing: word::CABINET,
@@ -110,6 +112,9 @@ impl Items {
         };
         if !host.game_playable(cabinet) {
             return host.reject("its game does not play".into());
+        }
+        if !self.sit(host, cabinet) {
+            return host.reject("every station of its game is held".into());
         }
         if host.hold_controls(self.look(host, cabinet)) {
             step_to_station(host, cabinet, 0);

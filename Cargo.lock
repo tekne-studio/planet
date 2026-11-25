@@ -1381,6 +1381,7 @@ dependencies = [
  "items-world",
  "libm",
  "part",
+ "prost",
  "scene",
  "serde",
  "serde_json",
