@@ -55,13 +55,19 @@ struct Playing {
 impl Stations {
     /// Whether this machine holds or asked for a station of `cabinet`.
     pub(crate) fn sits_at(&self, cabinet: PartId) -> bool {
-        self.playing
+        self.station_at(cabinet).is_some()
+    }
+
+    /// The station of `cabinet` this machine holds or asked for.
+    fn station_at(&self, cabinet: PartId) -> Option<usize> {
+        let playing = self
+            .playing
             .as_ref()
-            .is_some_and(|playing| playing.cabinet == cabinet)
-            || self
-                .asked
-                .as_ref()
-                .is_some_and(|asked| asked.cabinet == cabinet)
+            .filter(|playing| playing.cabinet == cabinet);
+        let asked = self.asked.as_ref().filter(|asked| asked.cabinet == cabinet);
+        playing
+            .map(|playing| playing.versus.station())
+            .or(asked.map(|asked| asked.station))
     }
 
     /// The first station of `cabinet` free among the `plays` its game reads.
@@ -104,21 +110,20 @@ impl Items {
         }
     }
 
-    /// Asks for a station of `cabinet` as it is played, when its game is one
-    /// of stations this machine does not sit at. False when none is free.
-    pub(crate) fn sit(&mut self, host: &mut Host<'_>, cabinet: PartId) -> bool {
+    /// The station `cabinet` is played from, asked for when its game is one
+    /// of stations this machine does not sit at: player 1's for a game of
+    /// one pad. `None` when none is free.
+    pub(crate) fn sit(&mut self, host: &mut Host<'_>, cabinet: PartId) -> Option<usize> {
         let Some(plays) = stations_of(host, cabinet) else {
-            return true;
+            return Some(0);
         };
-        if self.stations.sits_at(cabinet) {
-            return true;
+        if let Some(station) = self.stations.station_at(cabinet) {
+            return Some(station);
         }
-        let Some(station) = self.stations.free(cabinet, plays) else {
-            return false;
-        };
+        let station = self.stations.free(cabinet, plays)?;
         self.rise(host);
         self.ask(host, cabinet, station, Runs::default());
-        true
+        Some(station)
     }
 
     fn ask(&mut self, host: &mut Host<'_>, cabinet: PartId, station: usize, ran: Runs) {

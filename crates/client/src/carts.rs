@@ -196,6 +196,8 @@ struct Game {
 struct Fed {
     /// The updates given.
     given: u64,
+    /// The buttons of the update given last, every pad's.
+    last: u32,
     /// Whether the shell answered its open: what is fed before then is
     /// never given.
     ready: bool,
@@ -550,8 +552,9 @@ impl Carts {
         let Some(game) = self.games.get_mut(&key) else {
             return;
         };
-        if let Some(fed) = &mut game.fed {
+        if let (Some(fed), Some(&last)) = (&mut game.fed, buttons.last()) {
             fed.given += buttons.len() as u64;
+            fed.last = last;
         }
         self.running.push(Running::Feed {
             picture: game.picture,
@@ -806,12 +809,16 @@ impl Carts {
     }
 
     /// The cabinet whose game is played here, and what each of its
-    /// stations holds on it, as its game was last told: this client's at
-    /// player 1's, nothing at the others.
+    /// stations holds on it, as its game was last told: a fed game's every
+    /// pad as its last update was given, another's this client's at player
+    /// 1's and nothing at the others.
     pub(crate) fn pads_played(&self) -> Option<(PartId, [Pad; arcade::PADS])> {
         let key = self.played?;
-        let mut pads = [Pad::NONE; arcade::PADS];
-        pads[0] = self.games.get(&key)?.held;
+        let game = self.games.get(&key)?;
+        let pads = match game.fed {
+            Some(fed) => core::array::from_fn(|pad| Pad::of_pad(fed.last, pad)),
+            None => core::array::from_fn(|pad| if pad == 0 { game.held } else { Pad::NONE }),
+        };
         Some((PartId(key.0), pads))
     }
 

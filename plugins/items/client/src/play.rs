@@ -2,8 +2,9 @@
 //! glass, the prompt offers "Cabinet [E] Play"; a tap runs the game, lends
 //! the body's controls to it and the eye with them, eased to face its
 //! screen as from the player's head, and steps the body to player 1's
-//! station, square on to the machine ([`step_to_station`]). While it is
-//! played, what the controls press is the game's
+//! station, square on to the machine ([`step_to_station`]), or to the
+//! station it holds of a game of several pads ([`crate::stations`]). While
+//! it is played, what the controls press is the game's
 //! buttons, held each turn, and the body's own offer is "Cabinet [E]
 //! Leave". The controls come back by that offer, by the key that always
 //! leaves, and whenever the game stops or the cabinet goes: nothing holds a
@@ -13,8 +14,9 @@
 //! again. Left, the body stands where it played, free, and the eye eases
 //! back to the camera the person keeps.
 //!
-//! Each client runs its own copy of a game from the same seed: the one
-//! playing sees their game, and those near see its cover on theirs.
+//! Each client runs its own copy of a game of one pad from the same seed:
+//! the one playing sees their game, and those near see its cover on
+//! theirs. A game of several pads is played together, a player a station.
 
 use core::f64::consts::FRAC_1_SQRT_2;
 
@@ -113,11 +115,11 @@ impl Items {
         if !host.game_playable(cabinet) {
             return host.reject("its game does not play".into());
         }
-        if !self.sit(host, cabinet) {
+        let Some(station) = self.sit(host, cabinet) else {
             return host.reject("every station of its game is held".into());
-        }
+        };
         if host.hold_controls(self.look(host, cabinet)) {
-            step_to_station(host, cabinet, 0);
+            step_to_station(host, cabinet, station);
             host.play_game(cabinet);
             self.played = Some(cabinet);
         }
