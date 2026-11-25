@@ -22,7 +22,7 @@ export const LIST = 'roms.toml';
 
 const SERVED = `${ROOT}/assets/carts`;
 
-/** A ROM as the list says it: its game, its file, and what it ships under, one of three. */
+/** A ROM as the list says it: its game, its file, and what it ships under, one of three, the other two never. */
 export type Listed = {
 	/** How a command and the dev seam name its game: its built file's name (`nameOf`). */
 	name: string;
@@ -32,10 +32,14 @@ export type Listed = {
 	| {
 			/** Its licence as an SPDX expression, its crate's `license`. */
 			licence: string;
+			licenceFile?: never;
+			rights?: never;
 	  }
 	| {
 			/** Or its own licence's text, beside the list: its crate's `license-file`, as `<name>.LICENSE`. */
 			licenceFile: string;
+			licence?: never;
+			rights?: never;
 	  }
 	| {
 			/**
@@ -44,6 +48,8 @@ export type Listed = {
 			 * `[package.metadata.rom] rights = "reserved"`.
 			 */
 			rights: 'reserved';
+			licence?: never;
+			licenceFile?: never;
 	  }
 );
 
@@ -131,7 +137,7 @@ export function listed(folder = ROMS): Listed[] {
 }
 
 /** The files the list names beside it: each ROM, and its licence of its own. */
-export const filesOf = (roms: Listed[]): string[] => roms.flatMap((rom) => [named(rom.sha256, 'wasm'), ...('licenceFile' in rom ? [rom.licenceFile] : [])]);
+export const filesOf = (roms: Listed[]): string[] => roms.flatMap((rom) => [named(rom.sha256, 'wasm'), ...(rom.licenceFile !== undefined ? [rom.licenceFile] : [])]);
 
 /** The list as its file says it, the order kept. */
 export function written(roms: Listed[]): string {
@@ -142,7 +148,7 @@ export function written(roms: Listed[]): string {
 		'# folder is the only way a ROM changes.'
 	];
 	const terms = (rom: Listed) =>
-		'licence' in rom ? `licence = ${JSON.stringify(rom.licence)}` : 'licenceFile' in rom ? `licence-file = ${JSON.stringify(rom.licenceFile)}` : `rights = ${JSON.stringify(rom.rights)}`;
+		rom.licence !== undefined ? `licence = ${JSON.stringify(rom.licence)}` : rom.licenceFile !== undefined ? `licence-file = ${JSON.stringify(rom.licenceFile)}` : `rights = ${JSON.stringify(rom.rights)}`;
 	const entries = roms.map((rom) => ['[[rom]]', `name = ${JSON.stringify(rom.name)}`, `sha256 = ${JSON.stringify(rom.sha256)}`, terms(rom)].join('\n'));
 	return `${[head.join('\n'), ...entries].join('\n\n')}\n`;
 }

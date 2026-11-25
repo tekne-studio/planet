@@ -18,8 +18,8 @@ import { parseArgs } from 'node:util';
 import { keep, prune } from './built';
 import { filesOf, isName, LIST, type Listed, listed, nameOf, ROMS, titles, withoutNames, written } from './roms';
 
-/** What a ROM ships under: a licence, an SPDX expression or a file of its own, or none, its rights reserved. */
-export type Terms = { licence: string } | { file: string } | { rights: 'reserved' };
+/** What a ROM ships under: a licence, an SPDX expression or a file of its own, or none, its rights reserved; one, the other two never. */
+export type Terms = { licence: string; file?: never; rights?: never } | { file: string; licence?: never; rights?: never } | { rights: 'reserved'; licence?: never; file?: never };
 
 /** The options `bun run rom` takes after the file, one of them given. */
 export type Options = { licence?: string; 'licence-file'?: string; rights?: string };
@@ -52,8 +52,8 @@ export async function shipRom(file: string, said: Terms): Promise<{ rom: Listed;
 	}
 	mkdirSync(ROMS, { recursive: true });
 	const sha256 = keep(ROMS, bytes, 'wasm').slice(0, -'.wasm'.length);
-	const rom: Listed = 'licence' in said ? { name, sha256, licence: said.licence } : 'file' in said ? { name, sha256, licenceFile: `${name}.LICENSE` } : { name, sha256, rights: said.rights };
-	if ('file' in said) copyFileSync(said.file, `${ROMS}/${name}.LICENSE`);
+	const rom: Listed = said.licence !== undefined ? { name, sha256, licence: said.licence } : said.file !== undefined ? { name, sha256, licenceFile: `${name}.LICENSE` } : { name, sha256, rights: said.rights };
+	if (said.file !== undefined) copyFileSync(said.file, `${ROMS}/${name}.LICENSE`);
 	const at = roms.findIndex((entry) => entry.name === name);
 	if (at === -1) roms.push(rom);
 	else roms[at] = rom;

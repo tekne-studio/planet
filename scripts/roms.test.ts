@@ -21,7 +21,7 @@ const MINE = new Uint8Array([0, 97, 115, 109, 3]);
 /** The list `roms` in `folder`, with their files and licences beside it. */
 function shipped(roms: Listed[], files = true): Listed[] {
 	writeFileSync(`${folder}/${LIST}`, written(roms));
-	if (files) for (const rom of roms) if ('licenceFile' in rom) writeFileSync(`${folder}/${rom.licenceFile}`, 'a licence of its own');
+	if (files) for (const rom of roms) if (rom.licenceFile !== undefined) writeFileSync(`${folder}/${rom.licenceFile}`, 'a licence of its own');
 	return roms;
 }
 
@@ -62,7 +62,7 @@ describe('the list of ROMs', () => {
 
 	test("has NOTICE name each ROM whose rights are reserved, so none reads as under the engine's licence", () => {
 		const notice = readFileSync(`${ROOT}/NOTICE`, 'utf8');
-		for (const rom of listed()) if ('rights' in rom) expect(notice, rom.name).toContain(`\`${rom.name}\``);
+		for (const rom of listed()) if (rom.rights !== undefined) expect(notice, rom.name).toContain(`\`${rom.name}\``);
 	});
 
 	test("is this version's: every file it names is there and hashes to its name", () => {
