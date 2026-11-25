@@ -55,6 +55,11 @@ impl Gait {
         // gait turned.
         if controller.flying() || controller.aloft() {
             Gait::Fly
+        } else if controller.way().is_some() && controller.leaping() {
+            // A jump on what it rides, from the press: a peer draws the
+            // gathering from when its gait turned, and the air from where
+            // it is.
+            Gait::Jump
         } else if controller.way().is_some() {
             // A body in a way of moving holds the way's pose over the idle
             // clip, and sends that it stands.
@@ -473,12 +478,13 @@ impl Figure {
             true => leap.done < LEAP_SPRING,
             false => leap.done < LEAP_LANDS,
         });
-        // In a way, the pose is held in flight too: a rider aloft on what
-        // it rides sits, and only says it flies. Leaping into the saddle,
-        // it springs first; off it, it is in the air until it lands.
+        // In a way, the pose is held in flight and in a jump too: a rider
+        // on what it rides sits, and only says it flies or jumps. Leaping
+        // into the saddle, it springs first; off it, it is in the air until
+        // it lands.
         let gait = match (motion.gait, held) {
             _ if springs => Gait::Jump,
-            (Gait::Fly, Some(_)) => Gait::Idle,
+            (Gait::Fly | Gait::Jump, Some(_)) => Gait::Idle,
             (gait, _) => gait,
         };
         let speed = gait.authored_mps().map_or(1.0, |authored| {

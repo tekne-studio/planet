@@ -33,7 +33,7 @@
 //! go, `{"type":"ride.release"}`, asked first.
 
 use client::{
-    Act, Backing, Flight, Gait, Held, Hold, Host, Hover, Jump, Keeping, KeyAsk, Marked, Marker,
+    Act, Backing, Flight, Gait, Held, Hold, Host, Hover, Keeping, KeyAsk, Marked, Marker,
     MarkerChoice, Near, Offer, On, Pace, Paces, Pet, Play, Plugin, Profile, Steering, Turn, Way,
 };
 use gaia::fauna::horse::HORSE as HORSE_KIND;
@@ -81,15 +81,6 @@ const BANK_EYE: f64 = 0.3;
 /// touch slower than on foot, so its gait over rough ground sways the view.
 const EYE_PER_S: f64 = 10.0;
 
-/// A jump of the horse's kind, as the core takes it.
-fn jump_of(jump: gaia::fauna::Jump) -> Jump {
-    Jump {
-        gather_s: jump.gather_s,
-        height_m: jump.height_m,
-        length_m: jump.length_m,
-    }
-}
-
 /// How a horse goes under a rider: its kind's paces, named.
 pub fn paces() -> Paces {
     let carry = HORSE_KIND.carry.expect("a horse carries a rider");
@@ -104,7 +95,7 @@ pub fn paces() -> Paces {
                 speed_mps: pace.speed_mps,
                 turn_per_s: pace.turn_per_s,
                 steep: pace.steep,
-                jump: pace.jump.map(jump_of),
+                jump: pace.jump.map(Into::into),
             })
             .collect(),
         stepped: carry.stepped,
@@ -116,7 +107,8 @@ pub fn paces() -> Paces {
         ahead_m,
         behind_m,
         eye_per_s: EYE_PER_S,
-        standing: carry.standing.map(jump_of),
+        standing: carry.standing.map(Into::into),
+        jump: carry.jump.into(),
         backing: carry.backing.map(|backing| Backing {
             name: BACKING,
             from_mps: backing.from_mps,

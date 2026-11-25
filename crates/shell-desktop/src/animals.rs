@@ -216,7 +216,8 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
         let out = sheet(&format!("{name}-turn"), &pictures)?;
         log::info!("{name}: turning {turn_rps:.1} rad/s -> {}", out.display());
     }
-    // Each pace's jump, and the one from a halt.
+    // Each pace's jump tapped, its least, and the one from a halt.
+    let charged = client::Jump::from(carry.jump);
     let jumps = PACES
         .iter()
         .filter_map(|&(name, speed_mps)| {
@@ -226,20 +227,14 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
                 .find(|pace| pace.speed_mps == speed_mps)?;
             Some((name, speed_mps, pace.jump?))
         })
-        .chain(carry.standing.map(|jump| ("halt", 0.0, jump)));
-    for (name, speed_mps, jump) in jumps {
+        .chain(carry.standing.map(|least| ("halt", 0.0, least)));
+    for (name, speed_mps, least) in jumps {
         let look = Look::new(&HORSE, view.seed, None);
         let mut animal = Animal::new(&HORSE, look);
-        // The arc the ride's controller flies, as fast as it springs.
-        let gather_s = jump.gather_s;
-        let jump = client::Jump {
-            gather_s,
-            height_m: jump.height_m,
-            length_m: jump.length_m,
-        };
-        let (rise_mps, fall_mps2) = jump.arc(speed_mps);
-        let launch_mps = jump.launch_mps(speed_mps);
-        let air_s = jump.length_m / launch_mps;
+        // The arc the ride's controller flies on the planet.
+        let gather_s = least.gather_s;
+        let arc = charged.arc(least.height_m, speed_mps, client::GRAVITY_MPS2);
+        let (rise_mps, launch_mps, air_s) = (arc.rise_mps(), arc.speed_mps, arc.air_s());
         let leaves_s = SETTLE_S + gather_s;
         let lands_s = leaves_s + air_s;
         // How far it has gone at `t`: at its pace, then sprung, then at its
@@ -249,15 +244,21 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
             speed_mps * (t - aloft_s) + launch_mps * aloft_s
         };
         // It leaves the ground at the middle of its way, by the eye's point.
-        let start = here.point - heading * (gone(leaves_s) + jump.length_m / 2.0);
+        let start = here.point - heading * (gone(leaves_s) + arc.length_m() / 2.0);
         let ground = |t: f64| land.under(start + heading * gone(t)).point;
         let going = |t: f64| {
             let (lift_m, leap) = match t {
                 t if t < SETTLE_S => (0.0, None),
-                t if t < leaves_s => (0.0, Some(Leap::Gathering((t - SETTLE_S) / gather_s))),
+                t if t < leaves_s => {
+                    let gathered = charged.gathered(t - SETTLE_S);
+                    (0.0, Some(Leap::Gathering(gathered)))
+                }
                 t if t < lands_s => {
                     let s = t - leaves_s;
-                    (rise_mps * s - fall_mps2 * s * s / 2.0, Some(Leap::Flying))
+                    (
+                        rise_mps * s - arc.fall_mps2 * s * s / 2.0,
+                        Some(Leap::Flying),
+                    )
                 }
                 _ => (0.0, None),
             };
@@ -292,8 +293,8 @@ pub fn run(client: &mut Client, size: [u32; 2], view: &View, dir: &Path) -> Resu
         let out = sheet(&format!("{name}-jump"), &pictures)?;
         log::info!(
             "{name}: a jump {:.1} m high, {:.1} m long, {air_s:.2} s in the air -> {}",
-            jump.height_m,
-            jump.length_m,
+            arc.height_m,
+            arc.length_m(),
             out.display()
         );
     }

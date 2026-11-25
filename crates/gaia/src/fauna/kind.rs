@@ -159,9 +159,12 @@ pub struct Carry {
     /// stays within `wait_m` metres of it; then it walks back to its herd.
     pub wait_s: f64,
     pub wait_m: f64,
-    /// The jump it takes from a halt, springing forward; none, it jumps
-    /// only from a pace that does.
-    pub standing: Option<Jump>,
+    /// The least jump it takes from a halt, springing forward; none, it
+    /// jumps only from a pace that does.
+    pub standing: Option<Least>,
+    /// How it jumps, from a halt or any pace: how high at most and how
+    /// long the key is held for that.
+    pub jump: Jump,
     /// How it steps backward under a rider; none, it does not.
     pub backing: Option<Backing>,
 }
@@ -270,18 +273,34 @@ pub struct Pace {
     /// it goes at a slower pace that keeps it. None for one it keeps on any
     /// ground a walker climbs.
     pub steep: Option<f64>,
-    /// The jump it takes from this pace; none, it does not jump from it.
-    pub jump: Option<Jump>,
+    /// The least jump it takes from this pace; none, it does not jump
+    /// from it.
+    pub jump: Option<Least>,
 }
 
-/// A jump a kind takes under a rider: how long it gathers itself before
-/// it leaves the ground, seconds, how high its hooves rise, and how far it
-/// goes from leaving the ground to landing, metres.
+/// How a kind jumps under a rider. From the press it gathers on its
+/// haunches, the deeper the longer the key is held, and leaves the ground
+/// as the key is let go: from a tap, in its pace's least jump; held, higher
+/// as it gathers deeper, up to `most_m` its hooves rise once held for
+/// `hold_s` seconds from the press. Held past that, it waits gathered for
+/// the key to be let go. In the air it is carried along the ground as fast
+/// as it went and at least `forward_mps`, so a jump from a halt or a walk
+/// springs forward: how long it is aloft is the world's to say, by how
+/// high it goes, and how far is that time at that speed.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Jump {
+    pub most_m: f64,
+    pub hold_s: f64,
+    pub forward_mps: f64,
+}
+
+/// The least jump a kind takes from a pace or a halt, at a tap of the key:
+/// how long it gathers itself before it leaves the ground, seconds, and
+/// how high its hooves rise, metres.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Least {
     pub gather_s: f64,
     pub height_m: f64,
-    pub length_m: f64,
 }
 
 #[cfg(test)]

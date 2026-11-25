@@ -91,6 +91,13 @@ impl Gait {
         (self.hz + self.hz_per_mps * pace).max(pace * self.duty / self.stance_m)
     }
 
+    /// How fast a swinging foot goes past the body at a pace, metres a
+    /// second at size 1: as far as the body goes while a foot is down, in
+    /// the time a foot is up.
+    pub fn swing_mps(&self, pace: f64) -> f64 {
+        pace * self.duty / (1.0 - self.duty)
+    }
+
     /// Where a leg's foot is, `stride` strides along, at a pace. Down, it
     /// moves back under the body as fast as the body moves forward, so it
     /// stays where it landed; up, it swings forward to land again.

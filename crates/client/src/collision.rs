@@ -75,6 +75,54 @@ impl Footing {
     }
 }
 
+/// What holds a body up at a column, the ground and what is built apart.
+/// Together they are its [`Footing`]; apart, they are what [`aloft`] asks
+/// about.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Held {
+    pub ground: Footing,
+    /// `None` with nothing built near.
+    pub built: Option<Footing>,
+}
+
+impl Held {
+    /// Nothing under, nothing over.
+    pub const OPEN: Held = Held {
+        ground: Footing::OPEN,
+        built: None,
+    };
+
+    /// Both as one: what a body stands on and has over its head.
+    pub fn footing(self) -> Footing {
+        self.built
+            .map_or(self.ground, |built| self.ground.with(built))
+    }
+
+    /// The highest floor built here, if any.
+    fn built_m(self) -> Option<f64> {
+        self.built.and_then(|built| built.floor_m)
+    }
+}
+
+/// Whether a body `body_m` tall in the air on a jump may go from one column
+/// to another: onto ground no higher than a step over `feet_m`, as a
+/// walker, with room over it, and over what is built only with its feet at
+/// `arc_m` over it, or no higher than what was built under it where it
+/// was, a floor it goes on over. So the ground holds a jump up as it holds
+/// a walker, and what is built is cleared by the arc or met.
+pub fn aloft(from: Held, to: Held, feet_m: f64, arc_m: f64, body_m: f64) -> bool {
+    let ground = to
+        .ground
+        .floor_m
+        .is_none_or(|floor_m| floor_m <= feet_m + STEP_M);
+    let built = to
+        .built_m()
+        .is_none_or(|floor_m| floor_m <= from.built_m().map_or(arc_m, |from_m| from_m.max(arc_m)));
+    let (was, will) = (from.footing(), to.footing());
+    let room = will.floor_m.is_none() || will.room_m() >= body_m.min(was.room_m());
+    ground && built && room
+}
+
 /// The columns a standing body's width spans at a point, in blocks of its
 /// sector, `u` fastest: it stands on and is stopped by what is in any of
 /// them. One past an edge of the sector is the neighbour's.

@@ -66,7 +66,7 @@ pub use carts::{GAME_LONGEST, GAME_WAITS_S, PADS, Running, UPDATES_PER_S};
 pub use cells::{Aim, Cells, Guide, Met, PALETTE, REACH_M, Refusal, Seat, Sight};
 pub use collision::BODY_M;
 use controller::Refused;
-pub use controller::{Built, Controller, Wish};
+pub use controller::{Built, Controller, GRAVITY_MPS2, Wish};
 use controls::Controls;
 pub use controls::{Look, Pad};
 use figure::{Clips, Figure, Motion, Playing};
@@ -84,7 +84,7 @@ pub use marker::{At as MarkerAt, Choice as MarkerChoice, Marked, Marker, Said as
 pub use model3d::ModelRefusal;
 pub use offer::{Act, Hold, Offer, On, Prompt, Reached, Stands, TAP_S};
 use offer::{Offered, Press, Pressed};
-pub use paces::{Backing, Flight, Jump, Pace, Paces, Spring};
+pub use paces::{Arc, Backing, Flight, Jump, Least, Pace, Paces, Spring};
 pub use part::{
     CARTRIDGE, Cabinet, Clip, ClipKind, ContentId, ImageKind, Media, NAME_BYTES, Name, Part,
     PartId, PictureLevel, Portal, Pose as PartPose, Shape,
@@ -2651,9 +2651,9 @@ impl Client {
             facing: self.controller.facing(),
             speed_mps: self.controller.ground_mps(),
             balk_s: self.controller.balked_s(),
-            gathering: self.controller.gathering(),
             aloft: Some(!self.controller.grounded()),
-            // As a peer reads it from the stance.
+            // As a peer reads them from the stance.
+            leaps: self.gait() == Gait::Jump,
             wings: self.gait() == Gait::Fly,
         });
         let peers = self
@@ -2667,8 +2667,8 @@ impl Client {
                 facing: -motion.basis.z_axis,
                 speed_mps: motion.speed_mps,
                 balk_s: None,
-                gathering: None,
                 aloft: None,
+                leaps: motion.gait == Gait::Jump,
                 wings: motion.gait == Gait::Fly,
             });
         let riders: Vec<Rider> = own.into_iter().chain(peers).collect();

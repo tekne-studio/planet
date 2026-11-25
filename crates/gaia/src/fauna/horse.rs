@@ -7,7 +7,7 @@ use glam::{DVec3, Vec3};
 
 use crate::fauna::gait::{Gait, Gaits};
 use crate::fauna::kind::{
-    Backing, BySize, Carry, Flight, Habitat, Herding, Jump, Kind, Pace, Spring, Winged,
+    Backing, BySize, Carry, Flight, Habitat, Herding, Jump, Kind, Least, Pace, Spring, Winged,
 };
 use crate::fauna::look::{Build, Coat, Face, Marks, Patches};
 use crate::fauna::rig::{Ears, Leg, Neck, Part, Rig, Role, Section, Tail};
@@ -588,50 +588,45 @@ pub const HORSE: Kind = Kind {
     carry: Some(Carry {
         saddle: DVec3::new(0.0, 1.5, -0.12),
         // A walk climbs what a walker climbs; a trot holds on a hillside,
-        // a gallop only on a gentle one and a run on next to flat. From a
-        // halt or a walk it crouches longer and springs a short hop
-        // forward; from a trot it pops over a log, and at a gallop or a
-        // run it flies a fence, in an arc a little quicker than a fall.
-        // The run is sprint's alone.
+        // a gallop only on a gentle one and a run on next to flat. At a
+        // tap, from a halt or a walk it crouches longer and springs a short
+        // hop forward; from a trot it pops over a log, and at a gallop or a
+        // run it flies a fence. The run is sprint's alone.
         paces: &[
             Pace {
                 speed_mps: 1.5,
                 turn_per_s: 2.2,
                 steep: None,
-                jump: Some(Jump {
+                jump: Some(Least {
                     gather_s: 0.35,
                     height_m: 0.6,
-                    length_m: 2.6,
                 }),
             },
             Pace {
                 speed_mps: 3.6,
                 turn_per_s: 1.5,
                 steep: Some(0.6),
-                jump: Some(Jump {
+                jump: Some(Least {
                     gather_s: 0.25,
                     height_m: 0.7,
-                    length_m: 2.5,
                 }),
             },
             Pace {
                 speed_mps: 9.0,
                 turn_per_s: 0.8,
                 steep: Some(0.35),
-                jump: Some(Jump {
+                jump: Some(Least {
                     gather_s: 0.22,
                     height_m: 1.2,
-                    length_m: 7.5,
                 }),
             },
             Pace {
                 speed_mps: 11.7,
                 turn_per_s: 0.6,
                 steep: Some(0.25),
-                jump: Some(Jump {
+                jump: Some(Least {
                     gather_s: 0.22,
                     height_m: 1.2,
-                    length_m: 9.8,
                 }),
             },
         ],
@@ -650,11 +645,18 @@ pub const HORSE: Kind = Kind {
         mount_s: 0.25,
         wait_s: 45.0,
         wait_m: 30.0,
-        standing: Some(Jump {
+        standing: Some(Least {
             gather_s: 0.45,
             height_m: 0.5,
-            length_m: 2.2,
         }),
+        // Held, any jump rises to 1.8 m, held for under a second; from a
+        // halt or a walk it springs on at about a trot, so a tap there
+        // flies a hop of two metres and more.
+        jump: Jump {
+            most_m: 1.8,
+            hold_s: 0.8,
+            forward_mps: 4.0,
+        },
         // It backs a step at a time, then faster while held, never as
         // fast as it walks.
         backing: Some(Backing {

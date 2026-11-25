@@ -15,9 +15,9 @@ use worldgen::Generator;
 use crate::animals::Near;
 use crate::boom::{self, Boom};
 use crate::cells::{Cells, Seat};
-use crate::collision::{self, BODY_M, Footing, STEP_M};
+use crate::collision::{self, BODY_M, Footing, Held, STEP_M};
 use crate::hover::{self, Glide, Hover, Step};
-use crate::paces::{Ahead, Flight, Jump, Paces, Pacing, Reins};
+use crate::paces::{Ahead, Arc, Flight, Paces, Pacing, Reins};
 use crate::parts::Parts;
 use crate::spring::{Follow, Spring};
 use crate::trunks::Trunks;
@@ -77,7 +77,9 @@ const WALK_MPS: f64 = 4.8;
 const RUN_FACTOR: f64 = 2.5;
 const FLY_SPRINT_FACTOR: f64 = 4.0;
 const JUMP_MPS: f64 = 6.0;
-pub(crate) const GRAVITY_MPS2: f64 = 14.0;
+/// How hard the planet pulls a body back to the ground, metres a second
+/// squared: a walker's jump and a ridden one fall back as it says.
+pub const GRAVITY_MPS2: f64 = 14.0;
 /// Flight speed grows with altitude so orbit is a short trip.
 const FLY_MIN_MPS: f64 = 12.0;
 const FLY_PER_ALTITUDE: f64 = 0.8;
@@ -657,15 +659,15 @@ impl Controller {
         }
     }
 
-    /// How far the way under the body has gathered itself to jump, 0 to 1;
-    /// none unless it does.
-    pub fn gathering(&self) -> Option<f64> {
+    /// Whether the way under the body is in a jump: gathering itself while
+    /// jump is held, or in the air.
+    pub fn leaping(&self) -> bool {
         match &self.moves {
             Moves::Way {
-                kept: Kept::Paced { paces, pacing, .. },
+                kept: Kept::Paced { pacing, .. },
                 ..
-            } => pacing.gathering(paces),
-            _ => None,
+            } => pacing.leaping(),
+            _ => false,
         }
     }
 
@@ -800,7 +802,7 @@ impl Controller {
             self.point.v + dv,
         ));
         let walked = self.walk_to(grid, self.point, du, dv, &Spine::NONE, |point| {
-            self.footing_at(Seat::Sector(point.sector), point, generator, held)
+            self.held_at(Seat::Sector(point.sector), point, generator, held)
         });
         (walked == asked).then_some(walked)
     }
@@ -1146,11 +1148,21 @@ impl Controller {
         generator: &Generator,
         built: Option<Built<'_>>,
     ) -> Footing {
+        self.held_at(seat, point, generator, built).footing()
+    }
+
+    /// [`Controller::footing_at`] with the ground and what is built apart.
+    fn held_at(
+        &self,
+        seat: Seat,
+        point: SurfacePoint,
+        generator: &Generator,
+        built: Option<Built<'_>>,
+    ) -> Held {
         let direction = seat.sphere(generator).blocks().direction(point);
-        let ground = Footing::solid(seat::ground_m(generator, seat.body(), direction));
-        match built.and_then(|built| built.footing(generator, seat, point, self.height_m)) {
-            Some(built) => ground.with(built),
-            None => ground,
+        Held {
+            ground: Footing::solid(seat::ground_m(generator, seat.body(), direction)),
+            built: built.and_then(|built| built.footing(generator, seat, point, self.height_m)),
         }
     }
 
@@ -1771,8 +1783,8 @@ impl Controller {
     }
 
     /// One step in a way that goes on feet: left and right turn it, forward
-    /// and back step its pace, sprint is the pace its way says, jump leaps
-    /// from a pace that jumps, and the camera follows behind. It goes as a
+    /// and back step its pace, sprint is the pace its way says, jump held
+    /// gathers it and let go leaps, and the camera follows behind. It goes as a
     /// walker does, held by the ground and stopped by a wall, and balks at
     /// a wall that stops it dead, at what its way refuses ahead of it and
     /// at a jump that would land on it.
@@ -1811,25 +1823,25 @@ impl Controller {
         if pacing.heading != heading && !self.turns(heading, pacing.heading, generator, built) {
             along = pacing.held(heading);
         }
-        // Gathered, it leaves the ground if it would land where it goes and
-        // no roof over the arc stops it on the way.
-        let launch = pacing.gathered(paces).map(|jump| {
-            let landing = self.ahead(pacing.heading * jump.length_m, generator, built);
-            let clear = self.clears(jump, pacing.heading, generator, built);
-            (jump, self.grounded && clear && paces.takes(landing))
+        // Let go and gathered, it leaves the ground in an arc under the
+        // world's pull if it would land where it goes and no roof over the
+        // arc stops it on the way.
+        let launch = pacing.gathered(paces, self.gravity_mps2()).map(|arc| {
+            let landing = self.ahead(pacing.heading * arc.length_m(), generator, built);
+            let clear = self.clears(arc, pacing.heading, generator, built);
+            (arc, self.grounded && clear && paces.takes(landing))
         });
         self.chase(heading, pacing.heading, dt);
         match launch {
-            Some((jump, true)) => {
-                self.vertical_mps = pacing.fly(jump);
+            Some((arc, true)) => {
+                self.vertical_mps = pacing.fly(arc);
                 self.grounded = false;
             }
             Some((_, false)) => pacing.refuse(),
             None => {}
         }
 
-        let fall_mps2 = pacing.fall_mps2().unwrap_or(self.gravity_mps2());
-        let velocity = self.on_foot(dt, along, false, gravity, fall_mps2);
+        let velocity = self.on_foot(dt, along, false, gravity, self.gravity_mps2());
         let position = self.position();
         // The body steps as it faces now, its spine along it.
         self.facing = pacing.heading;
@@ -1840,7 +1852,7 @@ impl Controller {
         if went.length() < along.length() * 0.99 {
             pacing.stopped(went.dot(pacing.way()));
         }
-        if self.grounded && pacing.fall_mps2().is_some() && self.vertical_mps <= 0.0 {
+        if self.grounded && pacing.flies() && self.vertical_mps <= 0.0 {
             pacing.land();
         }
 
@@ -1935,18 +1947,19 @@ impl Controller {
         }
     }
 
-    /// Whether a jump along `heading` keeps the body under every roof over
-    /// its arc, looked at every [`ARC_LOOK_M`] from where it leaves to
+    /// Whether a jump in `arc` along `heading` keeps the body under every
+    /// roof over it, looked at every [`ARC_LOOK_M`] from where it leaves to
     /// where it lands.
-    fn clears(&self, jump: Jump, heading: DVec3, generator: &Generator, built: Built<'_>) -> bool {
-        let looks = (jump.length_m / ARC_LOOK_M).ceil().max(1.0) as u32;
+    fn clears(&self, arc: Arc, heading: DVec3, generator: &Generator, built: Built<'_>) -> bool {
+        let length_m = arc.length_m();
+        let looks = (length_m / ARC_LOOK_M).ceil().max(1.0) as u32;
         let body_m = self.body_m();
         (0..=looks).all(|look| {
             let along = f64::from(look) / f64::from(looks);
-            let ahead = self.ahead(heading * jump.length_m * along, generator, built);
+            let ahead = self.ahead(heading * length_m * along, generator, built);
             ahead
                 .room_m
-                .is_none_or(|room_m| ahead.rise_m + room_m >= jump.height_at(along) + body_m)
+                .is_none_or(|room_m| ahead.rise_m + room_m >= arc.height_at(along) + body_m)
         })
     }
 
@@ -2285,14 +2298,14 @@ impl Controller {
         self.point = if self.stopped_by_rock(generator) {
             let spine = self.spine(self.facing);
             self.walk_to(grid, here, du, dv, &spine, |point| {
-                self.footing_at(seat(point), point, generator, held)
+                self.held_at(seat(point), point, generator, held)
             })
         } else if let Some(held) = held.filter(|_| !self.on_feet()) {
             // Open ground holds a flyer, or a body in a way, up and never
             // stops it; what is built is a wall to it all the same.
-            self.walk_to(grid, here, du, dv, &Spine::NONE, |point| {
-                let built = held.footing(generator, seat(point), point, self.height_m);
-                built.unwrap_or(Footing::OPEN)
+            self.walk_to(grid, here, du, dv, &Spine::NONE, |point| Held {
+                built: held.footing(generator, seat(point), point, self.height_m),
+                ..Held::OPEN
             })
         } else {
             self.sphere.blocks().wrapped(SurfacePoint::new(
@@ -2332,9 +2345,9 @@ impl Controller {
             return asked;
         }
         let (du, dv) = (there.u - here.u, there.v - here.v);
-        let point = self.walk_to(grid, here, du, dv, &Spine::NONE, |point| {
-            let footing = built.footing(generator, Seat::Moon(point.sector), point, self.height_m);
-            footing.unwrap_or(Footing::OPEN)
+        let point = self.walk_to(grid, here, du, dv, &Spine::NONE, |point| Held {
+            built: built.footing(generator, Seat::Moon(point.sector), point, self.height_m),
+            ..Held::OPEN
         });
         match point == grid.wrapped(SurfacePoint::new(here.sector, here.u + du, here.v + dv)) {
             true => asked,
@@ -2368,7 +2381,7 @@ impl Controller {
         du: f64,
         dv: f64,
         spine: &Spine,
-        footing: impl Fn(SurfacePoint) -> Footing,
+        footing: impl Fn(SurfacePoint) -> Held,
     ) -> SurfacePoint {
         let pieces = if self.flying() {
             1
@@ -2384,11 +2397,10 @@ impl Controller {
             grid.wrapped(SurfacePoint::new(from.sector, u + off_u, v + off_v))
         };
         let (mut taken, mut here) = ([0, 0], footing(from));
-        let mut reached = [Footing::OPEN; SPINE_POINTS];
-        for (point, offset) in reached.iter_mut().zip(spine.points()) {
+        let mut reached = [Held::OPEN; SPINE_POINTS];
+        for (point, (offset, _)) in reached.iter_mut().zip(spine.points()) {
             *point = footing(at(taken, offset));
         }
-        let body_m = self.body_m();
         for _ in 0..pieces {
             let piece = [[1, 1], [1, 0], [0, 1]].into_iter().find_map(|[u, v]| {
                 if du * f64::from(u) == 0.0 && dv * f64::from(v) == 0.0 {
@@ -2396,14 +2408,13 @@ impl Controller {
                 }
                 let tried = [taken[0] + u, taken[1] + v];
                 let there = footing(at(tried, [0.0, 0.0]));
-                if !collision::admits(here, there, self.height_m, body_m) {
+                if !self.admits(here, here, there, 0.0) {
                     return None;
                 }
                 let mut reaches = reached;
-                for (point, offset) in reaches.iter_mut().zip(spine.points()) {
-                    let (was, will) = (*point, footing(at(tried, offset)));
-                    let feet_m = self.feet_m(here, was);
-                    if !collision::admits(was, will, feet_m, body_m) {
+                for (point, (offset, along_m)) in reaches.iter_mut().zip(spine.points()) {
+                    let will = footing(at(tried, offset));
+                    if !self.admits(here, *point, will, along_m) {
                         return None;
                     }
                     *point = will;
@@ -2446,25 +2457,62 @@ impl Controller {
         if self.site != Site::Planet || !self.stopped_by_rock(generator) {
             return true;
         }
-        let (grid, held, body_m) = (self.sphere.blocks(), self.built(built), self.body_m());
+        let (grid, held) = (self.sphere.blocks(), self.built(built));
         let footing = |[du, dv]: [f64; 2]| {
             let point = SurfacePoint::new(self.point.sector, self.point.u + du, self.point.v + dv);
             let point = grid.wrapped(point);
-            self.footing_at(Seat::Sector(point.sector), point, generator, held)
+            self.held_at(Seat::Sector(point.sector), point, generator, held)
         };
         let seat = footing([0.0, 0.0]);
         let (was, will) = (self.spine(from), self.spine(to));
-        was.points().zip(will.points()).all(|(was, will)| {
-            let (here, there) = (footing(was), footing(will));
-            collision::admits(here, there, self.feet_m(seat, here), body_m)
-        })
+        was.points()
+            .zip(will.points())
+            .all(|((was, along_m), (will, _))| {
+                self.admits(seat, footing(was), footing(will), along_m)
+            })
+    }
+
+    /// Whether a point of the body `along_m` ahead of its middle goes from
+    /// `was` to `will`, the middle on `seat`: as a walker steps, and in the
+    /// air on a jump, held by the ground as a walker and over what is built
+    /// only where its arc has its feet over it.
+    fn admits(&self, seat: Held, was: Held, will: Held, along_m: f64) -> bool {
+        let body_m = self.body_m();
+        match self.arc_feet_m(along_m) {
+            None => {
+                let (seat, was) = (seat.footing(), was.footing());
+                collision::admits(was, will.footing(), self.feet_m(seat, was), body_m)
+            }
+            Some(arc_m) => {
+                let feet_m = self.feet_m(seat.ground, was.ground);
+                collision::aloft(was, will, feet_m, arc_m, body_m)
+            }
+        }
+    }
+
+    /// Where the feet of a point of the body `along_m` ahead of its middle
+    /// are in the air on a jump, metres, behind it less than none: on the
+    /// arc the middle flies, where the middle was or will be that far
+    /// along it. So it goes over a wall nose first and rump last, as a
+    /// jumper's body does, and stops with its nose at one its arc does not
+    /// clear. `None` out of the air.
+    fn arc_feet_m(&self, along_m: f64) -> Option<f64> {
+        let Moves::Way {
+            kept: Kept::Paced { pacing, .. },
+            ..
+        } = &self.moves
+        else {
+            return None;
+        };
+        let s = along_m / pacing.speed_mps.max(f64::EPSILON);
+        (pacing.leaping() && !self.grounded)
+            .then(|| self.height_m + self.vertical_mps * s - 0.5 * self.gravity_mps2() * s * s)
     }
 
     /// Where the feet are at a point of the body's spine standing on
     /// `point`, metres, the body on `seat`: as high as the body's, or more
-    /// by as far as the point's floor is over the body's. On the ground it
-    /// follows a rise and keeps the body's height down a fall; in a jump all
-    /// of it is in the air.
+    /// by as far as the point's floor is over the body's. It follows a rise
+    /// and keeps the body's height down a fall.
     fn feet_m(&self, seat: Footing, point: Footing) -> f64 {
         match (seat.floor_m, point.floor_m) {
             (Some(seat_m), Some(point_m)) => self.height_m + (point_m - seat_m).max(0.0),
@@ -2574,14 +2622,16 @@ fn rotate_toward(from: DVec3, to: DVec3, fraction: f64, fallback_axis: DVec3) ->
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Spine {
     /// Each point's offset from where the body stands, blocks along `u`
-    /// and `v`.
+    /// and `v`, and how far ahead of it, metres, behind it less than none.
     points: [[f64; 2]; SPINE_POINTS],
+    along_m: [f64; SPINE_POINTS],
     len: usize,
 }
 
 impl Spine {
     const NONE: Spine = Spine {
         points: [[0.0; 2]; SPINE_POINTS],
+        along_m: [0.0; SPINE_POINTS],
         len: 0,
     };
 
@@ -2596,14 +2646,18 @@ impl Spine {
             for point in 1..=count {
                 let m = sign * reach_m * point as f64 / count as f64;
                 spine.points[spine.len] = per_m.map(|blocks| blocks * m);
+                spine.along_m[spine.len] = m;
                 spine.len += 1;
             }
         }
         spine
     }
 
-    fn points(&self) -> impl Iterator<Item = [f64; 2]> + '_ {
-        self.points[..self.len].iter().copied()
+    fn points(&self) -> impl Iterator<Item = ([f64; 2], f64)> + '_ {
+        self.points[..self.len]
+            .iter()
+            .copied()
+            .zip(self.along_m[..self.len].iter().copied())
     }
 }
 
@@ -3275,37 +3329,80 @@ mod tests {
         }
     }
 
-    /// A horse galloping at a wall across its way, `cells` high, six metres
-    /// ahead on a floor, jump pressed as it sets off when `jump`, under a
-    /// roof `roof` cells over the floor when there is one: how far it got
-    /// along, metres from where it set off, the highest its feet rose in
-    /// the air over the ground it left, and whether it still gallops. Under
-    /// a roof, every frame it rides, its back and the eye stay under it.
-    fn gallop_at(cells: i32, jump: bool, roof: Option<i32>) -> (f64, f64, bool) {
+    /// How [`ride_at`] rides a horse at a wall across its way, on a floor.
+    #[derive(Clone, Copy)]
+    struct Ride {
+        /// Which of the test horse's paces it goes in.
+        pace: usize,
+        /// How long after it sets off jump is pressed, and for how long it
+        /// is held, seconds; never, when none.
+        press_s: f64,
+        held_s: Option<f64>,
+        /// How high the wall is, cells, none without one, and how far from
+        /// where the horse sets off to its near face, blocks.
+        cells: i32,
+        ahead: f64,
+        /// A roof this many cells over the floor, if any.
+        roof: Option<i32>,
+    }
+
+    impl Ride {
+        /// Galloping at a wall six metres ahead, jump tapped as it sets off
+        /// when `jump`.
+        fn gallop(cells: i32, jump: bool, roof: Option<i32>) -> Ride {
+            Ride {
+                pace: 2,
+                press_s: 0.0,
+                held_s: jump.then_some(3.0 / 60.0),
+                cells,
+                ahead: 11.5,
+                roof,
+            }
+        }
+    }
+
+    /// What a horse ridden by [`ride_at`] did, in the three seconds after
+    /// jump is pressed, metres along from where it set off.
+    #[derive(Debug)]
+    struct Rode {
+        /// How far it got.
+        far_m: f64,
+        /// The highest its feet rose in the air over the floor.
+        highest_m: f64,
+        /// Where it left the ground and came back down to it, if it did.
+        took_off_m: Option<f64>,
+        landed_m: Option<f64>,
+        /// Whether it still goes in its pace.
+        paced: bool,
+    }
+
+    /// A horse ridden as `ride` says. Under a roof, every frame it rides,
+    /// its back and the eye stay under it.
+    fn ride_at(ride: Ride) -> Rode {
         let generator = Generator::new(Recipe::new(1)).unwrap();
         let side = f64::from(generator.sphere().blocks().side());
         let near = SurfacePoint::new(Sector::new(4).unwrap(), side * 0.41, side * 0.37);
         let mut build = Cells::default();
         let [plot, y, top] = build.floor(&generator, near);
         let floor_m = f64::from(top) * BLOCK_M;
-        // From the west of the floor's plot, the wall well inside it.
-        let point = SurfacePoint::new(near.sector, f64::from(plot) + 4.5, near.v);
-        let x = plot + 16;
-        if cells > 0 {
+        // The horse well inside the floor's plot, the wall east of it.
+        let x = plot + 4 + ride.ahead.ceil() as i32;
+        let point = SurfacePoint::new(near.sector, f64::from(x) - ride.ahead, near.v);
+        if ride.cells > 0 {
             let wall = Gesture::Create {
-                span: Span::between([x, y, top], [x, y + 63, top + cells - 1]),
+                span: Span::between([x, y, top], [x, y + 63, top + ride.cells - 1]),
                 paint: 0,
             };
             assert!(build.apply(&generator, point.sector, &[wall]));
         }
-        if let Some(roof) = roof {
+        if let Some(roof) = ride.roof {
             let over = Gesture::Create {
                 span: Span::between([plot, y, top + roof], [plot + 40, y + 63, top + roof]),
                 paint: 0,
             };
             assert!(build.apply(&generator, point.sector, &[over]));
         }
-        let ceiling_m = roof.map(|roof| floor_m + f64::from(roof) * BLOCK_M);
+        let ceiling_m = ride.roof.map(|roof| floor_m + f64::from(roof) * BLOCK_M);
         let built = Built {
             cells: &build,
             parts: &Parts::default(),
@@ -3326,20 +3423,33 @@ mod tests {
             ..
         } = &mut controller.moves
         {
-            pacing.pace = Some(2);
-            pacing.speed_mps = paces.paces[2].speed_mps;
+            pacing.pace = Some(ride.pace);
+            pacing.speed_mps = paces.paces[ride.pace].speed_mps;
         }
         let from = controller.point().u;
-        let mut highest_m = 0.0f64;
-        for frame in 0..180 {
+        let along_m = |controller: &Controller| (controller.point().u - from) * BLOCK_M;
+        let frames = |s: f64| (s * 60.0).round() as u32;
+        let press = frames(ride.press_s);
+        let held = press..press + ride.held_s.map_or(0, frames);
+        let mut rode = Rode {
+            far_m: 0.0,
+            highest_m: 0.0,
+            took_off_m: None,
+            landed_m: None,
+            paced: false,
+        };
+        for frame in 0..press + 180 {
             let wish = Wish {
-                up: jump && frame < 3,
+                up: held.contains(&frame),
                 ..Wish::default()
             };
             controller.update(1.0 / 60.0, wish, &generator, built);
             controller.ride_at(1.4, 1.0 / 60.0);
             if !controller.grounded {
-                highest_m = highest_m.max(controller.height_m - floor_m);
+                rode.highest_m = rode.highest_m.max(controller.height_m - floor_m);
+                rode.took_off_m = rode.took_off_m.or(Some(along_m(&controller)));
+            } else if rode.took_off_m.is_some() {
+                rode.landed_m = rode.landed_m.or(Some(along_m(&controller)));
             }
             if let Some(ceiling_m) = ceiling_m {
                 let under_m = ceiling_m - controller.height_m;
@@ -3347,18 +3457,99 @@ mod tests {
                 assert!(controller.eye_m() < under_m, "the eye in the roof");
             }
         }
-        let galloping = matches!(
+        rode.far_m = along_m(&controller);
+        rode.paced = matches!(
             &controller.moves,
             Moves::Way {
                 kept: Kept::Paced { pacing, .. },
                 ..
-            } if pacing.pace == Some(2)
+            } if pacing.pace == Some(ride.pace)
         );
-        (
-            (controller.point().u - from) * BLOCK_M,
-            highest_m,
-            galloping,
-        )
+        rode
+    }
+
+    /// A horse galloping at a wall across its way, `cells` high, six metres
+    /// ahead, as [`Ride::gallop`] rides it: how far it got, the highest its
+    /// feet rose and whether it still gallops.
+    fn gallop_at(cells: i32, jump: bool, roof: Option<i32>) -> (f64, f64, bool) {
+        let rode = ride_at(Ride::gallop(cells, jump, roof));
+        (rode.far_m, rode.highest_m, rode.paced)
+    }
+
+    /// A horse in its walk, trot or gallop, jump held from a tap to the
+    /// most, clears a wall across its way when its arc has its feet over
+    /// the wall's top where the horse comes over it, every point of it
+    /// going where its middle goes, and meets it otherwise, to within one
+    /// frame of its flight: a wall one, two or three cells high, just past
+    /// its nose as it leaves the ground or under the middle of its arc.
+    /// Over it, it comes down past it or on its top and goes on in its
+    /// pace; met, it leaves the ground all the same and comes down in
+    /// front of it, and gets past only a wall that is a step.
+    #[test]
+    fn a_horse_clears_a_wall_when_its_arc_does() {
+        let paces = crate::paces::tests::horse();
+        let reach_m = collision::BODY_HALF * BLOCK_M;
+        for pace in 0..3 {
+            let frame_m = paces.paces[pace].speed_mps.max(paces.jump.forward_mps) / 60.0;
+            for held_s in [1.0 / 60.0, 0.3, 0.4, 0.5, 0.8] {
+                let ride = Ride {
+                    pace,
+                    press_s: 1.0,
+                    held_s: Some(held_s),
+                    cells: 0,
+                    ahead: 0.0,
+                    roof: None,
+                };
+                let open = ride_at(ride);
+                let (Some(off_m), Some(on_m)) = (open.took_off_m, open.landed_m) else {
+                    panic!("pace {pace} held {held_s}: no jump");
+                };
+                assert!(open.paced, "pace {pace} held {held_s}: lands in another");
+                let arc_m = |at_m: f64| {
+                    4.0 * open.highest_m * (at_m - off_m) * (on_m - at_m) / (on_m - off_m).powi(2)
+                };
+                let nose_m = off_m + paces.ahead_m + reach_m + frame_m;
+                let middle_m = (off_m + on_m - BLOCK_M) / 2.0;
+                let middle_m = (middle_m > nose_m).then_some(middle_m);
+                for near_m in [Some(nose_m), middle_m].into_iter().flatten() {
+                    // Its arc where the horse comes over the wall, a frame
+                    // of flight either side.
+                    let over_m = near_m - reach_m;
+                    let [early_m, late_m] = [-frame_m, frame_m].map(|by_m| arc_m(over_m + by_m));
+                    for cells in 1..=3 {
+                        let top_m = f64::from(cells) * BLOCK_M;
+                        let clears = early_m.min(late_m) > top_m;
+                        if clears == (early_m.max(late_m) < top_m) {
+                            continue;
+                        }
+                        let rode = ride_at(Ride {
+                            cells,
+                            ahead: near_m / BLOCK_M,
+                            ..ride
+                        });
+                        let said = format!(
+                            "pace {pace} held {held_s}: {cells} cells {near_m:.2} m on, \
+                             the arc {:.2} m over it there; landed {:?}, went {:.2} m",
+                            arc_m(over_m),
+                            rode.landed_m,
+                            rode.far_m
+                        );
+                        assert!(rode.took_off_m.is_some(), "balked: {said}");
+                        let over = rode.landed_m.is_some_and(|on_m| on_m > over_m);
+                        assert_eq!(over, clears, "{said}");
+                        let past_m = near_m + BLOCK_M + paces.behind_m + reach_m;
+                        if clears || top_m <= STEP_M {
+                            assert!(rode.far_m > past_m, "{said}");
+                        } else {
+                            assert!(rode.far_m < near_m, "{said}");
+                        }
+                        if clears {
+                            assert!(rode.paced, "{said}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// A galloping horse jumps as high as its gallop's jump on open ground
@@ -4250,7 +4441,7 @@ mod tests {
         let at = controller.point;
         let spine = controller.spine(controller.facing);
         std::iter::once([0.0, 0.0])
-            .chain(spine.points())
+            .chain(spine.points().map(|(offset, _)| offset))
             .map(|[du, dv]| SurfacePoint::new(at.sector, at.u + du, at.v + dv))
             .flat_map(collision::columns)
             .any(|[u, v]| {
@@ -4264,7 +4455,7 @@ mod tests {
     /// Where the body's nose and rump are along `u`, cells.
     fn nose_and_rump(controller: &Controller) -> [f64; 2] {
         let spine = controller.spine(controller.facing);
-        let along = spine.points().map(|[du, _]| du);
+        let along = spine.points().map(|([du, _], _)| du);
         let (nose, rump) = along.fold((0.0f64, 0.0f64), |(n, r), du| (n.max(du), r.min(du)));
         [controller.point.u + nose, controller.point.u + rump]
     }

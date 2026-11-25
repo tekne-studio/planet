@@ -142,12 +142,12 @@ pub(crate) struct Rider {
     pub speed_mps: f64,
     /// Seconds since the animal balked under it; none when it has not.
     pub balk_s: Option<f64>,
-    /// How far it has gathered itself to jump, 0 to 1; none unless it
-    /// does.
-    pub gathering: Option<f64>,
     /// Whether it is off the ground, as the body knows; none for a peer's,
     /// whose height over the ground says.
     pub aloft: Option<bool>,
+    /// Whether it is in a jump, gathering on the ground or in the air: the
+    /// body says so for its own, a peer's stance by the gait it jumps in.
+    pub leaps: bool,
     /// Whether it flies on its wings: the body says so for its own, a
     /// peer's stance by the gait it flies in.
     pub wings: bool,
@@ -207,6 +207,9 @@ struct Body {
     away: Away,
     /// What a rider sits astride on it: its look is its body's for life.
     straddle: Straddle,
+    /// Seconds it has gathered itself to jump under its rider, from the
+    /// step its rider's jump began; none unless it gathers.
+    gather_s: Option<f64>,
 }
 
 /// Where an unridden animal is against where its herd has it.
@@ -259,6 +262,7 @@ impl Body {
             facing: None,
             away: Away::Home,
             straddle: Straddle { steps },
+            gather_s: None,
         }
     }
 
@@ -1090,7 +1094,15 @@ fn carry(
         let under = ground.under(rider.at);
         (rider.at - under.point).dot(under.up) > ALOFT_M
     });
-    let leap = match (aloft, rider.gathering) {
+    // It gathers from the step its rider's jump began, as deep as the time
+    // says: every eye that saw the jump begin draws the same gathering.
+    body.gather_s = match rider.leaps && !aloft && !rider.wings {
+        true => Some(body.gather_s.map_or(0.0, |s| s + dt)),
+        false => None,
+    };
+    let gathered = (body.gather_s.zip(body.kind.carry))
+        .map(|(s, carry)| crate::paces::Jump::from(carry.jump).gathered(s));
+    let leap = match (aloft, gathered) {
         _ if rider.wings => None,
         (true, _) => Some(Leap::Flying),
         (false, gathered) => gathered.map(Leap::Gathering),
@@ -2047,8 +2059,8 @@ mod tests {
             facing: horse.heading,
             speed_mps: 0.0,
             balk_s: None,
-            gathering: None,
             aloft: Some(false),
+            leaps: false,
             wings: false,
         };
         let (riders, on_foot) = ([rider], [horse.at]);
@@ -2119,8 +2131,8 @@ mod tests {
             facing: up.cross(east),
             speed_mps: 0.0,
             balk_s: None,
-            gathering: None,
             aloft: Some(false),
+            leaps: false,
             wings: false,
         }];
         let riding = Bodies {
@@ -2249,8 +2261,8 @@ mod tests {
                 facing: controller.facing(),
                 speed_mps: controller.ground_mps(),
                 balk_s: controller.balked_s(),
-                gathering: controller.gathering(),
                 aloft: Some(!controller.grounded()),
+                leaps: controller.leaping(),
                 wings: false,
             }];
             let bodies = Bodies {
@@ -2617,8 +2629,8 @@ mod tests {
             facing: up.cross(up.any_orthonormal_vector()),
             speed_mps: 0.0,
             balk_s: None,
-            gathering: None,
             aloft: who.is_none().then_some(false),
+            leaps: false,
             wings: false,
         }
     }

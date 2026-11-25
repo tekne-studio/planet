@@ -625,12 +625,14 @@ fn ones_own_pet_is_released_from_the_saddle_standing_and_never_aloft() {
         run(&mut client, &mut input, 1);
     }
     run(&mut client, &mut input, 90);
+    // Jump tapped: it gathers, and leaves the ground let go.
     input.key(Key::Up, true);
+    run(&mut client, &mut input, 1);
+    input.key(Key::Up, false);
     let lifted = (0..120).any(|_| {
         run(&mut client, &mut input, 1);
         !client.host("ride").grounded()
     });
-    input.key(Key::Up, false);
     assert!(lifted, "the jump lifts it");
     assert_eq!(held_verb(&mut client), None);
     client.drain_outbound();
@@ -926,12 +928,14 @@ fn a_wild_horse_is_tamed_only_standing() {
         run(&mut client, &mut input, 1);
     }
     run(&mut client, &mut input, 90);
+    // Jump tapped: it gathers, and leaves the ground let go.
     input.key(Key::Up, true);
+    run(&mut client, &mut input, 1);
+    input.key(Key::Up, false);
     let lifted = (0..120).any(|_| {
         run(&mut client, &mut input, 1);
         !client.host("ride").grounded()
     });
-    input.key(Key::Up, false);
     assert!(lifted, "the jump lifts it");
     assert_eq!(held_verb(&mut client), None);
     client.command_json(r#"{"type":"act","plugin":"ride","id":0,"hold":true}"#);
