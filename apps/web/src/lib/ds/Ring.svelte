@@ -24,16 +24,28 @@
 	const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
 	const shown = $derived(eased ? ease(closed ?? 0) : (closed ?? 0));
+
+	/** The ring's drawing, in units of its side: its inner edge is read from them. */
+	const SIDE = 40;
+	const RADIUS = 17;
 </script>
 
-<span class="ring" class:held={closed !== null} class:glyph={!children}>
+<span class="ring" class:held={closed !== null} class:glyph={!children} style:--ring-side={SIDE} style:--ring-radius={RADIUS}>
 	{@render children?.()}
-	<svg viewBox="0 0 40 40" aria-hidden="true">
-		<circle class="track" cx="20" cy="20" r="17" />
+	<svg viewBox="0 0 {SIDE} {SIDE}" aria-hidden="true">
+		<circle class="track" cx={SIDE / 2} cy={SIDE / 2} r={RADIUS} />
 		<!-- Hidden at zero: a round cap on an arc of no length is a dot. -->
-		<circle class="arc" class:empty={shown <= 0} cx="20" cy="20" r="17" pathLength="1" style:stroke-dashoffset={1 - shown} />
+		<circle
+			class="arc"
+			class:empty={shown <= 0}
+			cx={SIDE / 2}
+			cy={SIDE / 2}
+			r={RADIUS}
+			pathLength="1"
+			style:stroke-dashoffset={1 - shown}
+		/>
 		{#key taps}
-			{#if taps}<circle class="arc sweep" cx="20" cy="20" r="17" pathLength="1" />{/if}
+			{#if taps}<circle class="arc sweep" cx={SIDE / 2} cy={SIDE / 2} r={RADIUS} pathLength="1" />{/if}
 		{/key}
 	</svg>
 	{#key `${pulse}:${taps}`}
@@ -46,12 +58,19 @@
 		position: relative;
 		display: inline-grid;
 		place-items: center;
+		/* How far the ring stands round what it holds, and its stroke. */
+		--ring-out: var(--sp-2);
+		--ring-stroke: 3;
+		/* The side of the square clear inside the ring's inner edge, a share
+		   of the ring's whole side: what it holds sizes itself by it to sit
+		   clear of the stroke at any size. */
+		--ring-clear: calc((2 * var(--ring-radius) - var(--ring-stroke)) / var(--ring-side) / sqrt(2));
 	}
 	svg {
 		position: absolute;
-		inset: calc(-1 * var(--sp-2));
-		width: calc(100% + 2 * var(--sp-2));
-		height: calc(100% + 2 * var(--sp-2));
+		inset: calc(-1 * var(--ring-out));
+		width: calc(100% + 2 * var(--ring-out));
+		height: calc(100% + 2 * var(--ring-out));
 		/* From twelve o'clock, clockwise. */
 		transform: rotate(-90deg);
 		overflow: visible;
@@ -59,7 +78,7 @@
 	}
 	circle {
 		fill: none;
-		stroke-width: 3;
+		stroke-width: var(--ring-stroke);
 	}
 	.track {
 		stroke: var(--on-world-veil);
@@ -106,14 +125,8 @@
 	.glyph {
 		width: 1em;
 		height: 1em;
-	}
-	.glyph svg {
-		inset: 0;
-		width: 100%;
-		height: 100%;
-	}
-	.glyph circle {
-		stroke-width: 6;
+		--ring-out: 0px;
+		--ring-stroke: 6;
 	}
 	.glyph .track {
 		opacity: 1;
@@ -121,7 +134,7 @@
 	}
 	.pulse {
 		position: absolute;
-		inset: calc(-1 * var(--sp-2));
+		inset: calc(-1 * var(--ring-out));
 		border: 2px solid var(--on-world);
 		border-radius: var(--radius-round);
 		animation: pulse 240ms var(--ease-out) forwards;

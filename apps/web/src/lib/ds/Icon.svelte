@@ -148,9 +148,10 @@
 </svg>
 
 <style>
+	/* At the text size, or at the side its holder sets in --icon-side. */
 	.icon {
-		width: 1.4em;
-		height: 1.4em;
+		width: var(--icon-side, 1.4em);
+		height: var(--icon-side, 1.4em);
 		flex: none;
 		vertical-align: -0.35em;
 	}

@@ -5,6 +5,7 @@
 		Button,
 		Checkbox,
 		CodeInput,
+		Dial,
 		Dialog,
 		Field,
 		Icon,
@@ -435,7 +436,8 @@
 				Its own family: what floats on the picture of the world, dark, translucent and soft, where the panels are light and
 				square. A card always has a title and an action; a hold's verb takes a third line, marked by the ring's glyph, and
 				comes forward as the ring fills. At rest the ring draws nothing; a tap sweeps it round once, fast, with a pulse; a
-				hold fills it from zero once the key is held past a tap. Shown over sample grounds: grass in sun, snow, night.
+				hold fills it from zero once the key is held past a tap. A dial is the ring alone, a glyph sized to sit clear inside
+				its inner edge, on a round chip, and a line under it. Shown over sample grounds: grass in sun, snow, night.
 			</p>
 			<div class="ground ground--night">
 				<!-- The ring's four states: rest, a tap's sweep, a hold in progress, a hold full. -->
@@ -457,6 +459,9 @@
 						<span class="glyph"><Ring {closed} /></span>
 						<!-- A countdown: told its time, never eased. -->
 						<Ring {closed} eased={false}><Icon name="pause" /></Ring>
+						<!-- Dials over a game's screen: a countdown, and a hold. -->
+						<Dial glyph="pause" {closed} eased={false} line="4 s" />
+						<Dial glyph="rotate-ccw" {closed} line="reset" />
 					{/if}
 				</div>
 			{/each}
