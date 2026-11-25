@@ -123,12 +123,21 @@ impl Runs {
         self.len += count;
     }
 
-    /// The words of the updates from `from` to `to`.
+    /// The words of the updates from `from` to `to`, found from the end: a
+    /// turn reads the last few, at a cost that does not grow with the game.
     pub(crate) fn words(&self, from: u64, to: u64) -> Vec<u32> {
         let to = to.min(self.len);
         let mut words = Vec::with_capacity(to.saturating_sub(from) as usize);
-        let mut at = 0;
-        for &(word, count) in &self.runs {
+        if from >= to {
+            return words;
+        }
+        // Back from the end to the run `from` falls in.
+        let (mut first, mut at) = (self.runs.len(), self.len);
+        while first > 0 && at > from {
+            first -= 1;
+            at -= self.runs[first].1;
+        }
+        for &(word, count) in &self.runs[first..] {
             let (start, end) = (at.max(from), (at + count).min(to));
             if start < end {
                 words.extend(core::iter::repeat_n(word, (end - start) as usize));
@@ -1071,12 +1080,39 @@ mod tests {
     }
 
     #[test]
+    fn the_last_words_of_a_long_game_cost_what_a_short_one_s_do() {
+        let game = |runs: u32| {
+            let mut game = Runs::default();
+            for word in 0..runs {
+                game.push(word % 2);
+            }
+            game
+        };
+        let (short, long) = (game(10), game(1_000_000));
+        let read = |runs: &Runs| {
+            let start = std::time::Instant::now();
+            for _ in 0..100 {
+                assert_eq!(runs.words(runs.len() - 2, runs.len()), [0, 1]);
+            }
+            start.elapsed()
+        };
+        let (short, long) = (read(&short), read(&long));
+        assert!(
+            long < short * 20 + std::time::Duration::from_millis(5),
+            "a turn of a long game costs {long:?}, of a short one {short:?}"
+        );
+    }
+
+    #[test]
     fn runs_say_their_words_and_how_far_two_agree() {
         let mut runs = Runs::default();
         for word in [1, 1, 1, 2, 2, 3] {
             runs.push(word);
         }
         assert_eq!(runs.words(2, 5), [1, 2, 2]);
+        assert_eq!(runs.words(0, 9), [1, 1, 1, 2, 2, 3]);
+        assert_eq!(runs.words(3, 4), [2]);
+        assert!(runs.words(5, 5).is_empty());
         let mut other = runs.clone();
         other.push(9);
         assert_eq!(runs.agrees(&other), 6);
