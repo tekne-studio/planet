@@ -83,6 +83,9 @@
 	/* What a thumb holds down: the buttons that stand in for keys on a
 	   touch screen. */
 	--thumb-h: 56px;
+	/* A game's A and B on a touch screen: larger than the world's buttons,
+	   since a game presses them fast and without a look. */
+	--pad-h: 72px;
 
 	/* ---- Over the world: its own family, dark, translucent and soft, unlike
 	   the light square panels: what floats on the picture, never furniture. ---- */

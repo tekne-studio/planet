@@ -21,6 +21,9 @@
 	import Place from './Place.svelte';
 	import Settings from './Settings.svelte';
 	import Touch from './Touch.svelte';
+	import Pad from './Pad.svelte';
+	import StickDrawn from './Stick.svelte';
+	import { CONTROLS } from './controls';
 	import Buttons from './Buttons.svelte';
 	import { layerProps, type LayerProps, type Reads } from '$lib/plugins/plugin';
 	import {
@@ -64,7 +67,8 @@
 	// the bar on a touch screen. The page may bring a panel of its own, in
 	// the top left corner, where a plugin's menu otherwise sits. A touch
 	// screen walks, looks, jumps and flies: the stick and the buttons of
-	// `Touch`, the help in the bar, and no building offered to any plugin,
+	// `Touch`, a holder's `Pad` in their place while the controls are lent,
+	// the help in the bar, and no building offered to any plugin,
 	// whatever the level; and the stage keeps to what the phone's keyboard
 	// leaves in view (`visible`).
 
@@ -174,6 +178,10 @@
 	// and the seam under its own name.
 	let spoken = $state.raw<PluginOn[]>([]);
 	const mounted = $derived(plugins.filter((plugin) => spoken.some((on) => on.name === plugin.name)));
+	/** The holder's words, for its controls. */
+	const holderWords = $derived(mounted.find((plugin) => plugin.name === holder)?.words);
+	/** A touch screen's pad stands in for the world's thumbs while the controls are lent, leaving among its buttons. */
+	const pad = $derived(touch.current && holder !== null);
 	// What a world's admin switches: the life of a world, a system of the
 	// core, then the plugins. The world says which are on, for both alike.
 	const switched: readonly { name: string; label: () => string }[] = [{ name: 'gaia', label: () => t('engine.life') }, ...plugins];
@@ -593,17 +601,20 @@
 		</Panel>
 	{/if}
 	{#if holder && !touch.current}
-		<Controls words={mounted.find((plugin) => plugin.name === holder)?.words} />
+		<Controls words={holderWords} />
 	{/if}
-	<PromptLine {prompt} at={promptAt} {ring} {taps} pulse={holds} plugins={mounted} touch={touch.current} onkey={(down) => view?.key('KeyE', down)} />
+	{#if !pad}
+		<PromptLine {prompt} at={promptAt} {ring} {taps} pulse={holds} plugins={mounted} touch={touch.current} onkey={(down) => view?.key('KeyE', down)} />
+	{/if}
 	{#if touch.current}
-		<Touch
-			{stick}
-			flying={mode === 'fly' || (mode.startsWith('ride.') && (stats?.flying ?? false))}
-			lent={holder !== null}
-			words={mounted.find((plugin) => plugin.name === holder)?.words}
-			onkey={(code, down) => view?.key(code, down)}
-		/>
+		{#if stick}
+			<StickDrawn {stick} />
+		{/if}
+		{#if pad}
+			<Pad controls={CONTROLS} sticking={stick !== null} words={holderWords} onkey={(code, down) => view?.key(code, down)} />
+		{:else}
+			<Touch flying={mode === 'fly' || (mode.startsWith('ride.') && (stats?.flying ?? false))} onkey={(code, down) => view?.key(code, down)} />
+		{/if}
 	{/if}
 	<Help
 		plugins={mounted}
