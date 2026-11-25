@@ -34,8 +34,8 @@ mod place;
 mod play;
 
 use client::{
-    Act, Cabinet, Clip, ContentId, Host, ImageKind, KeyAsk, Landmarked, Media, Name, Part, PartId,
-    PictureLevel, Plugin, Portal, Shape, Someone, Turn,
+    Act, Cabinet, Clip, ContentId, Eye, Host, ImageKind, KeyAsk, Landmarked, Media, Name, Part,
+    PartId, PictureLevel, Plugin, Portal, Shape, Someone, Turn,
 };
 
 use glam::{DQuat, DVec3, EulerRot};
@@ -659,9 +659,8 @@ pub struct Items {
     played: Option<PartId>,
     /// The cabinets near the body with a cartridge, as last offered.
     near: Vec<(PartId, DVec3)>,
-    /// The eye's field of view and aspect, as last seen: what a look is
-    /// framed in.
-    eye: Option<(f64, f64)>,
+    /// The eye as last seen: the view a look is framed in.
+    eye: Option<Eye>,
     /// The games this version ships, in the order offered.
     games: Vec<Game>,
     /// The last part duplicated and its copy: the step the next repeats.
@@ -1483,7 +1482,7 @@ impl Plugin for Items {
     /// anywhere, and opens the menu on it; with an item in hand a click
     /// places it; with the menu open the gizmo works.
     fn turn(&mut self, turn: &Turn<'_>, host: &mut Host<'_>) {
-        self.eye = Some((turn.eye.fov_y, turn.eye.aspect));
+        self.eye = Some(turn.eye);
         self.play_turn(turn, host);
         // While a cabinet is played, the game is all of the turn.
         if self.played.is_some() {

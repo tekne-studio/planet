@@ -307,6 +307,10 @@ pub struct Client {
     /// The view's size in pixels, as the shell gave it: what a picture's
     /// size on the screen is measured in, and where a screen is laid.
     view_px: [u32; 2],
+    /// The part of the view the shell leaves clear of what it lays over
+    /// it, as it said, pixels `[left, top, right, bottom]`: what the eye
+    /// is held on is framed in it ([`overlay::clear`]).
+    clear_px: Option<[f64; 4]>,
     /// The world's clock, seconds. Online it is the server's, set by Welcome,
     /// so every client shares one sky; offline it counts from the world's
     /// making. The sun, the moon and the weather are functions of it.
@@ -418,6 +422,7 @@ impl Client {
             effects: Effects::default(),
             aspect: 16.0 / 9.0,
             view_px: [1920, 1080],
+            clear_px: None,
             clock_s: 0.0,
             noon_offset: 0.0,
             stats_timer_s: 0.0,
@@ -528,6 +533,15 @@ impl Client {
         let [width, height] = self.view_px.map(|n| n as f32);
         self.aspect = width / height;
         self.controller.set_tall(height > width);
+    }
+
+    /// The part of the view the shell leaves clear of what it lays over
+    /// it, pixels from its top left, `[left, top, right, bottom]`: a pad,
+    /// a bar, a row of keys are outside it. What the eye is held on is
+    /// framed inside it, a game played filling it. `None` leaves room
+    /// round the middle, as for a page with keys.
+    pub fn set_clear(&mut self, clear: Option<[f64; 4]>) {
+        self.clear_px = clear;
     }
 
     /// Stirs in randomness only a platform has (a clock, the browser). Without
@@ -2302,6 +2316,7 @@ impl Client {
             rotation: camera.rotation,
             fov_y: f64::from(camera.fov_y),
             aspect: f64::from(self.aspect),
+            clear: self.clear(),
             // A captured pointer aims through the middle of the view.
             pointer: input.pointer.unwrap_or([0.5, 0.5]).map(f64::from),
         };
@@ -3263,11 +3278,20 @@ impl Client {
         overlay::laid(
             camera,
             self.view_px,
+            overlay::clear(self.view_px, self.clear_px),
             drawn.transform,
             picture,
             texels,
             opacity,
         )
+    }
+
+    /// The part of the view left clear, as fractions of it from its top
+    /// left: what a plugin frames a look in.
+    fn clear(&self) -> [f64; 4] {
+        let [wide, tall] = self.view_px.map(f64::from);
+        let [left, top, right, bottom] = overlay::clear(self.view_px, self.clear_px);
+        [left / wide, top / tall, right / wide, bottom / tall]
     }
 
     /// The walk and fly key: on foot the body flies, in flight or in a way

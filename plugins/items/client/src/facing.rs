@@ -91,6 +91,7 @@ mod tests {
             rotation: DQuat::IDENTITY,
             fov_y: 1.0,
             aspect: 1.0,
+            clear: [0.0, 0.0, 1.0, 1.0],
             pointer: [0.5, 0.5],
         }
     }

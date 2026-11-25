@@ -128,6 +128,10 @@ pub struct Eye {
     pub fov_y: f64,
     /// Width over height.
     pub aspect: f64,
+    /// The part of the view the shell leaves clear of what it lays over
+    /// it, fractions of the view from the top left, `[left, top, right,
+    /// bottom]`: a look at a screen frames it here.
+    pub clear: [f64; 4],
     /// Fractions of the view from the top left.
     pub pointer: [f64; 2],
 }

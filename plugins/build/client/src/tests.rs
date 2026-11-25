@@ -123,6 +123,7 @@ fn eye_at(position: DVec3, target: DVec3) -> Eye {
         rotation: DQuat::from_mat3(&DMat3::from_cols(right, up, back)),
         fov_y: 1.0,
         aspect: 1.5,
+        clear: [0.0, 0.0, 1.0, 1.0],
         pointer: [0.5, 0.5],
     }
 }

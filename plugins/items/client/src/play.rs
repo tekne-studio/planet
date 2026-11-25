@@ -13,7 +13,7 @@
 //! Each client runs its own copy of a game from the same seed: the one
 //! playing sees their game, and those near see its cover on theirs.
 
-use client::{Act, Host, Look, Offer, On, PartId, Shape, Turn, cabinet};
+use client::{Act, Eye, Host, Look, Offer, On, PartId, Shape, Turn, cabinet};
 use glam::{DAffine3, DMat3, DQuat, DVec3};
 
 use crate::Items;
@@ -34,14 +34,6 @@ pub const OFFER_LEAVE: u64 = 0;
 /// How far from the body a cabinet is offered, metres: the prompt takes
 /// those within its reach of these.
 const NEAR_M: f64 = 8.0;
-
-/// How much of the view the screen fills, across or down, whichever
-/// binds first.
-const SCREEN_FILLS: f64 = 0.7;
-
-/// How far over the view's middle the screen sits, of the view's height:
-/// under it the prompt's card offers leaving, clear of the game.
-const SCREEN_RISES: f64 = 0.06;
 
 /// Where the prompt hangs on a cabinet, in its box: the top of its front.
 const PROMPT_AT: DVec3 = DVec3::new(0.0, -0.5, 1.0);
@@ -122,8 +114,7 @@ impl Items {
 
     /// The look at a cabinet's screen, framed in the eye last seen.
     fn look(&self, host: &Host<'_>, cabinet: PartId) -> Option<Look> {
-        let (fov_y, aspect) = self.eye?;
-        let look = facing(screen_of(host, cabinet)?, fov_y, aspect)?;
+        let look = facing(screen_of(host, cabinet)?, &self.eye?)?;
         // Once there, the game is the person's screen, laid as drawn.
         Some(Look {
             shows: Some(cabinet),
@@ -164,25 +155,33 @@ fn screen_of(host: &Host<'_>, cabinet: PartId) -> Option<DAffine3> {
 }
 
 /// The look from straight in front of a screen, far enough back that it
-/// fills [`SCREEN_FILLS`] of a view `fov_y` tall and `aspect` wide, and a
-/// little under it, so it sits [`SCREEN_RISES`] over the middle.
-fn facing(screen: DAffine3, fov_y: f64, aspect: f64) -> Option<Look> {
+/// fills the part of the view `eye` leaves clear, across or down,
+/// whichever binds first, and moved off its middle so the screen's middle
+/// is the clear part's: the game is laid there, as large as it is drawn,
+/// and nothing laid over the view covers it.
+fn facing(screen: DAffine3, eye: &Eye) -> Option<Look> {
     let across = screen.matrix3.x_axis;
     let up = screen.matrix3.y_axis.normalize_or_zero();
     let out = across.cross(screen.matrix3.y_axis).normalize_or_zero();
     if out == DVec3::ZERO || up == DVec3::ZERO {
         return None;
     }
-    let half_tall = libm::tan(fov_y / 2.0);
+    let [left, top, right, bottom] = eye.clear;
+    let half_tall = libm::tan(eye.fov_y / 2.0);
+    let half_wide = half_tall * eye.aspect.max(f64::EPSILON);
     let away_m = f64::max(
-        screen.matrix3.y_axis.length() / 2.0 / half_tall,
-        across.length() / 2.0 / (half_tall * aspect.max(f64::EPSILON)),
-    ) / SCREEN_FILLS;
-    let right = across.normalize();
-    let tall_m = 2.0 * away_m * half_tall;
+        screen.matrix3.y_axis.length() / 2.0 / (half_tall * (bottom - top).max(f64::EPSILON)),
+        across.length() / 2.0 / (half_wide * (right - left).max(f64::EPSILON)),
+    );
+    // Where the clear part's middle is on the view, -1 to 1 from its
+    // middle, up and right: the eye stands that far the other way.
+    let [x, y] = [left + right - 1.0, 1.0 - top - bottom];
+    let right_way = across.normalize();
     Some(Look {
-        position: screen.translation + out * away_m - up * tall_m * SCREEN_RISES,
-        rotation: DQuat::from_mat3(&DMat3::from_cols(right, out.cross(right), out)),
+        position: screen.translation + out * away_m
+            - right_way * (x * half_wide * away_m)
+            - up * (y * half_tall * away_m),
+        rotation: DQuat::from_mat3(&DMat3::from_cols(right_way, out.cross(right_way), out)),
         shows: None,
     })
 }
@@ -191,34 +190,93 @@ fn facing(screen: DAffine3, fov_y: f64, aspect: f64) -> Option<Look> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_look_faces_the_screen_and_fills_most_of_the_view() {
-        // A screen half a metre wide and 0.375 tall, facing +y: its across
-        // runs toward -x, as the right of one looking at it from +y.
-        let screen = DAffine3 {
+    /// A screen half a metre wide and 0.375 tall, facing +y: its across
+    /// runs toward -x, as the right of one looking at it from +y.
+    fn screen() -> DAffine3 {
+        DAffine3 {
             matrix3: DMat3::from_cols(
                 DVec3::new(-0.5, 0.0, 0.0),
                 DVec3::new(0.0, 0.0, 0.375),
                 DVec3::new(0.0, 0.01, 0.0),
             ),
             translation: DVec3::new(0.0, 0.0, 1.2),
+        }
+    }
+
+    /// An eye a radian tall on a view `aspect` wide, leaving `clear` clear.
+    fn eye(aspect: f64, clear: [f64; 4]) -> Eye {
+        Eye {
+            position: DVec3::ZERO,
+            rotation: DQuat::IDENTITY,
+            fov_y: 1.0,
+            aspect,
+            clear,
+            pointer: [0.5, 0.5],
+        }
+    }
+
+    /// Where the screen's edges land on the view `eye` sees from `look`,
+    /// fractions from its top left: `[left, top, right, bottom]`.
+    fn seen(look: &Look, eye: &Eye) -> [f64; 4] {
+        let screen = screen();
+        let half_tall = libm::tan(eye.fov_y / 2.0);
+        let on_view = |point: DVec3| {
+            let seen = look.rotation.inverse() * (point - look.position);
+            let ndc = [
+                seen.x / -seen.z / (half_tall * eye.aspect),
+                seen.y / -seen.z / half_tall,
+            ];
+            [(ndc[0] + 1.0) / 2.0, (1.0 - ndc[1]) / 2.0]
         };
-        let fov_y = 1.0;
-        let look = facing(screen, fov_y, 16.0 / 9.0).unwrap();
+        let [left, top] = on_view(screen.transform_point3(DVec3::new(-0.5, 0.5, 0.0)));
+        let [right, bottom] = on_view(screen.transform_point3(DVec3::new(0.5, -0.5, 0.0)));
+        [left, top, right, bottom]
+    }
+
+    #[test]
+    fn the_look_faces_the_screen_and_fills_the_clear_part() {
+        // A wide view whose middle is left clear, seven tenths of it, raised.
+        let wide = eye(16.0 / 9.0, [0.15, 0.09, 0.85, 0.79]);
+        let look = facing(screen(), &wide).unwrap();
         // In front of it, looking straight at its face, upright.
         assert!(look.position.y > 0.0);
         let ahead = look.rotation * DVec3::NEG_Z;
         assert!(ahead.dot(DVec3::NEG_Y) > 0.9999, "{ahead}");
         assert!((look.rotation * DVec3::Y).z > 0.99, "upright");
-        // Its height fills SCREEN_FILLS of the view's, and its middle sits
-        // SCREEN_RISES of it over the view's.
-        let away_m = look.position.y - screen.translation.y;
-        let tall_m = 2.0 * away_m * libm::tan(fov_y / 2.0);
-        assert!((0.375 / tall_m - SCREEN_FILLS).abs() < 1e-9);
-        let rise = (screen.translation.z - look.position.z) / tall_m;
-        assert!((rise - SCREEN_RISES).abs() < 1e-9, "{rise}");
-        // A tall narrow view is bound by its width.
-        let narrow = facing(screen, fov_y, 0.5).unwrap();
-        assert!(narrow.position.y - screen.translation.y > away_m);
+        // Bound by its height, it fills the clear part down, its middle
+        // on the clear part's.
+        let [left, top, right, bottom] = seen(&look, &wide);
+        assert!(
+            (top - 0.09).abs() < 1e-9 && (bottom - 0.79).abs() < 1e-9,
+            "{top} {bottom}"
+        );
+        assert!(((left + right) / 2.0 - 0.5).abs() < 1e-9);
+        assert!(right - left < 0.7);
+    }
+
+    #[test]
+    fn a_phone_upright_fills_the_width_over_its_pad() {
+        // 390 by 844, a pad over the lowest 260: bound by its width.
+        let upright = eye(390.0 / 844.0, [0.0, 0.0, 1.0, 584.0 / 844.0]);
+        let look = facing(screen(), &upright).unwrap();
+        let [left, top, right, bottom] = seen(&look, &upright);
+        assert!(
+            left.abs() < 1e-9 && (right - 1.0).abs() < 1e-9,
+            "{left} {right}"
+        );
+        assert!(
+            ((top + bottom) / 2.0 - 292.0 / 844.0).abs() < 1e-9,
+            "{top} {bottom}"
+        );
+        // Sideways, the pad at its two sides, 544 clear between: bound by
+        // its height.
+        let sideways = eye(844.0 / 390.0, [150.0 / 844.0, 0.0, 694.0 / 844.0, 1.0]);
+        let look = facing(screen(), &sideways).unwrap();
+        let [left, top, right, bottom] = seen(&look, &sideways);
+        assert!(
+            top.abs() < 1e-9 && (bottom - 1.0).abs() < 1e-9,
+            "{top} {bottom}"
+        );
+        assert!(((left + right) / 2.0 - 0.5).abs() < 1e-9);
     }
 }

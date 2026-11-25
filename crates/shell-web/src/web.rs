@@ -160,6 +160,9 @@ pub(crate) struct State {
     secondary_down: Option<(f64, f64)>,
     /// The fingers on the canvas: the stick, the one that looks, the pinch.
     fingers: touch::Fingers,
+    /// The part of the canvas the page leaves clear of what it lays over
+    /// it, CSS pixels `[left, top, right, bottom]`, as it last said.
+    clear: Option<[f64; 4]>,
     /// The pictures that move, playing into the renderer.
     pub(crate) playing: moving::Playing,
     /// The cabinets' games, run by a worker into the renderer.
@@ -221,6 +224,7 @@ impl Engine {
             files: FILES.to_owned(),
             secondary_down: None,
             fingers: touch::Fingers::default(),
+            clear: None,
             playing: moving::Playing::default(),
             carts: carts::Carts::default(),
             audio: audio::Audio::default(),
@@ -300,6 +304,14 @@ impl Engine {
             Ok(loudness) => self.state.borrow_mut().audio.set_loudness(loudness),
             Err(error) => log::warn!("loudness not read: {error}"),
         }
+    }
+
+    /// The part of the canvas the page leaves clear of what it lays over
+    /// it, CSS pixels from its top left, `[left, top, right, bottom]`: a
+    /// game played fills it. None, or any other length, leaves the room
+    /// round the middle a page with keys wants.
+    pub fn set_clear(&self, clear: Option<Box<[f64]>>) {
+        self.state.borrow_mut().clear = clear.and_then(|part| <[f64; 4]>::try_from(&*part).ok());
     }
 
     /// Closes the link, if one is open.
@@ -578,6 +590,8 @@ impl State {
         }
 
         self.client.set_view([width, height]);
+        self.client
+            .set_clear(self.clear.map(|part| part.map(|css| css * ratio)));
         let frame = self.client.update(dt, &mut self.input);
         self.audio.tick(&frame.camera, self.client.sounds());
         let struck = self.client.drain_strikes();

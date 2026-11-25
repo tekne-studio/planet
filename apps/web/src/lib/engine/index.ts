@@ -21,11 +21,16 @@ export interface Engine {
 	set_files(base: string): void;
 	/** How loud each group of what is heard is: the shell's mix, heard at once. */
 	set_loudness(loudness: Loudness): void;
+	/** The part of the canvas the page leaves clear of what it lays over it: a game played fills it. Null leaves room round the middle, as for a page with keys. */
+	set_clear(clear: Clear | null): void;
 	/** Opens the link to a world server at a socket URL, the key included. */
 	connect(url: string): void;
 	disconnect(): void;
 	free(): void;
 }
+
+/** A part of the canvas, CSS pixels from its top left: `[left, top, right, bottom]`. */
+export type Clear = readonly [number, number, number, number];
 
 /** A loaded engine module, ready to bind to a canvas. */
 export interface EngineModule {
@@ -64,6 +69,7 @@ interface RawEngine {
 	set_field(bytes: Uint8Array): void;
 	set_files(base: string): void;
 	set_loudness(json: string): void;
+	set_clear(clear?: Float64Array): void;
 	set_carts(make: () => Worker): void;
 	set_games(make: (context: AudioContext) => Promise<AudioWorkletNode>): void;
 	connect(url: string): void;
@@ -134,6 +140,7 @@ async function load(): Promise<EngineModule | null> {
 				set_field: (bytes) => engine.set_field(bytes),
 				set_files: (base) => engine.set_files(base),
 				set_loudness: (loudness) => engine.set_loudness(JSON.stringify(loudness)),
+				set_clear: (clear) => engine.set_clear(clear ? new Float64Array(clear) : undefined),
 				connect: (url) => engine.connect(url),
 				disconnect: () => engine.disconnect(),
 				free: () => engine.free()

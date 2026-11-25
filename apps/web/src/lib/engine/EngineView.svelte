@@ -12,6 +12,7 @@
 		loadEngine,
 		parseChoices,
 		parsePet,
+		type Clear,
 		type Command,
 		type Effects,
 		type Loudness,
@@ -43,6 +44,8 @@
 		effects?: Effects;
 		/** How loud each group of what is heard is. Undefined leaves the shell's mix as it is. */
 		loudness?: Loudness;
+		/** The part of the view the page leaves clear of what it lays over it, where a game played goes. Null when it lays nothing over a game. */
+		clear?: Clear | null;
 		/** The kinds of marker the person hides. Undefined hides none. */
 		hiddenMarkers?: string[];
 		/**
@@ -67,7 +70,7 @@
 		onevent?: (event: EngineEvent | PluginEvent) => void;
 	}
 
-	let { recipe, fieldPath, mode, avatar, name = '', effects, loudness, hiddenMarkers, stand, link, onevent }: Props = $props();
+	let { recipe, fieldPath, mode, avatar, name = '', effects, loudness, clear = null, hiddenMarkers, stand, link, onevent }: Props = $props();
 
 	/**
 	 * A command with no prop of its own: a line said, a place gone to. Dropped
@@ -376,6 +379,11 @@
 	// it is dragged.
 	$effect(() => {
 		if (engine && loudness) engine.set_loudness(loudness);
+	});
+
+	// Where a game played goes, handed over with each engine as it changes.
+	$effect(() => {
+		engine?.set_clear(clear);
 	});
 
 	// The markers hidden, handed over with each engine: it keeps none.
