@@ -221,11 +221,11 @@ fn facing(screen: DAffine3, eye: &Eye) -> Option<Look> {
 
 #[cfg(test)]
 mod tests {
-    use client::{Client, Input};
+    use client::{Client, Input, Key, Pad, Running};
     use topology::SurfacePoint;
 
     use super::*;
-    use crate::tests::{client, games, placed, update};
+    use crate::tests::{client, games, placed, shown, update};
 
     /// A screen half a metre wide and 0.375 tall, facing +y: its across
     /// runs toward -x, as the right of one looking at it from +y.
@@ -374,6 +374,37 @@ mod tests {
         assert!(!client.controls_lent());
         let off_m = flat(client.host("items").body().position - spot).length();
         assert!(off_m < 0.05, "{off_m} metres off where it played");
+    }
+
+    #[test]
+    fn with_no_world_a_game_of_two_pads_plays_at_once_from_player_one_s_station() {
+        let mut client = client();
+        games(&mut client);
+        let cover = placed(&mut client);
+        client.running_plays(cover, 2);
+        let mut input = Input::default();
+        client.command_json(r#"{"type":"items.edit","on":false}"#);
+        update(&mut client, &mut input);
+        client.command_json(r#"{"type":"act"}"#);
+        update(&mut client, &mut input);
+        shown(&mut client).expect("the game opens");
+        input.key(Key::Right, true);
+        let mut fed = Vec::new();
+        for _ in 0..60 {
+            update(&mut client, &mut input);
+            for run in client.drain_running() {
+                if let Running::Feed { buttons, .. } = run {
+                    fed.extend(buttons);
+                }
+            }
+        }
+        assert!(fed.len() > 50, "it runs at its pace: {} updates", fed.len());
+        let pad = |pad| {
+            fed.iter()
+                .fold(0, |all, &word| all | Pad::of_pad(word, pad).bits())
+        };
+        assert_ne!(pad(0), 0, "player one's pad is the player's");
+        assert_eq!(pad(1), 0, "player two's is released");
     }
 
     #[test]

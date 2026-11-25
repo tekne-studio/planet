@@ -100,6 +100,11 @@ impl Stations {
     }
 }
 
+/// Who holds the station played with no world: a session past those a
+/// world gives, which count up from 1, and never 0, which is nobody. It
+/// holds while no session does: one that comes ends it.
+const NO_WORLD: u32 = u32::MAX;
+
 /// The pads `cabinet`'s game reads, when it reads more than one: a game of
 /// stations.
 fn stations_of(host: &Host<'_>, cabinet: PartId) -> Option<usize> {
@@ -154,7 +159,16 @@ impl Items {
             .or(self.stations.free(cabinet, plays))?;
         self.rise(host);
         let ran = dropped.map(|dropped| dropped.ran).unwrap_or_default();
-        self.ask(host, cabinet, station, ran);
+        match host.session() {
+            Some(_) => self.ask(host, cabinet, station, ran),
+            // No world holds stations: its player plays at once, alone.
+            None => {
+                let mut holders = Holders::default();
+                holders[station] = NO_WORLD;
+                let versus = Versus::new(NO_WORLD, station, plays, holders, ran);
+                self.stations.playing = Some(Playing { cabinet, versus });
+            }
+        }
         Some(station)
     }
 
@@ -206,6 +220,14 @@ impl Items {
         self.stations.now_s = turn.now_s;
         let session = host.session();
         if session != self.stations.session {
+            // A station played with no world, or held in one gone, is no
+            // station of this world's: let go, kept in mind to sit again.
+            if self.stations.playing.is_some() {
+                if self.played.is_some() {
+                    self.leave(host);
+                }
+                self.rest_station(host);
+            }
             self.stations.session = session;
             self.stations.held.clear();
             if session.is_some() {
