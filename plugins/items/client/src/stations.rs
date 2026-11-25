@@ -10,8 +10,12 @@
 //! A player keeps their station while their game waits for them: left, the
 //! game runs on with their pad released, and they take it back by playing
 //! again. Once the game stops waiting, or it gives the station up, they
-//! rise. One whose link dropped sits again, once back, at the station they
-//! held if it is still free, and runs at once what they missed.
+//! rise. One whose link dropped, back while their game waits, plays it again
+//! from the station they held if it is still free: what the game here ran
+//! still holds, and what they missed runs at once.
+//!
+//! A cabinet is named here as the world names it: the name this client gives
+//! a part is its own, and new after a link drops.
 
 use std::collections::BTreeMap;
 
@@ -27,20 +31,22 @@ use crate::versus::{BEHIND_AT_ONCE, Holders, Runs, START_WAITS_S, Versus};
 pub(crate) struct Stations {
     /// Who holds each cabinet's stations, as the world last said: a cabinet
     /// not here has every station free.
-    held: BTreeMap<PartId, Holders>,
+    held: BTreeMap<u64, Holders>,
     /// The session the world was last asked who holds them for.
     session: Option<u32>,
     /// A station asked for and not given yet.
     asked: Option<Asked>,
     /// The station held, and the game played from it.
     playing: Option<Playing>,
+    /// The station held when the link dropped, and how the game here ran.
+    dropped: Option<Asked>,
     /// The clock at the last turn, seconds: what is relayed between turns is
     /// heard then.
     now_s: f64,
 }
 
 struct Asked {
-    cabinet: PartId,
+    cabinet: u64,
     station: usize,
     since_s: f64,
     /// How the game here ran, kept from a station held before.
@@ -48,18 +54,18 @@ struct Asked {
 }
 
 struct Playing {
-    cabinet: PartId,
+    cabinet: u64,
     versus: Versus,
 }
 
 impl Stations {
     /// Whether this machine holds or asked for a station of `cabinet`.
-    pub(crate) fn sits_at(&self, cabinet: PartId) -> bool {
+    fn sits_at(&self, cabinet: u64) -> bool {
         self.station_at(cabinet).is_some()
     }
 
     /// The station of `cabinet` this machine holds or asked for.
-    fn station_at(&self, cabinet: PartId) -> Option<usize> {
+    fn station_at(&self, cabinet: u64) -> Option<usize> {
         let playing = self
             .playing
             .as_ref()
@@ -71,13 +77,13 @@ impl Stations {
     }
 
     /// The first station of `cabinet` free among the `plays` its game reads.
-    fn free(&self, cabinet: PartId, plays: usize) -> Option<usize> {
+    fn free(&self, cabinet: u64, plays: usize) -> Option<usize> {
         let holders = self.held.get(&cabinet).copied().unwrap_or_default();
         (0..plays.min(PADS)).find(|&station| holders[station] == 0)
     }
 
     /// Who holds `cabinet`'s stations now.
-    fn said(&mut self, cabinet: PartId, holders: Holders) {
+    fn said(&mut self, cabinet: u64, holders: Holders) {
         match holders.iter().all(|&held| held == 0) {
             true => self.held.remove(&cabinet),
             false => self.held.insert(cabinet, holders),
@@ -99,36 +105,74 @@ fn stations_of(host: &Host<'_>, cabinet: PartId) -> Option<usize> {
 }
 
 impl Items {
+    /// Whether this machine holds or asked for a station of `cabinet`.
+    pub(crate) fn sits_at(&self, host: &Host<'_>, cabinet: PartId) -> bool {
+        let named = host.parts().known_as(cabinet);
+        named.is_some_and(|named| self.stations.sits_at(named))
+    }
+
     /// Whether `cabinet` may be played from here: a game of one pad always,
     /// one of stations while this machine sits there or a station is free.
     pub(crate) fn station_open(&self, host: &Host<'_>, cabinet: PartId) -> bool {
-        match stations_of(host, cabinet) {
-            None => true,
-            Some(plays) => {
-                self.stations.sits_at(cabinet) || self.stations.free(cabinet, plays).is_some()
-            }
-        }
+        let Some(plays) = stations_of(host, cabinet) else {
+            return true;
+        };
+        host.parts().known_as(cabinet).is_some_and(|named| {
+            self.stations.sits_at(named) || self.stations.free(named, plays).is_some()
+        })
     }
 
     /// The station `cabinet` is played from, asked for when its game is one
-    /// of stations this machine does not sit at: player 1's for a game of
-    /// one pad. `None` when none is free.
+    /// of stations this machine does not sit at: the one it held before its
+    /// link dropped while free, else the first free; player 1's for a game
+    /// of one pad. `None` when none is free.
     pub(crate) fn sit(&mut self, host: &mut Host<'_>, cabinet: PartId) -> Option<usize> {
         let Some(plays) = stations_of(host, cabinet) else {
             return Some(0);
         };
+        let cabinet = host.parts().known_as(cabinet)?;
         if let Some(station) = self.stations.station_at(cabinet) {
             return Some(station);
         }
-        let station = self.stations.free(cabinet, plays)?;
+        let dropped = self
+            .stations
+            .dropped
+            .take()
+            .filter(|dropped| dropped.cabinet == cabinet);
+        let holders = self
+            .stations
+            .held
+            .get(&cabinet)
+            .copied()
+            .unwrap_or_default();
+        let station = dropped
+            .as_ref()
+            .map(|dropped| dropped.station)
+            .filter(|&station| holders[station] == 0)
+            .or(self.stations.free(cabinet, plays))?;
         self.rise(host);
-        self.ask(host, cabinet, station, Runs::default());
+        let ran = dropped.map(|dropped| dropped.ran).unwrap_or_default();
+        self.ask(host, cabinet, station, ran);
         Some(station)
     }
 
-    fn ask(&mut self, host: &mut Host<'_>, cabinet: PartId, station: usize, ran: Runs) {
+    /// The link dropped, or the plugin rests: the station is let go, and
+    /// kept in mind with how the game here ran, to play it again.
+    pub(crate) fn rest_station(&mut self, host: &mut Host<'_>) {
+        if let Some(playing) = &self.stations.playing {
+            self.stations.dropped = Some(Asked {
+                cabinet: playing.cabinet,
+                station: playing.versus.station(),
+                since_s: self.stations.now_s,
+                ran: playing.versus.history().clone(),
+            });
+        }
+        self.rise(host);
+    }
+
+    fn ask(&mut self, host: &mut Host<'_>, cabinet: u64, station: usize, ran: Runs) {
         let sit = wire::Sit {
-            cabinet: cabinet.0,
+            cabinet,
             station: station as u32,
         };
         host.send(SIT, sit.encode_to_vec());
@@ -145,13 +189,13 @@ impl Items {
         let playing = self.stations.playing.take().map(|playing| playing.cabinet);
         let asked = self.stations.asked.take().map(|asked| asked.cabinet);
         if let Some(cabinet) = playing.or(asked) {
-            host.send(RISE, wire::Rise { cabinet: cabinet.0 }.encode_to_vec());
+            host.send(RISE, wire::Rise { cabinet }.encode_to_vec());
         }
     }
 
     /// The turn of the station held: the world asked who holds the stations
-    /// once a session begins, one dropped sits again, and the game played
-    /// from the station is given every update agreed.
+    /// once a session begins, and the game played from the station given
+    /// every update agreed.
     pub(crate) fn stations_turn(&mut self, turn: &Turn<'_>, host: &mut Host<'_>) {
         self.stations.now_s = turn.now_s;
         let session = host.session();
@@ -160,13 +204,6 @@ impl Items {
             self.stations.held.clear();
             if session.is_some() {
                 host.send(LOOK, wire::Look {}.encode_to_vec());
-            }
-            // Back with another session: sat again where it was, the game
-            // here as it ran.
-            if let (Some(_), Some(playing)) = (session, self.stations.playing.take()) {
-                let station = playing.versus.station();
-                let ran = playing.versus.history().clone();
-                self.ask(host, playing.cabinet, station, ran);
             }
         }
         if let Some(asked) = &self.stations.asked
@@ -180,9 +217,13 @@ impl Items {
         let Some(playing) = self.stations.playing.as_mut() else {
             return;
         };
-        let cabinet = playing.cabinet;
+        let named = playing.cabinet;
+        // Its cabinet went, or is out of reach: risen.
+        let Some(cabinet) = host.parts().known_here(named) else {
+            return self.rise(host);
+        };
         let played = self.played == Some(cabinet);
-        // Its game stopped waiting, its cabinet went, or it gave up: risen.
+        // Its game stopped waiting, or it gave up: risen.
         if playing.versus.lost()
             || !host.game_playable(cabinet)
             || !(played || host.game_waits(cabinet))
@@ -198,7 +239,7 @@ impl Items {
             .filter(|_| played)
             .or(played.then_some(Pad::NONE));
         for payload in playing.versus.turn(turn.now_s, pad, given.is_some()) {
-            host.relay(cabinet.0, payload);
+            host.relay(named, payload);
         }
         let Some(given) = given else {
             return;
@@ -220,7 +261,7 @@ impl Items {
         let Ok(said) = wire::Stations::decode(payload) else {
             return;
         };
-        let cabinet = PartId(said.cabinet);
+        let cabinet = said.cabinet;
         let mut holders = Holders::default();
         for (held, &session) in holders.iter_mut().zip(&said.holders) {
             *held = session;
@@ -233,7 +274,9 @@ impl Items {
         else {
             return;
         };
-        let (Some(me), Some(plays)) = (host.session(), stations_of(host, cabinet)) else {
+        let here = host.parts().known_here(cabinet);
+        let plays = here.and_then(|here| stations_of(host, here));
+        let (Some(me), Some(plays)) = (host.session(), plays) else {
             return;
         };
         if holders[asked.station] == me {
@@ -248,7 +291,7 @@ impl Items {
         // Another took it first: the next free, or none.
         match self.stations.free(cabinet, plays) {
             Some(station) => self.ask(host, cabinet, station, asked.ran),
-            None if self.played == Some(cabinet) => self.leave(host),
+            None if self.played.is_some() && self.played == here => self.leave(host),
             None => {}
         }
     }
@@ -260,7 +303,7 @@ impl Items {
             .stations
             .playing
             .as_mut()
-            .filter(|playing| playing.cabinet.0 == relayed.thing)
+            .filter(|playing| playing.cabinet == relayed.thing)
         {
             let Relayed {
                 session,
@@ -274,7 +317,7 @@ impl Items {
 
     /// A session left the world: its station is free.
     pub(crate) fn stations_left(&mut self, session: u32) {
-        let left: Vec<(PartId, Holders)> = self
+        let left: Vec<(u64, Holders)> = self
             .stations
             .held
             .iter()

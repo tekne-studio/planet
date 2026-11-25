@@ -1556,7 +1556,7 @@ impl Plugin for Items {
     fn rest(&mut self, host: &mut Host<'_>) {
         self.using = false;
         self.leave(host);
-        self.rise(host);
+        self.rest_station(host);
         if self.editing {
             self.edit(false, host);
         }

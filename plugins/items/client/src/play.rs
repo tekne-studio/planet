@@ -81,7 +81,7 @@ impl Items {
                     .iter()
                     .zip(1..)
                     .filter_map(|(&(id, top), offer)| {
-                        let tap = match host.game_waits(id) || self.stations.sits_at(id) {
+                        let tap = match host.game_waits(id) || self.sits_at(host, id) {
                             true => word::RESUME,
                             false => word::PLAY,
                         };

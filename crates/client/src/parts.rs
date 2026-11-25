@@ -1596,11 +1596,21 @@ impl Parts {
     }
 
     /// The name a part is known by to everyone: in a world, the world's,
-    /// `None` until it gives one; alone, this client's own.
-    fn known_as(&self, id: PartId) -> Option<u64> {
+    /// `None` until it gives one; alone, this client's own. A part's name
+    /// here is this client's alone, and a link that drops and comes back
+    /// names the same part anew.
+    pub fn known_as(&self, id: PartId) -> Option<u64> {
         match &self.link {
             Some(link) => link.world_of.get(&id).copied(),
             None => Some(id.0),
+        }
+    }
+
+    /// The part held here that everyone knows as `name`: its name here.
+    pub fn known_here(&self, name: u64) -> Option<PartId> {
+        match &self.link {
+            Some(link) => link.local_of.get(&name).copied(),
+            None => Some(PartId(name)),
         }
     }
 
