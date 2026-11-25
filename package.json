@@ -1,0 +1,36 @@
+{
+	"name": "planet",
+	"private": true,
+	"type": "module",
+	"workspaces": [
+		"apps/*",
+		"plugins/*"
+	],
+	"scripts": {
+		"setup": "bun scripts/setup.ts",
+		"dev": "bun scripts/dev.ts",
+		"server": "bun scripts/server.ts",
+		"web": "bun run --cwd apps/web dev",
+		"wasm": "bun scripts/wasm.ts",
+		"assets": "bun scripts/assets.ts",
+		"field": "bun scripts/field.ts",
+		"desktop": "cargo run --release -p shell-desktop --",
+		"shot": "bun scripts/shot.ts",
+		"cart": "bun scripts/cart.ts",
+		"rom": "bun scripts/rom.ts",
+		"webshot": "bun scripts/webshot.ts",
+		"bench": "bun scripts/bench.ts",
+		"proto": "bun scripts/proto.ts",
+		"plugins": "bun scripts/plugins.ts",
+		"module": "bun scripts/module.ts",
+		"check": "bun scripts/check.ts",
+		"build": "bun run wasm && bun run --cwd apps/web build"
+	},
+	"devDependencies": {
+		"@commitlint/cli": "^20.0.0",
+		"@commitlint/config-conventional": "^20.0.0",
+		"@types/bun": "^1.3.14",
+		"conventional-changelog-conventionalcommits": "^9.0.0",
+		"semantic-release": "^25.0.0"
+	}
+}

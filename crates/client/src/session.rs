@@ -1,0 +1,183 @@
+//! The link to a world server, as the client sees it: frames in, frames out.
+//!
+//! The client owns the protocol and none of the socket. A platform shell
+//! opens the connection, hands over every frame it reads, sends every frame
+//! queued here, and says when the link is open or gone. An agent without a
+//! renderer drives the same three calls.
+
+use protocol::{ClientMessage, client_message};
+
+/// How often a stance goes out at most, per second. The server relays at the
+/// same rate, so nothing is sent twice in one tick.
+pub const STANCE_HZ: f64 = 15.0;
+/// A stance goes out at least this often while nothing changes, so the
+/// server can tell a still body from a dead link.
+const HEARTBEAT_S: f64 = 2.0;
+/// The server says something at least every two seconds; nothing for this
+/// long means the link is gone whatever the socket thinks.
+const SILENCE_S: f64 = 10.0;
+
+/// What the client wants the shell to do with the socket.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Outbound {
+    /// One message, as one binary frame.
+    Frame(Vec<u8>),
+    /// Close the socket; the client is done with it.
+    Close,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Link {
+    Offline,
+    /// Hello sent, Welcome awaited.
+    Connecting,
+    Online {
+        session: u32,
+    },
+}
+
+pub struct Session {
+    link: Link,
+    outbound: Vec<Outbound>,
+    since_sent_s: f64,
+    since_heard_s: f64,
+    last_stance: Option<protocol::Stance>,
+}
+
+impl Default for Session {
+    fn default() -> Session {
+        Session {
+            link: Link::Offline,
+            outbound: Vec::new(),
+            since_sent_s: 0.0,
+            since_heard_s: 0.0,
+            last_stance: None,
+        }
+    }
+}
+
+impl Session {
+    pub fn link(&self) -> Link {
+        self.link
+    }
+
+    pub fn online(&self) -> bool {
+        matches!(self.link, Link::Online { .. })
+    }
+
+    /// The link is open: say hello.
+    pub fn opened(&mut self, avatar: &str, name: &str) {
+        self.link = Link::Connecting;
+        self.since_sent_s = 0.0;
+        self.since_heard_s = 0.0;
+        self.last_stance = None;
+        self.say(client_message::Message::Hello(protocol::Hello {
+            protocol: protocol::PROTOCOL,
+            avatar: avatar.to_owned(),
+            name: name.to_owned(),
+        }));
+    }
+
+    pub fn rename(&mut self, name: &str) {
+        if self.online() {
+            self.say(client_message::Message::Rename(protocol::Rename {
+                name: name.to_owned(),
+            }));
+        }
+    }
+
+    pub fn welcomed(&mut self, session: u32) {
+        self.link = Link::Online { session };
+    }
+
+    /// The link is gone, from either side.
+    pub fn closed(&mut self) {
+        self.link = Link::Offline;
+        self.outbound.clear();
+    }
+
+    /// Asks the shell to end the link.
+    pub fn close(&mut self) {
+        self.outbound.push(Outbound::Close);
+        self.link = Link::Offline;
+    }
+
+    pub fn heard(&mut self) {
+        self.since_heard_s = 0.0;
+    }
+
+    /// Time passes. True when the server has been silent too long.
+    pub fn tick(&mut self, dt: f64) -> bool {
+        if self.link == Link::Offline {
+            return false;
+        }
+        self.since_sent_s += dt;
+        self.since_heard_s += dt;
+        self.since_heard_s > SILENCE_S
+    }
+
+    /// Whether the rate lets a stance go out now: what the body's stance
+    /// is built for, fifteen times a second, never once a frame.
+    pub fn stance_due(&self) -> bool {
+        self.online() && self.since_sent_s >= 1.0 / STANCE_HZ
+    }
+
+    /// The stance goes out when it changed, or as a heartbeat.
+    pub fn stance(&mut self, stance: protocol::Stance) {
+        let changed = self.last_stance.as_ref() != Some(&stance);
+        if changed || self.since_sent_s >= HEARTBEAT_S {
+            self.since_sent_s = 0.0;
+            self.last_stance = Some(stance.clone());
+            self.say(client_message::Message::Stance(stance));
+        }
+    }
+
+    /// The body sounded a voice of the core's, struck with `seed`.
+    pub fn sound(&mut self, voice: &str, seed: u32) {
+        if self.online() {
+            self.say(client_message::Message::Sound(protocol::Sound {
+                voice: voice.to_owned(),
+                seed,
+            }));
+        }
+    }
+
+    pub fn wear(&mut self, avatar: &str) {
+        if self.online() {
+            self.say(client_message::Message::Wear(protocol::Wear {
+                avatar: avatar.to_owned(),
+            }));
+        }
+    }
+
+    /// One message of a plugin, in the core's envelope. Nothing while
+    /// offline: what is asked of nobody is not queued for later.
+    pub fn envelope(&mut self, plugin: &str, kind: &str, payload: Vec<u8>) {
+        self.ask(plugin, kind, payload, 0);
+    }
+
+    /// One op of an owner, a plugin or a system of the core, with the
+    /// asker's own number for it: the world answers an op asked with a
+    /// number, that it landed or why it was refused. Zero asks for no answer.
+    pub fn ask(&mut self, owner: &str, kind: &str, payload: Vec<u8>, id: u32) {
+        if self.online() {
+            self.say(client_message::Message::Envelope(protocol::Envelope {
+                plugin: owner.to_owned(),
+                kind: kind.to_owned(),
+                payload,
+                id,
+            }));
+        }
+    }
+
+    fn say(&mut self, message: client_message::Message) {
+        let frame = protocol::encode(&ClientMessage {
+            message: Some(message),
+        });
+        self.outbound.push(Outbound::Frame(frame));
+    }
+
+    pub fn drain_outbound(&mut self) -> Vec<Outbound> {
+        core::mem::take(&mut self.outbound)
+    }
+}

@@ -1,0 +1,124 @@
+/* ==========================================================================
+   Design system: tokens. The source of truth.
+
+   Two layers. Primitives name raw values. Semantics name a role. Components
+   reference semantic variables only, so a theme swaps one layer.
+
+   Theme: `color-scheme` drives `light-dark()`. With no choice made the page
+   follows the OS; `<html data-theme>` (stamped by the server from the `theme`
+   cookie) pins it. One declaration per token covers both modes.
+   ========================================================================== */
+
+:root {
+	/* ---- Primitives ---- */
+	--black: #000000;
+	--white: #ffffff;
+	--grey-100: #f0f0f0;
+	--grey-300: #c4c4c4;
+	--grey-400: #999999;
+	--grey-600: #666666;
+	--grey-800: #2a2a2a;
+	--grey-900: #111111;
+	--red-400: #ff5a4f;
+	--red-600: #c8160c;
+
+	/* ---- Semantics: colour ---- */
+	color-scheme: light dark;
+	--bg: light-dark(var(--white), var(--black));
+	--bg-inset: light-dark(var(--grey-100), var(--grey-900));
+	--bg-overlay: color-mix(in srgb, var(--bg) 88%, transparent);
+	--backdrop: color-mix(in srgb, var(--black) 60%, transparent);
+	--text: light-dark(var(--black), var(--white));
+	--text-muted: light-dark(var(--grey-600), var(--grey-400));
+	--border: light-dark(var(--grey-300), var(--grey-800));
+	--border-strong: var(--text);
+	--action: var(--text);
+	--action-text: var(--bg);
+	--focus: var(--text);
+	/* A scroller's thumb: quiet at rest, stronger under the pointer. */
+	--scroll-thumb: color-mix(in srgb, var(--text) 22%, transparent);
+	--scroll-thumb-hover: color-mix(in srgb, var(--text) 45%, transparent);
+	/* The one colour. Reserved for errors and destructive actions, and never
+	   the only carrier: a marker or a label always says the same thing. */
+	--danger: light-dark(var(--red-600), var(--red-400));
+	--danger-text: var(--bg);
+	/* Text laid straight over the world, in either theme: white, with a
+	   tight dark shadow, nearly an outline, so it reads on sky and grass. */
+	--on-world: var(--white);
+	--on-world-shadow: color-mix(in srgb, var(--black) 90%, transparent);
+
+	/* ---- Type: one size. Hierarchy is weight, case, spacing and borders. ---- */
+	--font: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+	--fs: 10px;
+	--lh: 1.6;
+	--fw-regular: 400;
+	--fw-medium: 500;
+	--fw-bold: 700;
+	--ls-caps: 0.1em;
+
+	/* ---- Space ---- */
+	--sp-1: 2px;
+	--sp-2: 4px;
+	--sp-3: 8px;
+	--sp-4: 12px;
+	--sp-5: 16px;
+	--sp-6: 24px;
+	--sp-7: 32px;
+	--sp-8: 48px;
+
+	/* ---- Shape ---- */
+	--bw: 1px;
+	--radius: 0;
+
+	/* ---- Layout ---- */
+	--control-h: 24px;
+	--measure: 64ch;
+	--page-narrow: 360px;
+	--page-wide: 960px;
+	--panel-w: 260px;
+	/* How tall a large panel stands at most: one of sections, the settings. */
+	--panel-large-h: 640px;
+	/* How wide a scroller's bar is, its thumb inset in it. */
+	--scroll-w: 10px;
+	/* What a thumb holds down: the buttons that stand in for keys on a
+	   touch screen. */
+	--thumb-h: 56px;
+
+	/* ---- Over the world: its own family, dark, translucent and soft, unlike
+	   the light square panels: what floats on the picture, never furniture. ---- */
+	--on-world-card: color-mix(in srgb, var(--grey-900) 70%, transparent);
+	--on-world-badge: color-mix(in srgb, var(--white) 16%, transparent);
+	/* A hairline of light, so a card never sinks into the night. */
+	--on-world-edge: color-mix(in srgb, var(--white) 16%, transparent);
+	--on-world-quiet: color-mix(in srgb, var(--white) 66%, transparent);
+	--on-world-veil: color-mix(in srgb, var(--black) 42%, transparent);
+	--radius-soft: 6px;
+	/* The badge of a key to press on a thing: a thumb's on a touch screen. */
+	--key-mark: 28px;
+	--radius-round: 999px;
+	/* What eases in and out over the world: fast, never a bounce. */
+	--dur-fast: 120ms;
+	--ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+	/* ---- Layers ---- */
+	--z-panel: 10;
+	--z-topbar: 20;
+}
+
+/* A finger is wider than a cursor and a phone is read nearer the eye: on a
+   touch screen every control is a finger wide and the type a size up. */
+@media (pointer: coarse) {
+	:root {
+		--fs: 12px;
+		--control-h: 40px;
+		--key-mark: 44px;
+	}
+}
+
+:root[data-theme='light'] {
+	color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+	color-scheme: dark;
+}

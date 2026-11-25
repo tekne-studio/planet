@@ -1,0 +1,687 @@
+//! The parts of a world where the world is decided: a system of the core,
+//! an owner as a plugin is. It names a part a session places, keeps it in
+//! its store, sets and removes it, tells whoever is near, shows a client
+//! that looks the parts near it that it lacks, and charts the landmarks of
+//! the world for whoever asks, the asker's home and favourites first.
+//!
+//! A part is one row: its record under its name. An account's home and
+//! favourites are one row too, under its id: a visitor's are its client's
+//! to keep. What is held in memory is read again by a new instance: every
+//! record, and the next name to give.
+
+use std::collections::{BTreeMap, HashMap};
+
+use prost::Message;
+use protocol::parts as wire;
+use protocol::{Body, Stance};
+use seat::{Seat, TELL_M};
+
+use crate::{Level, Measure, Op, Plugin, Room, Who};
+
+/// The version of the parts' wire.
+pub const VERSION: u32 = 1;
+
+/// How near a body a part is for its client to hold it, metres: as far as
+/// the cells are seen afar, since a part is a record and not chunks, and
+/// the client draws it to a reach of its own within this.
+pub const HOLD_M: f64 = 8192.0;
+/// The most records one look is answered with.
+const LOOK_RECORDS: usize = 4096;
+/// The most landmarks a chart says.
+const CHART_RECORDS: usize = 256;
+
+/// The key a part's record is kept under: a tag and its name.
+fn record_key(id: u64) -> Vec<u8> {
+    let mut key = vec![b'p'];
+    key.extend(id.to_be_bytes());
+    key
+}
+
+/// The key the next name to give is kept under.
+const NEXT_KEY: &[u8] = b"next";
+
+/// The key an account's choices are kept under: a tag and its id.
+fn choices_key(user: &str) -> Vec<u8> {
+    let mut key = vec![b'a'];
+    key.extend(user.as_bytes());
+    key
+}
+
+/// What an account chose of the chart, as kept: nothing chosen when
+/// nothing is kept.
+fn choices(room: &mut dyn Room, user: &str) -> wire::Choices {
+    room.get(&choices_key(user))
+        .and_then(|bytes| wire::Choices::decode(bytes.as_slice()).ok())
+        .unwrap_or_default()
+}
+
+/// Where a landmark stands in a chart: the home first, then the
+/// favourites, then the rest.
+fn rank(choices: &wire::Choices, id: u64) -> u8 {
+    match id {
+        _ if id == choices.home => 0,
+        _ if choices.favourites.contains(&id) => 1,
+        _ => 2,
+    }
+}
+
+/// Someone who changed a part, as the world knew them then: their account
+/// and the name they had here.
+#[derive(Clone, PartialEq, Debug)]
+struct By {
+    account: Account,
+    name: String,
+}
+
+/// Whose a change was, as the world knew it then.
+#[derive(Clone, PartialEq, Debug)]
+enum Account {
+    /// An account's, by its id in mundos.
+    User(String),
+    /// A visitor's: a name anyone could have taken.
+    Visitor,
+    /// Not known: a record kept by the name alone.
+    Unknown,
+}
+
+impl By {
+    fn of(who: &Who) -> By {
+        By {
+            account: match who.user.is_empty() {
+                true => Account::Visitor,
+                false => Account::User(who.user.clone()),
+            },
+            name: who.name.clone(),
+        }
+    }
+
+    fn from_wire(by: &wire::By) -> By {
+        let account = match (by.user.is_empty(), by.visitor) {
+            (false, _) => Account::User(by.user.clone()),
+            (true, true) => Account::Visitor,
+            (true, false) => Account::Unknown,
+        };
+        By {
+            account,
+            name: by.name.clone(),
+        }
+    }
+
+    /// Who a record kept by the name alone names: nobody for an empty name.
+    fn named(name: &str) -> Option<By> {
+        (!name.is_empty()).then(|| By {
+            account: Account::Unknown,
+            name: name.to_owned(),
+        })
+    }
+
+    /// As the world keeps it: the account's id with the name.
+    fn kept(&self) -> wire::By {
+        wire::By {
+            name: self.name.clone(),
+            user: match &self.account {
+                Account::User(user) => user.clone(),
+                Account::Visitor | Account::Unknown => String::new(),
+            },
+            visitor: self.account == Account::Visitor,
+        }
+    }
+
+    /// As a client is told it: the name, and whether it was a visitor's,
+    /// never the account's id.
+    fn told(&self) -> wire::By {
+        wire::By {
+            user: String::new(),
+            ..self.kept()
+        }
+    }
+}
+
+/// A part as the world keeps it, and who placed it and who set it last:
+/// each `None` where the world does not know, `set_by` for a part never
+/// set.
+#[derive(Clone, PartialEq, Debug)]
+struct Kept {
+    seat: Seat,
+    part: part::Part,
+    version: u64,
+    placed_by: Option<By>,
+    set_by: Option<By>,
+}
+
+impl Kept {
+    /// The record the world keeps.
+    fn record(&self, id: u64) -> wire::Record {
+        self.wire(id, By::kept)
+    }
+
+    /// The record a client is told.
+    fn told(&self, id: u64) -> wire::Record {
+        self.wire(id, By::told)
+    }
+
+    fn wire(&self, id: u64, by: fn(&By) -> wire::By) -> wire::Record {
+        wire::Record {
+            id,
+            part: Some(seat::part_wire(self.seat, &self.part)),
+            version: self.version,
+            placed_by: self.placed_by.as_ref().map(by),
+            set_by: self.set_by.as_ref().map(by),
+            ..Default::default()
+        }
+    }
+
+    fn landmark(&self) -> bool {
+        matches!(self.part.shape, part::Shape::Landmark(_))
+    }
+
+    fn from_record(record: &wire::Record) -> Option<Kept> {
+        let (seat, part) = seat::part_from_wire(record.part.as_ref()?)?;
+        Some(Kept {
+            seat,
+            part,
+            version: record.version,
+            placed_by: (record.placed_by.as_ref().map(By::from_wire))
+                .or_else(|| By::named(&record.placed_name)),
+            set_by: (record.set_by.as_ref().map(By::from_wire))
+                .or_else(|| By::named(&record.set_name)),
+        })
+    }
+}
+
+/// A change that landed, as what takes it back and puts it back.
+enum Change {
+    /// A part placed, by name.
+    Placed(u64),
+    /// A part set: as it was before.
+    Set(u64, Kept),
+    /// A part removed: as it was.
+    Removed(u64, Kept),
+}
+
+/// Changes a session may take back, and the most of them kept.
+const HISTORY: usize = 100;
+
+/// What a session may take back, the last change last, and put back.
+#[derive(Default)]
+struct History {
+    done: Vec<Change>,
+    undone: Vec<Change>,
+}
+
+impl History {
+    /// Keeps a change that landed as the last to take back. Sets of one part
+    /// in a row are one change, back to how it stood before the first: a
+    /// drag sets a part many times a second.
+    fn did(&mut self, change: Change) {
+        self.undone.clear();
+        if let (Change::Set(id, _), Some(Change::Set(last, _))) = (&change, self.done.last())
+            && id == last
+        {
+            return;
+        }
+        self.done.push(change);
+        if self.done.len() > HISTORY {
+            self.done.remove(0);
+        }
+    }
+}
+
+/// The system. The host calls it one op at a time.
+#[derive(Default)]
+pub struct Parts {
+    /// Every part of the world, by name: read from the store by the first
+    /// op, and kept in step with it.
+    index: Option<BTreeMap<u64, Kept>>,
+    /// The next name to give, read with the index. Never one given before.
+    next: u64,
+    histories: HashMap<u32, History>,
+}
+
+/// The system as the server's module holds it.
+pub fn system() -> Box<dyn Plugin> {
+    Box::new(Parts::default())
+}
+
+impl Parts {
+    fn index(&mut self, room: &mut dyn Room) -> &mut BTreeMap<u64, Kept> {
+        if self.index.is_none() {
+            let rows = room.scan(b"p");
+            let kept = rows.iter().filter_map(|(_, value)| {
+                let record = wire::Record::decode(value.as_slice()).ok()?;
+                Some((record.id, Kept::from_record(&record)?))
+            });
+            let index: BTreeMap<u64, Kept> = kept.collect();
+            let last = index.keys().next_back().copied().unwrap_or(0);
+            let next = room
+                .get(NEXT_KEY)
+                .and_then(|bytes| Some(u64::from_be_bytes(bytes.try_into().ok()?)))
+                .unwrap_or(0);
+            self.next = next.max(last + 1).max(1);
+            self.index = Some(index);
+        }
+        self.index.as_mut().expect("read just now")
+    }
+
+    /// Whether a part may stand on its seat as its pose says.
+    fn inside(measure: &Measure, seat: Seat, part: &part::Part) -> bool {
+        seat::inside(measure.body(seat.body()), &part.pose)
+    }
+
+    fn keep(&mut self, room: &mut dyn Room, id: u64, kept: &Kept) {
+        room.keep(&record_key(id), kept.record(id).encode_to_vec());
+        self.index(room).insert(id, kept.clone());
+    }
+
+    fn place(&mut self, payload: &[u8], who: &Who, room: &mut dyn Room) {
+        let Ok(place) = wire::Place::decode(payload) else {
+            return room.refuse("message");
+        };
+        let Some((seat, part)) = place.part.as_ref().and_then(seat::part_from_wire) else {
+            return room.refuse("message");
+        };
+        if !Self::inside(&room.measure(), seat, &part) {
+            return room.refuse("pose");
+        }
+        self.index(room);
+        let id = self.next;
+        self.next += 1;
+        room.keep(NEXT_KEY, self.next.to_be_bytes().to_vec());
+        let kept = Kept {
+            seat,
+            part,
+            version: 0,
+            placed_by: Some(By::of(who)),
+            set_by: None,
+        };
+        self.keep(room, id, &kept);
+        self.tell_placed(room, who, id, &kept);
+        self.histories
+            .entry(who.session)
+            .or_default()
+            .did(Change::Placed(id));
+    }
+
+    /// Says a part placed to whoever is near, and to the asker whether
+    /// near or not: it is waiting for the name.
+    fn tell_placed(&self, room: &mut dyn Room, who: &Who, id: u64, kept: &Kept) {
+        let mut to = near(room, kept.seat, &kept.part, TELL_M);
+        if !to.contains(&who.session) {
+            to.push(who.session);
+        }
+        let placed = wire::Placed {
+            session: who.session,
+            record: Some(kept.told(id)),
+        };
+        room.tell(wire::PLACED, placed.encode_to_vec(), &to);
+    }
+
+    /// Sets a part as `kept` says, one version on, and tells whoever is near
+    /// where it stood and where it stands.
+    fn apply_set(&mut self, room: &mut dyn Room, who: &Who, id: u64, before: &Kept, kept: Kept) {
+        self.keep(room, id, &kept);
+        let mut to = near(room, before.seat, &before.part, TELL_M);
+        for session in near(room, kept.seat, &kept.part, TELL_M) {
+            if !to.contains(&session) {
+                to.push(session);
+            }
+        }
+        let changed = wire::Changed {
+            session: who.session,
+            record: Some(kept.told(id)),
+        };
+        room.tell(wire::CHANGED, changed.encode_to_vec(), &to);
+    }
+
+    /// Takes a part out of the world and tells whoever is near. What it was.
+    fn take_out(&mut self, room: &mut dyn Room, who: &Who, id: u64) -> Option<Kept> {
+        let kept = self.index(room).remove(&id)?;
+        room.forget(&record_key(id));
+        let removed = wire::Removed {
+            session: who.session,
+            id,
+        };
+        let to = near(room, kept.seat, &kept.part, TELL_M);
+        room.tell(wire::REMOVED, removed.encode_to_vec(), &to);
+        Some(kept)
+    }
+
+    fn set(&mut self, payload: &[u8], who: &Who, room: &mut dyn Room) {
+        let Ok(set) = wire::Set::decode(payload) else {
+            return room.refuse("message");
+        };
+        let Some((seat, part)) = set.part.as_ref().and_then(seat::part_from_wire) else {
+            return room.refuse("message");
+        };
+        if !Self::inside(&room.measure(), seat, &part) {
+            return room.refuse("pose");
+        }
+        let Some(before) = self.index(room).get(&set.id).cloned() else {
+            return room.refuse("gone");
+        };
+        let kept = Kept {
+            seat,
+            part,
+            version: before.version + 1,
+            placed_by: before.placed_by.clone(),
+            set_by: Some(By::of(who)),
+        };
+        self.apply_set(room, who, set.id, &before, kept);
+        self.histories
+            .entry(who.session)
+            .or_default()
+            .did(Change::Set(set.id, before));
+    }
+
+    fn remove(&mut self, payload: &[u8], who: &Who, room: &mut dyn Room) {
+        let Ok(remove) = wire::Remove::decode(payload) else {
+            return room.refuse("message");
+        };
+        let Some(kept) = self.take_out(room, who, remove.id) else {
+            return room.refuse("gone");
+        };
+        self.histories
+            .entry(who.session)
+            .or_default()
+            .did(Change::Removed(remove.id, kept));
+    }
+
+    /// Takes back the last change of a session, or puts back the last it
+    /// took back. A part placed is taken out and stands again under the
+    /// same name; a part set goes back to how it was, one version on, set
+    /// last by the asker; a part removed stands again as it was. A part
+    /// someone else removed since, or set since, is left as they left it:
+    /// the change is then gone from the history and nothing is done. False
+    /// with nothing to take back.
+    fn restore(&mut self, back: bool, who: &Who, room: &mut dyn Room) -> bool {
+        let history = self.histories.entry(who.session).or_default();
+        let change = match back {
+            true => history.done.pop(),
+            false => history.undone.pop(),
+        };
+        let Some(change) = change else {
+            return false;
+        };
+        let inverse = match change {
+            Change::Placed(id) => self
+                .take_out(room, who, id)
+                .map(|kept| Change::Removed(id, kept)),
+            Change::Removed(id, kept) => {
+                if self.index(room).contains_key(&id) {
+                    None
+                } else {
+                    let kept = Kept {
+                        version: kept.version + 1,
+                        ..kept
+                    };
+                    self.keep(room, id, &kept);
+                    self.tell_placed(room, who, id, &kept);
+                    Some(Change::Placed(id))
+                }
+            }
+            Change::Set(id, before) => match self.index(room).get(&id).cloned() {
+                Some(now) => {
+                    let kept = Kept {
+                        version: now.version + 1,
+                        set_by: Some(By::of(who)),
+                        ..before
+                    };
+                    self.apply_set(room, who, id, &now, kept);
+                    Some(Change::Set(id, now))
+                }
+                None => None,
+            },
+        };
+        let history = self.histories.entry(who.session).or_default();
+        match (inverse, back) {
+            (Some(inverse), true) => history.undone.push(inverse),
+            (Some(inverse), false) => history.done.push(inverse),
+            (None, _) => return false,
+        }
+        true
+    }
+
+    /// Answers what a client holds with what it lacks: every part near its
+    /// body that it has not, or has at another version, the nearest first,
+    /// and those it holds that stand no more.
+    fn look(&mut self, payload: &[u8], who: &Who, room: &mut dyn Room) {
+        let Ok(look) = wire::Look::decode(payload) else {
+            return room.refuse("message");
+        };
+        let measure = room.measure();
+        let held: BTreeMap<u64, u64> = look.held.iter().map(|at| (at.id, at.version)).collect();
+        let index = self.index(room);
+        let gone: Vec<u64> = held
+            .keys()
+            .copied()
+            .filter(|id| !index.contains_key(id))
+            .collect();
+        let from = who
+            .stance
+            .as_ref()
+            .and_then(|stance| place(&measure, stance));
+        let mut lacking: Vec<(f64, u64, wire::Record)> = index
+            .iter()
+            .filter_map(|(&id, kept)| {
+                let away_m = away_m(&measure, kept.seat, &kept.part, from?)?;
+                let holds = held.get(&id) == Some(&kept.version);
+                (away_m <= HOLD_M && !holds).then(|| (away_m, id, kept.told(id)))
+            })
+            .collect();
+        lacking.sort_by(|a, b| a.0.total_cmp(&b.0));
+        lacking.truncate(LOOK_RECORDS);
+        if gone.is_empty() && lacking.is_empty() {
+            return;
+        }
+        let seen = wire::Seen {
+            records: lacking.into_iter().map(|(_, _, record)| record).collect(),
+            gone,
+        };
+        room.tell(wire::SEEN, seen.encode_to_vec(), &[who.session]);
+    }
+
+    /// Answers the asker with the landmarks of the world, wherever they
+    /// stand: its home, then its favourites, then the rest, each the
+    /// nearest first and those on another body last: what a list to travel
+    /// by shows. The home and the favourites come before the cut, so a far
+    /// one is never cut. Always answered, empty with none.
+    fn chart(&mut self, who: &Who, room: &mut dyn Room) {
+        let measure = room.measure();
+        let from = who
+            .stance
+            .as_ref()
+            .and_then(|stance| place(&measure, stance));
+        let choices = match who.user.is_empty() {
+            true => wire::Choices::default(),
+            false => choices(room, &who.user),
+        };
+        let index = self.index(room);
+        let mut found: Vec<(u8, f64, u64, wire::Record)> = index
+            .iter()
+            .filter(|(_, kept)| kept.landmark())
+            .map(|(&id, kept)| {
+                let away_m = from
+                    .and_then(|from| away_m(&measure, kept.seat, &kept.part, from))
+                    .unwrap_or(f64::INFINITY);
+                (rank(&choices, id), away_m, id, kept.told(id))
+            })
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        found.truncate(CHART_RECORDS);
+        let ids = || found.iter().map(|(_, _, id, _)| *id);
+        let home = ids().find(|id| *id == choices.home).unwrap_or(0);
+        let favourites = ids().filter(|id| choices.favourites.contains(id)).collect();
+        let charted = wire::Charted {
+            records: found.into_iter().map(|(_, _, _, record)| record).collect(),
+            home,
+            favourites,
+        };
+        room.tell(wire::CHARTED, charted.encode_to_vec(), &[who.session]);
+    }
+
+    /// Whether a part of that name is a landmark standing in the world.
+    fn landmark(&mut self, room: &mut dyn Room, id: u64) -> bool {
+        self.index(room).get(&id).is_some_and(Kept::landmark)
+    }
+
+    /// Keeps an account's choices, with the favourites that stand no more
+    /// let go: what is kept is as long as the chart at most.
+    fn keep_choices(&mut self, room: &mut dyn Room, user: &str, mut choices: wire::Choices) {
+        let index = self.index(room);
+        choices
+            .favourites
+            .retain(|id| index.get(id).is_some_and(Kept::landmark));
+        choices.favourites.sort_unstable();
+        choices.favourites.dedup();
+        match choices == wire::Choices::default() {
+            true => room.forget(&choices_key(user)),
+            false => room.keep(&choices_key(user), choices.encode_to_vec()),
+        }
+    }
+
+    /// Makes a landmark one of the asker's favourites, or no longer one.
+    /// An account's alone: a visitor's are its client's to keep.
+    fn favour(&mut self, payload: &[u8], who: &Who, room: &mut dyn Room) {
+        let Ok(favour) = wire::Favour::decode(payload) else {
+            return room.refuse("message");
+        };
+        if who.user.is_empty() {
+            return room.refuse("visitor");
+        }
+        if favour.on && !self.landmark(room, favour.id) {
+            return room.refuse("gone");
+        }
+        let mut chosen = choices(room, &who.user);
+        chosen.favourites.retain(|id| *id != favour.id);
+        if favour.on {
+            chosen.favourites.push(favour.id);
+        }
+        self.keep_choices(room, &who.user, chosen);
+    }
+
+    /// Makes a landmark the asker's home, in the place of the last, or
+    /// clears it with 0. An account's alone.
+    fn home(&mut self, payload: &[u8], who: &Who, room: &mut dyn Room) {
+        let Ok(home) = wire::Home::decode(payload) else {
+            return room.refuse("message");
+        };
+        if who.user.is_empty() {
+            return room.refuse("visitor");
+        }
+        if home.id != 0 && !self.landmark(room, home.id) {
+            return room.refuse("gone");
+        }
+        let chosen = wire::Choices {
+            home: home.id,
+            ..choices(room, &who.user)
+        };
+        self.keep_choices(room, &who.user, chosen);
+    }
+}
+
+/// Where a stance is: the body it is on, and metres from that body's centre.
+fn place(measure: &Measure, stance: &Stance) -> Option<(Body, [f64; 3])> {
+    Some((stance.body(), measure.position(stance)?))
+}
+
+/// How far a place is from a part's anchor, metres. `None` from another
+/// body: nothing there is near.
+fn away_m(
+    measure: &Measure,
+    seat: Seat,
+    part: &part::Part,
+    (body, at): (Body, [f64; 3]),
+) -> Option<f64> {
+    if body != seat.body() {
+        return None;
+    }
+    let anchor = seat::seated(measure.body(seat.body()), seat.sector(), &part.pose).translation;
+    let [dx, dy, dz] = [anchor.x - at[0], anchor.y - at[1], anchor.z - at[2]];
+    Some(libm::sqrt(dx * dx + dy * dy + dz * dz))
+}
+
+/// The sessions whose bodies are within reach of a part.
+fn near(room: &dyn Room, seat: Seat, part: &part::Part, reach_m: f64) -> Vec<u32> {
+    let measure = room.measure();
+    room.sessions()
+        .iter()
+        .filter(|who| {
+            let from = who
+                .stance
+                .as_ref()
+                .and_then(|stance| place(&measure, stance));
+            from.is_some_and(|from| {
+                away_m(&measure, seat, part, from).is_some_and(|away_m| away_m <= reach_m)
+            })
+        })
+        .map(|who| who.session)
+        .collect()
+}
+
+impl Plugin for Parts {
+    fn name(&self) -> &'static str {
+        wire::OWNER
+    }
+
+    fn version(&self) -> u32 {
+        VERSION
+    }
+
+    /// Placing, setting and removing a part is a builder's and an admin's,
+    /// and taking that back. Anyone looks, and anyone asks for the chart;
+    /// an account chooses its home and its favourites in it.
+    fn ops(&self) -> Vec<Op> {
+        let builder = [
+            wire::PLACE,
+            wire::SET,
+            wire::REMOVE,
+            wire::TAKE_BACK,
+            wire::PUT_BACK,
+        ];
+        let mut ops: Vec<Op> = builder
+            .into_iter()
+            .map(|kind| Op {
+                kind,
+                level: Level::Builder,
+            })
+            .collect();
+        for kind in [wire::LOOK, wire::CHART] {
+            ops.push(Op {
+                kind,
+                level: Level::Anonymous,
+            });
+        }
+        for kind in [wire::FAVOUR, wire::HOME] {
+            ops.push(Op {
+                kind,
+                level: Level::SignedIn,
+            });
+        }
+        ops
+    }
+
+    fn op(&mut self, kind: &str, payload: &[u8], who: &Who, room: &mut dyn Room) {
+        match kind {
+            wire::PLACE => self.place(payload, who, room),
+            wire::SET => self.set(payload, who, room),
+            wire::REMOVE => self.remove(payload, who, room),
+            wire::TAKE_BACK | wire::PUT_BACK => {
+                if !self.restore(kind == wire::TAKE_BACK, who, room) {
+                    room.refuse("none");
+                }
+            }
+            wire::LOOK => self.look(payload, who, room),
+            wire::CHART => self.chart(who, room),
+            wire::FAVOUR => self.favour(payload, who, room),
+            wire::HOME => self.home(payload, who, room),
+            _ => {}
+        }
+    }
+
+    fn gone(&mut self, session: u32) {
+        self.histories.remove(&session);
+    }
+}
+
+#[cfg(test)]
+mod tests;

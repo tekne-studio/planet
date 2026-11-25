@@ -1,0 +1,1062 @@
+//! A part: a placed thing that is no cell. A cube first; a voxel model, a
+//! 3D model, a picture, a landmark, a portal, a light are shapes of the same
+//! thing.
+//!
+//! A part knows no sphere. It stands in a flat frame, blocks along `x` and
+//! `y` and up `z`, the frame of the seat it is on, and seating it on a body
+//! is `seat`'s job: the frame is the seat's tangent frame at the anchor, and
+//! a part is rigid in it. Everything here is said in that frame and in
+//! blocks: where a line meets a part, what a body standing beside one has
+//! under its feet and over its head.
+//!
+//! A part's own space is the unit box: `x` and `y` from `-0.5` to `0.5`,
+//! `z` from `0` to `1`, its anchor the middle of its bottom. Its pose turns
+//! and stretches that box, so a cube of scale 1 is one cell, and a model,
+//! of voxels or of meshes, fills it whole.
+
+use glam::{DAffine3, DQuat, DVec3};
+
+/// The name of a part, as the world gives it: never reused.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct PartId(pub u64);
+
+/// What a part is.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Shape {
+    /// The unit box, in one paint.
+    Cube,
+    /// A model: a `.vox` file, named by the SHA-256 of its content, its
+    /// voxels filling the unit box in their own palette (`vox`). The paint
+    /// is nobody's. What a body meets of it is its own grid, read through
+    /// the pose by whoever holds the file; here it is its box.
+    Vox([u8; 32]),
+    /// A 3D model: a `.glb` file, named by the SHA-256 of its content, the
+    /// meshes its scene places filling the unit box in their own materials
+    /// and pictures (`glb`), its front toward the box's `y = -0.5` side. The
+    /// paint is nobody's. What a body meets of it is its box.
+    Glb([u8; 32]),
+    /// A picture: the box's front, its `y = -0.5` side, drawn with an image
+    /// and seen from both sides. Wide as the box is along `x`, tall as it is
+    /// along `z`; a hand places it in the picture's own aspect.
+    Image(Media),
+    /// A landmark: a five pointed star lying in the box, its points at the
+    /// box's sides along `x` and `y`, as tall as the box along `z`, bearing
+    /// a name. It is lit with its own light whatever its paint's finish, so
+    /// it is seen at night, and it is a place one travels to: arriving at
+    /// it is standing on it.
+    Landmark(Name),
+    /// A sound: a file played where the box stands, looping, heard within
+    /// the part's reach. Nothing is drawn of it but its gizmo when picked.
+    Sound(Clip),
+    /// A portal: a standing ring, a rim round the circle that fills the box
+    /// along `x` and `z`, lit with its own light whatever its paint's finish,
+    /// with a dark pane in its middle, leading to a landmark by the name
+    /// the world gave it. A body that passes through the pane is taken to
+    /// stand on that star, facing the way it points.
+    Portal(Portal),
+    /// An arcade cabinet of the engine's own drawing filling the box, its
+    /// front toward the box's `y = -0.5` side, its screen running a
+    /// cartridge. Its body is in its paint, or wears its skin.
+    Cabinet(Cabinet),
+}
+
+/// What a cabinet runs and wears. Either may be missing: with no cartridge
+/// the screen is dark glass, with no skin the body is in the part's paint.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub struct Cabinet {
+    /// The game: a [`CARTRIDGE`] file, by the hash of its content.
+    pub cart: Option<ContentId>,
+    /// A picture painted on the body by a fixed layout, kept as a
+    /// picture is, its three files: one [`Cabinet::wears`].
+    pub skin: Option<Media>,
+}
+
+impl Cabinet {
+    /// Whether a picture may be a skin: a still, kept as PNG, JPEG or WebP.
+    pub fn wears(media: &Media) -> bool {
+        !media.moves()
+            && matches!(
+                media.kind,
+                ImageKind::Png | ImageKind::Jpg | ImageKind::Webp
+            )
+    }
+
+    /// The asset name of a cartridge: `asset://<hash>.wasm`.
+    pub fn cart_name(cart: ContentId) -> String {
+        format!("asset://{}.{CARTRIDGE}", cart.hex())
+    }
+
+    /// The cartridge an asset name stands for. `None` for a name that is no
+    /// `asset://<hash>.wasm`.
+    pub fn cart_of(name: &str) -> Option<ContentId> {
+        let (hex, ext) = name.strip_prefix("asset://")?.split_once('.')?;
+        (ext == CARTRIDGE).then_some(())?;
+        ContentId::parse(hex)
+    }
+}
+
+/// Where a portal leads and how wide its rim is.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Portal {
+    /// The landmark it leads to. `None` leads nowhere: the landmark was
+    /// never chosen, or is gone.
+    pub to: Option<PartId>,
+    /// The rim's width, in [`Portal::RIM_UNITS`]ths of the box's width: none
+    /// at 0, the pane alone; at most [`Portal::RIM_MAX`], the rim to the
+    /// middle, which the world refuses to go past.
+    pub rim: u8,
+}
+
+impl Portal {
+    /// How many of a rim's units make the box's width.
+    pub const RIM_UNITS: u8 = 200;
+    /// The widest rim: to the middle of the box, no pane left.
+    pub const RIM_MAX: u8 = Self::RIM_UNITS / 2;
+    /// A rim as a hand first makes it: six hundredths of the width, twelve
+    /// centimetres on a ring two metres across, twenty four on the four a
+    /// hand places.
+    pub const RIM: u8 = 12;
+
+    /// The rim's width, of the box's width.
+    pub fn rim_of_width(self) -> f32 {
+        f32::from(self.rim) / f32::from(Self::RIM_UNITS)
+    }
+}
+
+/// The most bytes a name is, UTF-8.
+pub const NAME_BYTES: usize = 64;
+
+/// What a landmark is called: trimmed, never empty, no control character,
+/// at most [`NAME_BYTES`] bytes of UTF-8, kept inline so a part stays plain
+/// data. Read back with [`Name::as_str`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Name {
+    len: u8,
+    bytes: [u8; NAME_BYTES],
+}
+
+impl Name {
+    /// A name from text, trimmed. `None` for one that is empty, over the
+    /// bound or holds a control character: what the world refuses.
+    pub fn new(text: &str) -> Option<Name> {
+        let text = text.trim();
+        if text.is_empty() || text.len() > NAME_BYTES || text.chars().any(char::is_control) {
+            return None;
+        }
+        let mut bytes = [0; NAME_BYTES];
+        bytes[..text.len()].copy_from_slice(text.as_bytes());
+        Some(Name {
+            len: text.len() as u8,
+            bytes,
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..usize::from(self.len)]).expect("made from a str")
+    }
+
+    /// The name a copy bears: its number one on, `Hall 3` after `Hall 2`,
+    /// and ` 2` after a name that ends in none. The rest is cut at a
+    /// character when the number would take it past the bound.
+    pub fn next(&self) -> Name {
+        let text = self.as_str();
+        let numbered = text.rsplit_once(' ').and_then(|(stem, digits)| {
+            let digits_only = !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit());
+            let number = digits_only.then(|| digits.parse::<u32>().ok())??;
+            Some((stem.trim_end(), number.checked_add(1)?))
+        });
+        let (stem, number) = numbered.unwrap_or((text, 2));
+        let suffix = format!(" {number}");
+        let mut end = stem.len().min(NAME_BYTES - suffix.len());
+        while !stem.is_char_boundary(end) {
+            end -= 1;
+        }
+        Name::new(&format!("{}{suffix}", stem[..end].trim_end()))
+            .expect("a name cut short and numbered is a name")
+    }
+}
+
+impl core::fmt::Display for Name {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl core::fmt::Debug for Name {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Name({:?})", self.as_str())
+    }
+}
+
+impl Shape {
+    /// The model a file's asset name stands for: `asset://<sha256>.vox` a
+    /// voxel model, `asset://<sha256>.glb` a 3D model. `None` for a name
+    /// that is no model's.
+    pub fn of_asset(name: &str) -> Option<Shape> {
+        let (hex, kind) = name.strip_prefix("asset://")?.split_once('.')?;
+        let model = match kind {
+            "vox" => Shape::Vox,
+            "glb" => Shape::Glb,
+            _ => return None,
+        };
+        if hex.len() != 64 {
+            return None;
+        }
+        let mut hash = [0; 32];
+        for (byte, pair) in hash.iter_mut().zip(hex.as_bytes().chunks(2)) {
+            *byte = u8::from_str_radix(core::str::from_utf8(pair).ok()?, 16).ok()?;
+        }
+        Some(model(hash))
+    }
+
+    /// The asset name of a model's file. `None` for a shape of the core's.
+    pub fn asset(self) -> Option<String> {
+        let (hash, kind) = match self {
+            Shape::Vox(hash) => (hash, "vox"),
+            Shape::Glb(hash) => (hash, "glb"),
+            Shape::Cube
+            | Shape::Image(_)
+            | Shape::Landmark(_)
+            | Shape::Sound(_)
+            | Shape::Portal(_)
+            | Shape::Cabinet(_) => return None,
+        };
+        let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+        Some(format!("asset://{hex}.{kind}"))
+    }
+}
+
+/// The kind of a cartridge's file, the extension the world keeps it by: a
+/// game a cabinet runs, judged by the world before it is kept.
+pub const CARTRIDGE: &str = "wasm";
+
+/// The file kinds a sound is kept in, by the extension the world names them
+/// with: the three every browser plays.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ClipKind {
+    Mp3,
+    M4a,
+    Ogg,
+}
+
+impl ClipKind {
+    pub fn ext(self) -> &'static str {
+        match self {
+            ClipKind::Mp3 => "mp3",
+            ClipKind::M4a => "m4a",
+            ClipKind::Ogg => "ogg",
+        }
+    }
+
+    pub fn from_ext(ext: &str) -> Option<ClipKind> {
+        match ext {
+            "mp3" => Some(ClipKind::Mp3),
+            "m4a" => Some(ClipKind::M4a),
+            "ogg" => Some(ClipKind::Ogg),
+            _ => None,
+        }
+    }
+}
+
+/// What a sound is, and nothing else: its file and how long it plays.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Clip {
+    pub file: ContentId,
+    pub kind: ClipKind,
+    /// How long it plays before it loops, in milliseconds.
+    pub millis: u32,
+}
+
+impl Clip {
+    /// The asset reference of the file, as a record names it:
+    /// `asset://<hash>.<ext>`.
+    pub fn name(&self) -> String {
+        format!("asset://{}.{}", self.file.hex(), self.kind.ext())
+    }
+
+    /// A clip read back from its asset name and length. `None` when the
+    /// name is no `asset://<hash>.<ext>` of a sound.
+    pub fn parse(name: &str, millis: u32) -> Option<Clip> {
+        let (hex, ext) = name.strip_prefix("asset://")?.split_once('.')?;
+        Some(Clip {
+            file: ContentId::parse(hex)?,
+            kind: ClipKind::from_ext(ext)?,
+            millis,
+        })
+    }
+}
+
+/// The content id of a heavy file, the SHA-256 of its bytes: how a record
+/// names it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct ContentId(pub [u8; 32]);
+
+impl ContentId {
+    /// The id as it is written: lower case hex.
+    pub fn hex(&self) -> String {
+        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// An id read back from its hex. `None` for anything else.
+    pub fn parse(hex: &str) -> Option<ContentId> {
+        let hex = hex.as_bytes();
+        if hex.len() != 64 {
+            return None;
+        }
+        let mut bytes = [0; 32];
+        for (byte, pair) in bytes.iter_mut().zip(hex.chunks(2)) {
+            let digit = |c: u8| (c as char).to_digit(16);
+            *byte = (digit(pair[0])? * 16 + digit(pair[1])?) as u8;
+        }
+        Some(ContentId(bytes))
+    }
+}
+
+/// The file kinds a picture is kept in, by the extension the world names
+/// them with. A GIF, a WebP and an MP4 may move; what says whether one does
+/// is [`Media::millis`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ImageKind {
+    Png,
+    Jpg,
+    Webp,
+    Gif,
+    Mp4,
+}
+
+impl ImageKind {
+    pub fn ext(self) -> &'static str {
+        match self {
+            ImageKind::Png => "png",
+            ImageKind::Jpg => "jpg",
+            ImageKind::Webp => "webp",
+            ImageKind::Gif => "gif",
+            ImageKind::Mp4 => "mp4",
+        }
+    }
+
+    pub fn from_ext(ext: &str) -> Option<ImageKind> {
+        match ext {
+            "png" => Some(ImageKind::Png),
+            "jpg" => Some(ImageKind::Jpg),
+            "webp" => Some(ImageKind::Webp),
+            "gif" => Some(ImageKind::Gif),
+            "mp4" => Some(ImageKind::Mp4),
+            _ => None,
+        }
+    }
+}
+
+/// The level of detail of a picture: which of its three files is shown.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum PictureLevel {
+    /// At most 128 texels on its longest side, for what is far.
+    Thumb,
+    /// At most 1024, for what is near.
+    Low,
+    /// The original, for what is in view and close.
+    Full,
+}
+
+/// What a picture is at every distance, and nothing else: its size in
+/// texels, how long it plays, and the three files its owner's client made
+/// when it was placed. The thumb and the low version are WebP; for a picture
+/// that moves they are posters, its first frame.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Media {
+    pub width: u32,
+    pub height: u32,
+    /// How long the original plays, in milliseconds: 0 for a still.
+    pub millis: u32,
+    pub thumb: ContentId,
+    pub low: ContentId,
+    pub full: ContentId,
+    /// What the original is kept as.
+    pub kind: ImageKind,
+}
+
+impl Media {
+    /// Width over height.
+    pub fn aspect(&self) -> f64 {
+        f64::from(self.width.max(1)) / f64::from(self.height.max(1))
+    }
+
+    /// Whether the original moves: a GIF, an animated WebP or a video, played
+    /// near and in view, a poster elsewhere.
+    pub fn moves(&self) -> bool {
+        self.millis > 0
+    }
+
+    /// Whether the original carries sound: a video does, a GIF or a WebP
+    /// never.
+    pub fn sounds(&self) -> bool {
+        self.moves() && self.kind == ImageKind::Mp4
+    }
+
+    /// The content id of a level.
+    pub fn id(&self, level: PictureLevel) -> ContentId {
+        match level {
+            PictureLevel::Thumb => self.thumb,
+            PictureLevel::Low => self.low,
+            PictureLevel::Full => self.full,
+        }
+    }
+
+    /// The asset reference of a level, as a record names a file:
+    /// `asset://<hash>.<ext>`.
+    pub fn name(&self, level: PictureLevel) -> String {
+        let ext = match level {
+            PictureLevel::Full => self.kind.ext(),
+            _ => ImageKind::Webp.ext(),
+        };
+        format!("asset://{}.{ext}", self.id(level).hex())
+    }
+
+    /// A media read back from three asset names, a size and how long it
+    /// plays. `None` when a name is no `asset://<hash>.<ext>` of a picture.
+    pub fn parse(
+        width: u32,
+        height: u32,
+        millis: u32,
+        thumb: &str,
+        low: &str,
+        full: &str,
+    ) -> Option<Media> {
+        let split = |name: &str| -> Option<(ContentId, ImageKind)> {
+            let (hex, ext) = name.strip_prefix("asset://")?.split_once('.')?;
+            Some((ContentId::parse(hex)?, ImageKind::from_ext(ext)?))
+        };
+        let (full, kind) = split(full)?;
+        Some(Media {
+            width,
+            height,
+            millis,
+            thumb: split(thumb)?.0,
+            low: split(low)?.0,
+            full,
+            kind,
+        })
+    }
+}
+
+/// Where a part stands and how it is turned and stretched, in the flat
+/// frame of its seat.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Pose {
+    /// Where its anchor stands: blocks along the seat's `u` and `v`, and
+    /// blocks over the datum.
+    pub at: [f64; 3],
+    /// How it is turned, in the frame of where it stands: `x` along `u`, `y`
+    /// along `v`, `z` up.
+    pub rotation: DQuat,
+    /// How long its unit box is along each of its own axes, in blocks.
+    pub scale: [f64; 3],
+}
+
+impl Pose {
+    /// Standing upright at a point, as big as `scale` says.
+    pub fn upright(at: [f64; 3], scale: [f64; 3]) -> Pose {
+        Pose {
+            at,
+            rotation: DQuat::IDENTITY,
+            scale,
+        }
+    }
+
+    /// The flat frame from the part's own space, around the anchor: how its
+    /// unit box is turned and stretched. The anchor itself is not in it, so
+    /// a seat adds where the anchor is.
+    pub fn local(&self) -> DAffine3 {
+        DAffine3::from_rotation_translation(self.rotation, DVec3::ZERO)
+            * DAffine3::from_scale(DVec3::from(self.scale))
+    }
+
+    /// The part's own space from the flat frame, with the anchor in it: what
+    /// a point of the seat is in the unit box.
+    pub fn inward(&self) -> DAffine3 {
+        self.local().inverse() * DAffine3::from_translation(-DVec3::from(self.at))
+    }
+
+    /// Whether the pose is sound: finite, a unit rotation, every length
+    /// positive. What the world refuses otherwise.
+    pub fn is_sound(&self) -> bool {
+        let finite = self.at.iter().chain(&self.scale).all(|n| n.is_finite());
+        finite
+            && self.rotation.is_finite()
+            && self.rotation.is_normalized()
+            && self
+                .scale
+                .iter()
+                .all(|&n| (MIN_SCALE..=MAX_SCALE).contains(&n))
+    }
+}
+
+/// The least a part is along any axis, in blocks: thin as a pane, never
+/// nothing.
+pub const MIN_SCALE: f64 = 0.01;
+/// The most, in blocks: half a kilometre, a plot's worth eight times over.
+pub const MAX_SCALE: f64 = 1024.0;
+
+/// A part as it is kept and told.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Part {
+    pub shape: Shape,
+    pub pose: Pose,
+    /// What it is made of: a paint of the palette, as a cell's (`voxel`).
+    pub paint: u8,
+    /// Whether a body stands on it and is stopped by it.
+    pub solid: bool,
+    /// How much it shines with its own colour: 0 lit by what falls on it, 1
+    /// its own colour as a screen shows it, more a lamp, up to [`MAX_SHINE`].
+    pub shine: f32,
+    /// How far the light of a part that is a lamp goes, metres, up to
+    /// [`MAX_REACH_M`]. 0 is by its size.
+    pub reach_m: f32,
+    /// What its builder calls it, for the list of what is near. A
+    /// landmark's name is its shape's.
+    pub name: Option<Name>,
+    /// Whether what sounds of it is silenced: a video's track, a sound's file.
+    pub muted: bool,
+    /// How loud it sounds, 0 to 1, as the panel says it; 0 is full, as
+    /// unset, read through [`Part::loudness`].
+    pub volume: f32,
+}
+
+/// The most a part shines with its own colour.
+pub const MAX_SHINE: f32 = 8.0;
+/// The furthest a part's light goes.
+pub const MAX_REACH_M: f32 = 256.0;
+
+impl Part {
+    /// How loud it sounds, 0 to 1: full when the record says nothing.
+    pub fn loudness(&self) -> f32 {
+        if self.muted {
+            0.0
+        } else if self.volume > 0.0 {
+            self.volume.min(1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// What a copy of this part holds: the whole of its record, so a file
+    /// it names is named by the same hash and nothing is sent again, a
+    /// portal leads where this one does and a cabinet runs the same
+    /// cartridge in the same skin. Its name, a landmark's or the one its
+    /// builder gave it, is one number on, so the chart and the list tell
+    /// the two apart. What a part does while it stands, a game played or a
+    /// video's moment, is no part of its record: a copy starts its own.
+    pub fn copy(&self) -> Part {
+        let shape = match self.shape {
+            Shape::Landmark(name) => Shape::Landmark(name.next()),
+            shape => shape,
+        };
+        Part {
+            shape,
+            name: self.name.as_ref().map(Name::next),
+            ..*self
+        }
+    }
+
+    /// Whether what is said of the part beside its pose is sound: a shine
+    /// and a reach that are numbers within theirs.
+    pub fn is_sound(&self) -> bool {
+        self.pose.is_sound()
+            && self.shine.is_finite()
+            && (0.0..=MAX_SHINE).contains(&self.shine)
+            && self.reach_m.is_finite()
+            && (0.0..=MAX_REACH_M).contains(&self.reach_m)
+    }
+}
+
+/// What holds up a body standing beside a part: the top of it under the
+/// feet and the bottom of it over the head, in blocks over the datum.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Gap {
+    pub floor: Option<f64>,
+    pub ceiling: Option<f64>,
+}
+
+impl Part {
+    /// How far along a line from `from` toward `toward`, unit, both in the
+    /// flat frame, the line goes into this part. `None` when it misses, or
+    /// starts inside.
+    pub fn hit(&self, from: DVec3, toward: DVec3) -> Option<f64> {
+        self.hit_side(from, toward).map(|(blocks, _)| blocks)
+    }
+
+    /// Where a line in the flat frame first meets the part's box, blocks
+    /// along the line, and which way the side it meets faces in the part's
+    /// own space: `+z` is its top. `None` past it or from inside it.
+    pub fn hit_side(&self, from: DVec3, toward: DVec3) -> Option<(f64, DVec3)> {
+        let inward = self.pose.inward();
+        let (from, toward) = (
+            inward.transform_point3(from),
+            inward.transform_vector3(toward),
+        );
+        let (near, far, side) = slab(from, toward)?;
+        (near > 0.0 && far >= near).then_some((near, side))
+    }
+
+    /// What a body standing in a column has under its feet and over its
+    /// head of this part, when its step reaches `reach` blocks over the
+    /// datum: as the cells answer it (`voxel::Volumes::gap`). The body is
+    /// `half` blocks wide each way of `column`. `None` where the part is
+    /// not solid, or not over the body at all.
+    ///
+    /// Solid at the height of the step is a wall, and the wall's top is the
+    /// floor it offers, which a walker refuses when it is more than a step
+    /// up. Air there means the part below is the floor and the part above
+    /// is the roof.
+    pub fn gap(&self, column: [f64; 2], half: f64, reach: f64) -> Option<Gap> {
+        if !self.solid {
+            return None;
+        }
+        let foot = DVec3::new(column[0], column[1], 0.0);
+        let feet = [
+            DVec3::ZERO,
+            DVec3::new(-half, -half, 0.0),
+            DVec3::new(half, -half, 0.0),
+            DVec3::new(-half, half, 0.0),
+            DVec3::new(half, half, 0.0),
+        ];
+        gap_along(&self.pose.inward(), foot, DVec3::Z, &feet, reach)
+    }
+
+    /// How far a corner of this part reaches from its anchor, in blocks:
+    /// what is within this of the anchor may be over a body, nothing
+    /// further is.
+    pub fn reach(&self) -> f64 {
+        let [sx, sy, sz] = self.pose.scale;
+        DVec3::new(sx / 2.0, sy / 2.0, sz).length()
+    }
+
+    /// The flat frame from the part's own space, with the anchor in it:
+    /// where each corner of its unit box stands on the seat.
+    pub fn placed(&self) -> DAffine3 {
+        DAffine3::from_translation(DVec3::from(self.pose.at)) * self.pose.local()
+    }
+}
+
+/// What a body standing at `foot` has under its feet and over its head of
+/// a unit box, along `up`, when its step reaches `reach` along it: the
+/// body's footprint is `foot` and each of `feet` added to it. `inward` is
+/// the box's own space from the frame `foot`, `up` and `feet` are said in,
+/// and the gap is in that frame's units along `up` from `foot`. `None`
+/// where the box is not over the body at all.
+///
+/// Solid at the height of the step is a wall, and the wall's top is the
+/// floor it offers, which a walker refuses when it is more than a step up.
+/// Air there means the box below is the floor and the box above is the
+/// roof.
+pub fn gap_along(
+    inward: &DAffine3,
+    foot: DVec3,
+    up: DVec3,
+    feet: &[DVec3],
+    reach: f64,
+) -> Option<Gap> {
+    let up_in = inward.transform_vector3(up);
+    let mut gap: Option<Gap> = None;
+    for &at in feet {
+        let foot_in = inward.transform_point3(foot + at);
+        let Some((low, high, _)) = slab(foot_in, up_in) else {
+            continue;
+        };
+        let found = if (low <= reach && reach <= high) || high <= reach {
+            Gap {
+                floor: Some(high),
+                ceiling: None,
+            }
+        } else {
+            Gap {
+                floor: None,
+                ceiling: Some(low),
+            }
+        };
+        gap = Some(match gap {
+            None => found,
+            Some(gap) => Gap {
+                floor: pick(gap.floor, found.floor, f64::max),
+                ceiling: pick(gap.ceiling, found.ceiling, f64::min),
+            },
+        });
+    }
+    gap
+}
+
+fn pick(a: Option<f64>, b: Option<f64>, f: fn(f64, f64) -> f64) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(f(a, b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Where a line `from + toward * t`, in a part's own space, is inside the
+/// unit box: the `t` it goes in and the `t` it comes out, or `None` when it
+/// never is. A line along a side counts as inside it. What a shape with a
+/// grid of its own walks between, and what a handle drawn as a box is
+/// picked by.
+pub fn through(from: DVec3, toward: DVec3) -> Option<(f64, f64)> {
+    slab(from, toward).map(|(near, far, _)| (near, far))
+}
+
+/// Where a line enters and leaves the unit box, and which way the side it
+/// enters by faces.
+fn slab(from: DVec3, toward: DVec3) -> Option<(f64, f64, DVec3)> {
+    let (low, high) = (DVec3::new(-0.5, -0.5, 0.0), DVec3::new(0.5, 0.5, 1.0));
+    let (mut near, mut far) = (f64::NEG_INFINITY, f64::INFINITY);
+    let mut side = DVec3::Z;
+    for axis in 0..3 {
+        let (d, f) = (toward[axis], from[axis]);
+        if d.abs() < 1e-12 {
+            if f < low[axis] || f > high[axis] {
+                return None;
+            }
+            continue;
+        }
+        let (a, b) = ((low[axis] - f) / d, (high[axis] - f) / d);
+        if a.min(b) > near {
+            near = a.min(b);
+            let mut normal = DVec3::ZERO;
+            // Entering by the low side, the normal points down the axis.
+            normal[axis] = if a < b { -1.0 } else { 1.0 };
+            side = normal;
+        }
+        far = far.min(a.max(b));
+    }
+    (near <= far).then_some((near, far, side))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_line_says_which_side_of_the_box_it_meets() {
+        let (near, _, side) = slab(DVec3::new(0.0, 0.0, 3.0), -DVec3::Z).unwrap();
+        assert_eq!((near, side), (2.0, DVec3::Z), "the top from above");
+        let (_, _, side) = slab(DVec3::new(-3.0, 0.0, 0.5), DVec3::X).unwrap();
+        assert_eq!(side, -DVec3::X, "the low x side from the left");
+        let (_, _, side) = slab(DVec3::new(0.0, 2.0, 0.5), -DVec3::Y).unwrap();
+        assert_eq!(side, DVec3::Y, "the high y side from beyond it");
+    }
+
+    #[test]
+    fn a_name_is_trimmed_bounded_and_plain() {
+        let name = Name::new("  Praça da Sé ").unwrap();
+        assert_eq!(name.as_str(), "Praça da Sé");
+        assert_eq!(name.to_string(), "Praça da Sé");
+        assert_eq!(Name::new("   "), None, "empty");
+        assert_eq!(Name::new("a\tb"), None, "a control character");
+        assert_eq!(
+            Name::new(&"x".repeat(NAME_BYTES)).map(|n| n.as_str().len()),
+            Some(NAME_BYTES)
+        );
+        assert_eq!(
+            Name::new(&"x".repeat(NAME_BYTES + 1)),
+            None,
+            "over the bound"
+        );
+        // Bytes, not characters: sixteen of a four byte character fill it.
+        assert!(Name::new(&"\u{1F30D}".repeat(16)).is_some());
+        assert!(Name::new(&"\u{1F30D}".repeat(17)).is_none());
+        // A copy's name is one number on.
+        let next = |text: &str| Name::new(text).unwrap().next().to_string();
+        assert_eq!(next("Espaço TRI"), "Espaço TRI 2");
+        assert_eq!(next("Espaço TRI 2"), "Espaço TRI 3");
+        assert_eq!(next("Sala 9"), "Sala 10");
+        assert_eq!(next("2026"), "2026 2", "a number alone is the name");
+        assert_eq!(next("Ala B2"), "Ala B2 2", "a number is a word of its own");
+        assert_eq!(
+            next(&format!("x {}", u32::MAX)),
+            format!("x {} 2", u32::MAX),
+            "past the last number, a number is a word"
+        );
+        // Cut at a character to make room for the number.
+        let full = "\u{1F30D}".repeat(16);
+        assert_eq!(next(&full), format!("{} 2", "\u{1F30D}".repeat(15)));
+        assert!(next(&full).len() <= NAME_BYTES);
+        assert_eq!(Shape::Landmark(name).asset(), None);
+        assert_eq!(
+            Shape::Portal(Portal {
+                to: Some(PartId(7)),
+                rim: Portal::RIM
+            })
+            .asset(),
+            None
+        );
+        assert_eq!(Portal::RIM_MAX, 100);
+        assert!(
+            (Portal {
+                to: None,
+                rim: Portal::RIM
+            }
+            .rim_of_width()
+                - 0.06)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn a_clip_names_its_file_and_reads_it_back() {
+        let hex = "0123456789abcdef".repeat(4);
+        let clip = Clip::parse(&format!("asset://{hex}.mp3"), 4000).unwrap();
+        assert_eq!(clip.kind, ClipKind::Mp3);
+        assert_eq!(clip.millis, 4000);
+        assert_eq!(clip.name(), format!("asset://{hex}.mp3"));
+        assert_eq!(
+            Clip::parse(&format!("asset://{hex}.ogg"), 1).unwrap().kind,
+            ClipKind::Ogg
+        );
+        assert_eq!(
+            Clip::parse(&format!("asset://{hex}.m4a"), 1).unwrap().kind,
+            ClipKind::M4a
+        );
+        assert!(Clip::parse(&format!("asset://{hex}.wav"), 1).is_none());
+        assert!(Clip::parse("asset://abc.mp3", 1).is_none());
+        assert_eq!(Shape::Sound(clip).asset(), None);
+    }
+
+    /// A copy holds what the record holds, every kind's file by the same
+    /// hash, and only a name moves on.
+    #[test]
+    fn a_copy_holds_the_whole_record_and_its_name_moves_on() {
+        let hex = "0123456789abcdef".repeat(4);
+        let file = |ext: &str| format!("asset://{hex}.{ext}");
+        let still = Media::parse(300, 200, 0, &file("webp"), &file("webp"), &file("png")).unwrap();
+        let video = Media::parse(16, 9, 9000, &file("webp"), &file("webp"), &file("mp4")).unwrap();
+        let named = |text: &str| Name::new(text).unwrap();
+        let shapes = [
+            Shape::Cube,
+            Shape::Vox([1; 32]),
+            Shape::Glb([2; 32]),
+            Shape::Image(still),
+            Shape::Image(video),
+            Shape::Sound(Clip::parse(&file("mp3"), 4000).unwrap()),
+            Shape::Portal(Portal {
+                to: Some(PartId(7)),
+                rim: 30,
+            }),
+            Shape::Cabinet(Cabinet {
+                cart: Some(ContentId([3; 32])),
+                skin: Some(still),
+            }),
+        ];
+        for shape in shapes {
+            let part = Part {
+                shape,
+                pose: Pose {
+                    at: [10.5, 20.25, 3.0],
+                    rotation: DQuat::from_rotation_z(0.3),
+                    scale: [4.0, 0.5, 6.0],
+                },
+                paint: 37,
+                solid: false,
+                shine: 1.5,
+                reach_m: 12.0,
+                name: None,
+                muted: true,
+                volume: 0.4,
+            };
+            assert_eq!(part.copy(), part, "{shape:?} unnamed is copied whole");
+            let named_part = Part {
+                name: Some(named("Parede")),
+                ..part
+            };
+            assert_eq!(
+                named_part.copy(),
+                Part {
+                    name: Some(named("Parede 2")),
+                    ..part
+                },
+                "{shape:?} named"
+            );
+        }
+        // A landmark's name is its shape's: the copy's is one on, and the
+        // chart tells the two apart.
+        let star = Part {
+            shape: Shape::Landmark(named("Espaço TRI")),
+            pose: Pose::upright([1.0, 2.0, 3.0], [2.0, 2.0, 0.16]),
+            paint: 4,
+            solid: false,
+            shine: 0.0,
+            reach_m: 0.0,
+            name: None,
+            muted: false,
+            volume: 0.0,
+        };
+        let copy = star.copy();
+        assert_eq!(copy.shape, Shape::Landmark(named("Espaço TRI 2")));
+        assert_eq!((copy.pose, copy.paint), (star.pose, star.paint));
+        assert_eq!(copy.copy().shape, Shape::Landmark(named("Espaço TRI 3")));
+    }
+
+    #[test]
+    fn a_media_names_its_files_and_reads_them_back() {
+        let hex = "0123456789abcdef".repeat(4);
+        let thumb = format!("asset://{hex}.webp");
+        let low = format!("asset://{}.webp", "ff".repeat(32));
+        let full = format!("asset://{}.jpg", "00".repeat(32));
+        let media = Media::parse(300, 200, 0, &thumb, &low, &full).unwrap();
+        assert_eq!(media.name(PictureLevel::Thumb), thumb);
+        assert_eq!(media.name(PictureLevel::Low), low);
+        assert_eq!(media.name(PictureLevel::Full), full);
+        assert_eq!(media.kind, ImageKind::Jpg);
+        assert!(!media.moves(), "a still");
+        assert!((media.aspect() - 1.5).abs() < 1e-12);
+        assert!(Media::parse(1, 1, 0, &thumb, &low, "asset://abc.jpg").is_none());
+        assert!(Media::parse(1, 1, 0, &thumb, &low, &format!("asset://{hex}.svg")).is_none());
+        assert!(ContentId::parse(&"zz".repeat(32)).is_none());
+        // A GIF and an MP4 are pictures too, and move when they play for a while.
+        let gif = Media::parse(1, 1, 1200, &thumb, &low, &format!("asset://{hex}.gif")).unwrap();
+        assert_eq!(gif.kind, ImageKind::Gif);
+        assert!(gif.moves());
+        assert_eq!(gif.name(PictureLevel::Full), format!("asset://{hex}.gif"));
+        let video =
+            Media::parse(1, 1, 90_000, &thumb, &low, &format!("asset://{hex}.mp4")).unwrap();
+        assert_eq!(video.kind, ImageKind::Mp4);
+        assert!(video.moves());
+    }
+    use core::f64::consts::FRAC_PI_4;
+    use proptest::prelude::*;
+
+    fn cube(pose: Pose) -> Part {
+        Part {
+            shape: Shape::Cube,
+            pose,
+            paint: 0,
+            solid: true,
+            shine: 0.0,
+            reach_m: 0.0,
+            name: None,
+            muted: false,
+            volume: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_model_is_named_by_its_file() {
+        let name = format!("asset://{}.vox", "0a".repeat(32));
+        let shape = Shape::of_asset(&name).unwrap();
+        assert_eq!(shape, Shape::Vox([0x0a; 32]));
+        assert_eq!(shape.asset().as_deref(), Some(name.as_str()));
+        assert_eq!(Shape::Cube.asset(), None);
+        let name = format!("asset://{}.glb", "0b".repeat(32));
+        let shape = Shape::of_asset(&name).unwrap();
+        assert_eq!(shape, Shape::Glb([0x0b; 32]));
+        assert_eq!(shape.asset().as_deref(), Some(name.as_str()));
+        for wrong in [
+            "asset://0a0a.vox",
+            &format!("asset://{}.gltf", "0a".repeat(32)),
+            &format!("asset://{}.vox.glb", "0a".repeat(32)),
+            &format!("asset://{}.png", "0a".repeat(32)),
+            &format!("{}.vox", "0a".repeat(32)),
+            &format!("asset://{}.vox", "zz".repeat(32)),
+        ] {
+            assert_eq!(Shape::of_asset(wrong), None, "{wrong}");
+        }
+    }
+
+    #[test]
+    fn a_line_meets_a_cube_where_its_side_is() {
+        let part = cube(Pose::upright([10.0, 10.0, 4.0], [2.0, 2.0, 2.0]));
+        // From the side, along x: the near side is a block before the anchor.
+        let hit = part.hit(DVec3::new(0.0, 10.0, 5.0), DVec3::X).unwrap();
+        assert!((hit - 9.0).abs() < 1e-9, "{hit}");
+        // From above: the top is two blocks over the anchor.
+        let hit = part.hit(DVec3::new(10.0, 10.0, 20.0), -DVec3::Z).unwrap();
+        assert!((hit - 14.0).abs() < 1e-9, "{hit}");
+        // Past it.
+        assert!(part.hit(DVec3::new(0.0, 12.0, 5.0), DVec3::X).is_none());
+        // From inside: nothing is met.
+        assert!(part.hit(DVec3::new(10.0, 10.0, 5.0), DVec3::X).is_none());
+    }
+
+    #[test]
+    fn a_body_stands_on_a_cube_and_under_one() {
+        let part = cube(Pose::upright([10.0, 10.0, 4.0], [2.0, 2.0, 2.0]));
+        // Feet at the top: the floor is the top.
+        let gap = part.gap([10.0, 10.0], 0.6, 7.0).unwrap();
+        assert_eq!(
+            gap,
+            Gap {
+                floor: Some(6.0),
+                ceiling: None
+            }
+        );
+        // Feet on the ground beside it, a step reaching into it: a wall,
+        // whose top is the floor it offers.
+        let gap = part.gap([10.0, 10.0], 0.6, 5.0).unwrap();
+        assert_eq!(gap.floor, Some(6.0));
+        // Feet well under it: a roof.
+        let gap = part.gap([10.0, 10.0], 0.6, 1.0).unwrap();
+        assert_eq!(
+            gap,
+            Gap {
+                floor: None,
+                ceiling: Some(4.0)
+            }
+        );
+        // Beside it, out of reach of the body's width: nothing.
+        assert!(part.gap([13.0, 10.0], 0.6, 5.0).is_none());
+        // Within the body's width: the edge holds it.
+        assert!(part.gap([11.4, 10.0], 0.6, 7.0).is_some());
+        // Not solid: nothing, however near.
+        let open = Part {
+            solid: false,
+            ..part
+        };
+        assert!(open.gap([10.0, 10.0], 0.6, 7.0).is_none());
+    }
+
+    #[test]
+    fn a_turned_cube_is_met_on_its_turned_side() {
+        // Turned an eighth about z, a cube of 2 reaches sqrt(2) from its
+        // anchor along x.
+        let pose = Pose {
+            at: [0.0, 0.0, 0.0],
+            rotation: DQuat::from_rotation_z(FRAC_PI_4),
+            scale: [2.0, 2.0, 2.0],
+        };
+        let hit = cube(pose)
+            .hit(DVec3::new(-10.0, 0.0, 1.0), DVec3::X)
+            .unwrap();
+        assert!((hit - (10.0 - 2f64.sqrt())).abs() < 1e-9, "{hit}");
+        // Turned onto its side about y, its top is now where its side was.
+        let pose = Pose {
+            at: [0.0, 0.0, 0.0],
+            rotation: DQuat::from_rotation_y(core::f64::consts::FRAC_PI_2),
+            scale: [2.0, 2.0, 4.0],
+        };
+        let gap = cube(pose).gap([0.0, 0.0], 0.0, 10.0).unwrap();
+        assert!((gap.floor.unwrap() - 1.0).abs() < 1e-9, "{gap:?}");
+    }
+
+    proptest! {
+        #[test]
+        fn what_a_line_meets_is_on_the_box(
+            at in prop::array::uniform3(-50.0f64..50.0),
+            axis in prop::array::uniform3(-1.0f64..1.0),
+            angle in 0.0f64..6.3,
+            scale in prop::array::uniform3(0.1f64..10.0),
+            from in prop::array::uniform3(-100.0f64..100.0),
+        ) {
+            let axis = DVec3::from(axis);
+            prop_assume!(axis.length() > 1e-3);
+            let pose = Pose { at, rotation: DQuat::from_axis_angle(axis.normalize(), angle), scale };
+            let part = cube(pose);
+            let from = DVec3::from(from);
+            let toward = (DVec3::from(at) - from).normalize();
+            // Aimed at the anchor from outside, the line meets the box, and
+            // where it does is on a side of the unit box.
+            let hit = part.hit(from, toward);
+            prop_assume!(hit.is_some());
+            let on = pose.inward().transform_point3(from + toward * hit.unwrap());
+            let side = [on.x.abs() - 0.5, on.y.abs() - 0.5, (on.z - 0.5).abs() - 0.5];
+            prop_assert!(side.iter().any(|d| d.abs() < 1e-6), "{on:?}");
+            prop_assert!(side.iter().all(|d| *d < 1e-6), "{on:?}");
+        }
+    }
+}

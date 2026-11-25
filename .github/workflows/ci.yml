@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: lint pull request commits
+        if: github.event_name == 'pull_request'
+        run: bunx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
+      - name: lint pushed commits
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: bunx commitlint --from ${{ github.event.before }} --to ${{ github.sha }}
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Bun runs the engine's setup of wasm-bindgen below.
+      - uses: oven-sh/setup-bun@v2
+      # The compiler rust-toolchain.toml names, with its target and components.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # The wasm32 tests below run under wasm-bindgen-test-runner
+      # (.cargo/config.toml), at the version the engine's lock names.
+      - name: wasm-bindgen's test runner
+        run: bun scripts/wasm-bindgen.ts
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      # A tone is the same samples on wasm32: synth's goldens on V8.
+      - name: synth's goldens on V8
+        run: cargo test --target wasm32-unknown-unknown -p synth
+      # What lives is the same bits on wasm32: gaia's goldens on V8.
+      - name: gaia's goldens on V8
+        run: cargo test --target wasm32-unknown-unknown -p gaia --test golden
+      - name: build the browser client
+        run: cargo build --release --target wasm32-unknown-unknown -p shell-web
+
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+      - uses: oven-sh/setup-bun@v2
+      # The server embeds the module, the world halves built from Rust, and
+      # the pinned emulator's runner it judges a cartridge by.
+      # The compiler rust-toolchain.toml names, with its target and components.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: build the module, and copy the judge
+        working-directory: .
+        run: bun scripts/module.ts
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build ./...
+
+  # The generated wire types are committed; this proves they are the schema's.
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+      # The compiler rust-toolchain.toml names, with its target and components.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: true
+      - run: bun install --frozen-lockfile
+      - run: bun run setup
+      - run: bun run proto
+      - run: git diff --exit-code -- crates/protocol/src/gen server/internal/protocol plugins/*/world/src/gen
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd apps/web check
+      # The ROMs and the pinned emulator are the files their lists name, and
+      # the emulator reads every ROM; its cases ran on the native host in the
+      # rust job. That the pin is the console's build is proved where the
+      # console's source is.
+      - run: bun test ./apps/web/src ./plugins ./scripts

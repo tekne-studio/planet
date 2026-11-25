@@ -1,0 +1,162 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { offered, wornAvatar } from '$lib/avatar';
+	import { Button, Veil } from '$lib/ds';
+	import { arrival, pass } from '$lib/door';
+	import Found from '$lib/engine/Found.svelte';
+	import Stage from '$lib/engine/Stage.svelte';
+	import { servedField } from '$lib/fields';
+	import { t } from '$lib/i18n';
+	import { about, enter, found, Refused, socket, stands, switchPlugin, type About, type Entered, type Link } from '$lib/instance';
+	import { kept } from '$lib/kept';
+	import { fieldId, type Recipe } from '$lib/world';
+
+	// The one page of a world. It asks the world what it is, passes through
+	// mundos's door when there is one, and then shows one of three faces: the
+	// world, the founding of a world that awaits its planet, to its admin, or
+	// word that it is on its way, to everyone else.
+	type Face = 'entering' | 'unreachable' | 'unfounded' | 'founding' | 'world';
+
+	let face = $state<Face>('entering');
+	let world = $state.raw<About>();
+	let me = $state.raw<Entered>();
+	let avatar = $state<string | null>(null);
+	/** Where the field the recipe names is fetched from; null when this version lacks that ground. */
+	let fieldPath = $state<string | null>(null);
+	/** Why the last founding failed, as the server codes it. */
+	let refused = $state('');
+	let founding = $state(false);
+
+	const link = $derived.by<Link | undefined>(() => {
+		const key = me?.key ?? '';
+		const door = world?.door ?? '';
+		return {
+			url: socket(key),
+			files: world?.files ?? '/files',
+			// The socket opens for a key the server holds. Past its life the
+			// page goes through the door for a new one.
+			again: async () => {
+				if (key && door && !(await stands(key))) pass(door);
+			}
+		};
+	});
+	const signIn = $derived(world?.door && me?.level === 'anonymous' ? () => pass(world!.door) : undefined);
+	// Which plugins are on is the admin's to say. The world tells everyone
+	// here over the socket, so nothing is kept from the answer.
+	const switchIt = $derived(
+		me?.level === 'admin'
+			? async (name: string, on: boolean) => {
+					try {
+						await switchPlugin(name, on, me?.key ?? '');
+					} catch (err) {
+						// A key past its life: through the door for a new one.
+						if (err instanceof Refused && err.code === 'key' && world?.door) pass(world.door);
+					}
+				}
+			: undefined
+	);
+
+	onMount(() => {
+		arrive();
+	});
+
+	async function arrive() {
+		try {
+			const here = await about();
+			let identity = '';
+			if (here.door) {
+				const came = arrival();
+				if (!came) return pass(here.door);
+				identity = came.identity;
+				// The token leaves the address bar, and the address the page
+				// left with comes back: the place, or a planet being chosen.
+				await goto(came.address, { replaceState: true, keepFocus: true, noScroll: true });
+			}
+			const [entered, offer] = await Promise.all([enter(identity), offered()]);
+			me = entered;
+			avatar = wornAvatar(entered.avatar, offer);
+			await show(here);
+		} catch {
+			face = 'unreachable';
+		}
+	}
+
+	async function show(here: About) {
+		world = here;
+		if (!here.recipe) {
+			face = me?.level === 'admin' ? 'founding' : 'unfounded';
+			return;
+		}
+		fieldPath = await servedField(fieldId(here.recipe));
+		face = 'world';
+	}
+
+	async function foundWith(recipe: Recipe) {
+		refused = '';
+		founding = true;
+		try {
+			const made = await found(recipe, me?.key ?? '');
+			// The candidate's address was the founding's: the world's own is bare.
+			await goto('/', { replaceState: true });
+			await show(made);
+		} catch (err) {
+			const code = err instanceof Refused ? err.code : 'unreachable';
+			// Someone founded it first: this is that world now.
+			if (code === 'founded') await arrive();
+			else if (code === 'key' && world?.door) pass(world.door);
+			else refused = code;
+		} finally {
+			founding = false;
+		}
+	}
+</script>
+
+<svelte:head>
+	<title>{world?.name || t('common.appName')}</title>
+</svelte:head>
+
+{#if face === 'world' && world?.recipe && me}
+	<Stage
+		title={world.name || t('common.appName')}
+		recipe={world.recipe}
+		fieldPath={fieldPath ?? undefined}
+		{avatar}
+		name={me.name || (kept('name') ?? '')}
+		ownAvatar={me.avatar !== ''}
+		{link}
+		level={me.level}
+		key={me.key}
+		account={me.key !== ''}
+		onsignin={signIn}
+		onswitch={switchIt}
+	/>
+{:else if face === 'founding'}
+	<Found {avatar} error={refused} {founding} onfound={foundWith} />
+{:else}
+	{#snippet door()}
+		<Button onclick={signIn}>{t('door.signIn')}</Button>
+	{/snippet}
+	<!-- The world's ground, before the engine draws on it: the first screen
+	     and the engine's own waits are one veil, so nothing jumps when the
+	     stage mounts. -->
+	<div class="ground">
+		{#if face === 'entering'}
+			<Veil busy word={t('common.loading')} />
+		{:else if face === 'unfounded'}
+			<Veil word={t('world.unfounded.title')} lede={t('world.unfounded.lede')} children={signIn ? door : undefined} />
+		{:else}
+			<Veil word={t('error.unavailable.title')} lede={t('error.unreachable')}>
+				<Button onclick={() => location.reload()}>{t('error.retry')}</Button>
+			</Veil>
+		{/if}
+	</div>
+{/if}
+
+<style>
+	.ground {
+		position: fixed;
+		inset: 0;
+		background: var(--bg-inset);
+	}
+</style>

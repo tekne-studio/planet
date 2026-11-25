@@ -1,0 +1,33 @@
+# OS
+.DS_Store
+
+# env: only .env.example is tracked
+.env
+.env.*
+!.env.example
+
+# Rust
+target/
+
+# Bun, Node
+node_modules/
+
+# web build output and the generated WASM client package
+apps/web/build/
+apps/web/.svelte-kit/
+apps/web/src/lib/engine/pkg/
+
+# server binary, the module and the emulator's runner it embeds, and the world folder of a development run
+server/bin/
+server/internal/module/world.wasm
+server/internal/arcade/emulator/
+server/world/
+
+# headless render output
+out/
+
+# A field's preview is for people, never for the engine.
+assets/fields/*.png
+
+# The ROMs this version ships, written into the asset set from arcade/roms/ by `bun run wasm`.
+assets/carts/

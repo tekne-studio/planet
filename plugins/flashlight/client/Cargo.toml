@@ -1,0 +1,24 @@
+[package]
+name = "flashlight-client"
+description = "The flashlight plugin's client half: a key and two commands that put a flashlight in the body's hand or take it away, the arm that holds it, the flashlight and the beam it throws."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flashlight-world = { path = "../world" }
+client.workspace = true
+scene.workspace = true
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+protocol.workspace = true
+worldgen.workspace = true
+
+[lints]
+workspace = true

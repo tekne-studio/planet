@@ -1,0 +1,120 @@
+/* ==========================================================================
+   Design system: base. Reset and element defaults; imports font and tokens.
+   Components carry their own scoped style; only this file is global.
+   ========================================================================== */
+
+@import '@fontsource-variable/jetbrains-mono/wght.css';
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+}
+
+html {
+	height: 100%;
+	-webkit-text-size-adjust: 100%;
+}
+
+body {
+	min-height: 100%;
+	font-family: var(--font);
+	font-size: var(--fs);
+	font-weight: var(--fw-regular);
+	line-height: var(--lh);
+	color: var(--text);
+	background: var(--bg);
+	-webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+	font-size: inherit;
+	font-weight: var(--fw-bold);
+}
+
+button,
+input,
+select,
+textarea {
+	font: inherit;
+	color: inherit;
+	border-radius: var(--radius);
+}
+
+/* A phone zooms the page into a field typed in under 16px, and leaves it
+   zoomed: on a touch screen a field is never smaller. */
+@media (pointer: coarse) {
+	input,
+	select,
+	textarea {
+		font-size: max(16px, 1em);
+	}
+}
+
+a {
+	color: inherit;
+	text-underline-offset: 2px;
+}
+
+ul,
+ol {
+	list-style: none;
+}
+
+code,
+kbd {
+	font: inherit;
+}
+
+:focus-visible {
+	outline: calc(2 * var(--bw)) solid var(--focus);
+	outline-offset: var(--sp-1);
+}
+
+/* Every scroller in the house: a thin rounded thumb, no track, no arrows,
+   quiet at rest and stronger under the pointer and while dragged. Blink and
+   WebKit draw it from ::-webkit-scrollbar, which reaches the hover and the
+   drag; in Chrome a standard scrollbar-color or scrollbar-width would turn
+   those rules off, so the standard properties go only to an engine without
+   ::-webkit-scrollbar (Firefox), which colours the thumb and thins the bar. */
+@supports selector(::-webkit-scrollbar) {
+	::-webkit-scrollbar {
+		width: var(--scroll-w);
+		height: var(--scroll-w);
+		background: transparent;
+	}
+	::-webkit-scrollbar-track,
+	::-webkit-scrollbar-corner {
+		background: transparent;
+	}
+	::-webkit-scrollbar-button {
+		display: none;
+	}
+	::-webkit-scrollbar-thumb {
+		border: calc(var(--scroll-w) / 2 - var(--sp-1)) solid transparent;
+		border-radius: var(--radius-round);
+		background: var(--scroll-thumb) padding-box;
+	}
+	::-webkit-scrollbar-thumb:hover,
+	::-webkit-scrollbar-thumb:active {
+		background-color: var(--scroll-thumb-hover);
+	}
+}
+
+@supports not selector(::-webkit-scrollbar) {
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--scroll-thumb) transparent;
+	}
+}
+
+::selection {
+	background: var(--action);
+	color: var(--action-text);
+}

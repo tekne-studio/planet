@@ -1,0 +1,18 @@
+[package]
+name = "arcade"
+description = "The arcade's emulator as the engine carries it: the console's pinned build, and the numbers its manifest gives a host before it runs the runner."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The manifest is read, and each pinned file checked against its name, at
+# build time; the crate itself depends on nothing.
+[build-dependencies]
+serde_json.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,11 @@
+{
+	"seed": "0000000000000001",
+	"generator_version": 3,
+	"stands": [
+		{ "place": "a coast in Brazil, the sea one plot east", "sector": 0, "u": 30368, "v": 64288, "low": -39, "height": 1064 },
+		{ "place": "the steepest plot by Aconcagua", "sector": 4, "u": 47008, "v": 10272, "low": 773, "height": 1889 },
+		{ "place": "the last plot inside a sector", "sector": 2, "u": 96, "v": 6880, "low": 52, "height": 1065 },
+		{ "place": "the plot on that sector's edge", "sector": 2, "u": 32, "v": 6880, "refused": "seam" },
+		{ "place": "the South Atlantic", "sector": 0, "u": 14048, "v": 42976, "refused": "sea" }
+	]
+}

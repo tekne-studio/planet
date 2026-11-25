@@ -1,0 +1,243 @@
+//! Where you are and which way you look, as a link carries it.
+//!
+//! A place code is the address `(sector, u, v)` spelled so a person can read
+//! it out: the bits of `u` and `v` woven together, most significant first,
+//! in Crockford base32, so codes that start alike are near each other and a
+//! shorter code names a wider box. A pose adds the body, the height and the
+//! look: `m4-K7M42Q@40,180,-5,0` is the moon, the place code, then height in
+//! blocks, bearing, pitch and boom, each optional from the right. Leaving the
+//! height out is standing on the ground, which is why a shared link survives:
+//! the ground is a function of the recipe.
+//!
+//! What is here and nowhere else: a pose is composed once, by the engine, and
+//! handed to a front end whole. That is what keeps the web, the desktop and
+//! the native panel from each writing their own version of this, and it is why
+//! `Stats` carries a place *and* a pose rather than the parts.
+
+use topology::{Column, Grid, Sector, SurfacePoint};
+
+/// Marks the moon. Not in the code alphabet, so it can never be read as one.
+const MOON_MARK: char = 'm';
+
+/// A body, a place, and a way of looking.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Pose {
+    pub on_moon: bool,
+    pub column: Column,
+    /// Blocks from the datum. `None` is standing on the ground.
+    pub h: Option<i16>,
+    /// Degrees clockwise from north. `None` at a pole, or when nobody said.
+    pub bearing_deg: Option<f64>,
+    /// Degrees, positive looks up. `None` when nobody said.
+    pub pitch_deg: Option<f64>,
+    /// How far behind the eye the camera hangs, metres: zero is first
+    /// person. `None` when nobody said, which leaves it as it was.
+    pub boom_m: Option<f64>,
+    /// Characters of code given. A short one names a box, and this is what
+    /// lets arrival land in the middle of it rather than on its corner.
+    pub chars: usize,
+}
+
+impl Pose {
+    /// Where a stance stands, as a place with no way of looking: what a line
+    /// said with `@here` carries. On the ground the height is left out, as
+    /// [`Client::here`](crate::Client::here) leaves it out; in the air it is
+    /// kept, so arriving there arrives flying. `None` for a sector that does
+    /// not exist.
+    pub fn of_stance(grid: Grid, stance: &protocol::Stance) -> Option<Pose> {
+        let sector = Sector::new(u8::try_from(stance.sector).ok()?)?;
+        let point = SurfacePoint::new(sector, f64::from(stance.u), f64::from(stance.v));
+        let airborne = matches!(
+            stance.gait(),
+            protocol::Gait::Fly | protocol::Gait::Jump | protocol::Gait::Fall
+        );
+        Some(Pose {
+            on_moon: stance.body() == protocol::Body::Moon,
+            column: grid.column_of(point),
+            h: airborne.then(|| (f64::from(stance.height_m) / topology::BLOCK_M) as i16),
+            bearing_deg: None,
+            pitch_deg: None,
+            boom_m: None,
+            chars: topology::CODE_MAX,
+        })
+    }
+
+    /// The place alone: body and code, no way of looking. What a HUD shows and
+    /// what a person reads out.
+    pub fn place(&self, grid: Grid) -> String {
+        let code = topology::code(grid, self.column, self.h, topology::CODE_MAX);
+        if self.on_moon {
+            format!("{MOON_MARK}{code}")
+        } else {
+            code
+        }
+    }
+
+    /// The whole of it, for a link.
+    pub fn text(&self, grid: Grid) -> String {
+        let mut out = self.place(grid);
+        // Pitch without a bearing would be a half aim, so the two go together
+        // or neither does, and the boom comes after them.
+        if let (Some(bearing), Some(pitch)) = (self.bearing_deg, self.pitch_deg) {
+            out.push_str(&format!(",{bearing:.0},{pitch:.0}"));
+            if let Some(boom_m) = self.boom_m {
+                out.push_str(&format!(",{boom_m:.0}"));
+            }
+        }
+        out
+    }
+
+    /// Reads one back. The front ends hand this whatever was in the address
+    /// bar, so it says what is wrong rather than guessing.
+    pub fn parse(grid: Grid, text: &str) -> Result<Pose, String> {
+        let text = text.trim();
+        let mut parts = text.split(',');
+        let head = parts.next().unwrap_or("").trim();
+        let (on_moon, code) = match head.strip_prefix([MOON_MARK, 'M']) {
+            Some(rest) => (true, rest),
+            None => (false, head),
+        };
+        let found = topology::place(grid, code).map_err(|e| format!("place {code}: {e:?}"))?;
+
+        let number = |part: Option<&str>, name: &str, unit: &str| -> Result<Option<f64>, String> {
+            match part.map(str::trim).filter(|text| !text.is_empty()) {
+                None => Ok(None),
+                Some(text) => text
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|number| number.is_finite())
+                    .map(Some)
+                    .ok_or_else(|| format!("{name} {text}: not {unit}")),
+            }
+        };
+        let bearing_deg = number(parts.next(), "bearing", "degrees")?;
+        let pitch_deg = number(parts.next(), "pitch", "degrees")?;
+        let boom_m = number(parts.next(), "boom", "metres")?;
+        if parts.next().is_some() {
+            return Err(format!(
+                "{text}: more than a place, a bearing, a pitch and a boom"
+            ));
+        }
+
+        Ok(Pose {
+            on_moon,
+            column: found.column,
+            h: found.h,
+            bearing_deg,
+            pitch_deg,
+            boom_m,
+            chars: found.chars,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use topology::Sector;
+
+    fn grid() -> Grid {
+        Grid::new(16).expect("a grid")
+    }
+
+    fn pose() -> Pose {
+        Pose {
+            on_moon: false,
+            column: Column::new(Sector::ALL[4], 40_000, 9_001),
+            h: None,
+            bearing_deg: None,
+            pitch_deg: None,
+            boom_m: None,
+            chars: topology::CODE_MAX,
+        }
+    }
+
+    #[test]
+    fn a_pose_round_trips_whole_and_in_parts() {
+        let g = grid();
+        for (on_moon, h, look, boom_m) in [
+            (false, None, None, None),
+            (true, None, None, None),
+            (false, Some(40i16), None, None),
+            (true, Some(-12), Some((180.0, -5.0)), None),
+            (false, Some(0), Some((0.0, 0.0)), None),
+            (false, None, Some((90.0, -10.0)), Some(0.0)),
+            (true, Some(40), Some((270.0, 20.0)), Some(12.0)),
+        ] {
+            let want = Pose {
+                on_moon,
+                h,
+                bearing_deg: look.map(|(b, _)| b),
+                pitch_deg: look.map(|(_, p)| p),
+                boom_m,
+                ..pose()
+            };
+            let text = want.text(g);
+            assert_eq!(Pose::parse(g, &text).expect(&text), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_short_form_is_short_and_the_long_one_contains_it() {
+        let g = grid();
+        let ground = pose();
+        assert!(!ground.text(g).contains(','), "{}", ground.text(g));
+        assert!(!ground.text(g).starts_with(MOON_MARK));
+
+        let aimed = Pose {
+            on_moon: true,
+            h: Some(40),
+            bearing_deg: Some(180.0),
+            pitch_deg: Some(-5.0),
+            ..ground
+        };
+        // A link is the place with more said about it, never a different place.
+        assert!(aimed.text(g).starts_with(&aimed.place(g)));
+        assert!(aimed.place(g).starts_with(MOON_MARK));
+        // First person is the aim with a boom of zero after it.
+        let eye = Pose {
+            boom_m: Some(0.0),
+            ..aimed
+        };
+        assert_eq!(eye.text(g), format!("{},0", aimed.text(g)));
+    }
+
+    #[test]
+    fn nonsense_is_refused_with_the_reason() {
+        let g = grid();
+        assert!(Pose::parse(g, "9-ABC").unwrap_err().contains("Sector"));
+        assert!(Pose::parse(g, "4-ABC@up").unwrap_err().contains("Height"));
+        assert!(
+            Pose::parse(g, "4-ABC,north")
+                .unwrap_err()
+                .contains("bearing")
+        );
+        assert!(
+            Pose::parse(g, "4-ABC,0,0,near")
+                .unwrap_err()
+                .contains("boom")
+        );
+        assert!(Pose::parse(g, "4-ABC,0,0,NaN").is_err());
+        assert!(
+            Pose::parse(g, "4-ABC,0,0,0,0")
+                .unwrap_err()
+                .contains("more than")
+        );
+    }
+
+    #[test]
+    fn a_link_copied_by_hand_still_arrives() {
+        let g = grid();
+        let want = Pose {
+            on_moon: true,
+            h: Some(40),
+            bearing_deg: Some(180.0),
+            pitch_deg: Some(-5.0),
+            ..pose()
+        };
+        let text = want.text(g);
+        for variant in [text.to_uppercase(), format!("  {text} ")] {
+            assert_eq!(Pose::parse(g, &variant).expect(&variant), want, "{variant}");
+        }
+    }
+}

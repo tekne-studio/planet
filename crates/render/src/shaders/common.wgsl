@@ -1,0 +1,466 @@
+// Shared by every pipeline: the per view uniforms, the atmosphere, the output
+// encoding. Positions named `relative` are metres from the camera; nothing on
+// the GPU is ever in planet space except the camera itself.
+
+// A light among the cells, a part or a beam. `at.xyz`: where, relative to
+// the camera. `at.w`: how far it reaches, metres. `color.rgb`: what it gives
+// a side that faces it from a metre away. `color.a`: how wide it is,
+// metres: nearer than that it is a patch, not a point, and fades gently.
+// `aim`: its cone, as how far a side is inside it,
+// `dot(aim.xyz, from the lamp) + aim.w`, clamped; `(0, 0, 0, 1)` lights
+// all round.
+struct Lamp {
+    at: vec4<f32>,
+    color: vec4<f32>,
+    aim: vec4<f32>,
+}
+
+struct View {
+    clip_from_relative: mat4x4<f32>,
+    relative_from_clip: mat4x4<f32>,
+    // xyz: camera from the planet centre, w: planet (sea level) radius.
+    camera: vec4<f32>,
+    // xyz: unit vector to the sun, w: radius of the top of the atmosphere.
+    sun: vec4<f32>,
+    // xyz: centre of the moon relative to the camera, w: its radius, metres.
+    moon: vec4<f32>,
+    // xyz: unit vector from the planet to the moon, for moonlight.
+    moon_light: vec4<f32>,
+    // x: 1 when the target is not sRGB and the shader must encode.
+    // y: world clock, seconds, wrapped. z: camera height over the sea, metres.
+    flags: vec4<f32>,
+    shadow_clip: array<mat4x4<f32>, SHADOW_CASCADES>,
+    // Side of a texel of each cascade on the ground, metres.
+    shadow_texel_m: vec4<f32>,
+    interaction_start: vec4<f32>,
+    interaction_end: vec4<f32>,
+    // x: exposure. y, z: how far the noise has risen through the cloud layer
+    // for bodies and for wisps, in repeats of each. w: cloud density factor.
+    post: vec4<f32>,
+    // xy: how far the weather has turned (cos, sin). z: cover. w: 1 when on.
+    clouds: vec4<f32>,
+    // x: strength of the glow. y: the brightness it starts at. z: its knee.
+    bloom: vec4<f32>,
+    // x: how thick the air is, as a factor. y: which tone map, by index.
+    // z: how clear the sea is to a swimmer, as a factor.
+    grade: vec4<f32>,
+    // A passage through a portal: xy its point on the screen, z its phase,
+    // -1 to 1, w 1 while there is one.
+    warp: vec4<f32>,
+    // x: how many of `lamps` are lit.
+    lamps_on: vec4<f32>,
+    lamps: array<Lamp, LAMPS>,
+    // The lens in the portal seen through: a direction on this side, in
+    // this view's camera-relative frame, to its picture's clip space.
+    through_clip_from_relative: mat4x4<f32>,
+    // x: how far off its line the lens sees at the pane's rim, radians.
+    lens: vec4<f32>,
+    // x: how far foliage is drawn, metres. y: the share of the undergrowth
+    // drawn. z: how deep the band it grows over at the edge of it is.
+    foliage: vec4<f32>,
+}
+
+// The share of the light that reaches the roots of the grass, shut in by
+// the blades round them; and the base of foliage sunk in it.
+const ROOTS_OPEN: f32 = 0.30;
+
+// How much of a wood shows as its ground's colour at a distance from the
+// eye: none where its foliage stands whole, all past its reach, and over
+// the band it grows in, as much as it has yet to grow.
+fn past_foliage(distance: f32) -> f32 {
+    let reach = view.foliage.x;
+    return smoothstep(reach - view.foliage.z, reach, distance);
+}
+
+@group(0) @binding(0) var<uniform> view: View;
+@group(0) @binding(1) var shadow_map: texture_depth_2d_array;
+@group(0) @binding(2) var shadow_sampler: sampler_comparison;
+
+// A body charged by its passage through a portal: its colour gives way to
+// a white well over a sunlit white, which the bloom takes, by `shine`.
+const CHARGE: vec3<f32> = vec3<f32>(7.0, 6.5, 6.0);
+fn charged(color: vec3<f32>, shine: f32) -> vec3<f32> {
+    return mix(color, CHARGE, clamp(shine, 0.0, 1.0));
+}
+
+fn shadow_sample(relative: vec3<f32>, normal: vec3<f32>, cascade: u32) -> vec2<f32> {
+    let texel_m = view.shadow_texel_m[cascade];
+    let facing = clamp(dot(normal, view.sun.xyz), 0.0, 1.0);
+    let offset = normal * texel_m * (0.3 + 1.0 - facing);
+    let p = (view.shadow_clip[cascade] * vec4<f32>(relative + offset, 1.0)).xyz;
+    let coverage = 1.0 - smoothstep(0.78, 0.97, max(abs(p.x), abs(p.y)));
+    if coverage <= 0.0 || p.z <= 0.0 || p.z >= 1.0 {
+        return vec2<f32>(1.0, 0.0);
+    }
+    let uv = p.xy * vec2<f32>(0.5, -0.5) + 0.5;
+    let valid = select(0.0, coverage, p.z > 0.0 && p.z < 1.0);
+    return vec2<f32>(shadow_tent(uv, p.z + 0.000008, cascade), valid);
+}
+
+// How much of a tent five texels wide the map leaves lit, in nine lookups.
+// A bilinear comparison weighs two texels by where it stands between them,
+// so each lookup is placed where the pair it covers has the weights the tent
+// gives them, and carries their sum.
+fn shadow_tent(uv: vec2<f32>, depth: f32, cascade: u32) -> f32 {
+    let at = uv * SHADOW_SIZE;
+    let nearest = floor(at + 0.5);
+    let f = at + 0.5 - nearest;
+    var weight = array<vec2<f32>, 3>(4.0 - 3.0 * f, vec2<f32>(7.0), 1.0 + 3.0 * f);
+    var place = array<vec2<f32>, 3>(
+        (3.0 - 2.0 * f) / weight[0] - 2.0,
+        (3.0 + f) / 7.0,
+        f / weight[2] + 2.0,
+    );
+    var sum = 0.0;
+    for (var y = 0; y < 3; y++) {
+        for (var x = 0; x < 3; x++) {
+            let tap = (nearest - 0.5 + vec2<f32>(place[x].x, place[y].y)) / SHADOW_SIZE;
+            sum += weight[x].x * weight[y].y
+                * textureSampleCompareLevel(shadow_map, shadow_sampler, tap, i32(cascade), depth);
+        }
+    }
+    return sum / 144.0;
+}
+
+fn terrain_shadow(relative: vec3<f32>, normal: vec3<f32>) -> f32 {
+    if view.flags.w < 0.5 { return 1.0; }
+    // Finest cascade first; each hands what its rim does not cover to the next.
+    var lit = 0.0;
+    var left = 1.0;
+    for (var cascade = 0u; cascade < SHADOW_CASCADES; cascade++) {
+        let sample = shadow_sample(relative, normal, cascade);
+        lit += left * sample.y * sample.x;
+        left *= 1.0 - sample.y;
+        if left <= 0.0 { break; }
+    }
+    return lit + left;
+}
+
+const SKY: vec3<f32> = vec3<f32>(0.30, 0.55, 1.00);
+const SUNSET: vec3<f32> = vec3<f32>(1.00, 0.45, 0.18);
+// The sun's light on a lit side, over its plain dot.
+const SUN_COLOR: vec3<f32> = vec3<f32>(1.75, 1.66, 1.5);
+const DENSITY_PER_M: f32 = 0.00004;
+
+// Distances along the ray to a sphere at the planet centre. x > y is a miss.
+fn ray_sphere(origin: vec3<f32>, dir: vec3<f32>, radius: f32) -> vec2<f32> {
+    let b = dot(origin, dir);
+    let c = dot(origin, origin) - radius * radius;
+    let disc = b * b - c;
+    if disc < 0.0 {
+        return vec2<f32>(1.0, -1.0);
+    }
+    let root = sqrt(disc);
+    return vec2<f32>(-b - root, -b + root);
+}
+
+// Light scattered toward the camera along a ray of `length` metres (rgb), and
+// how much of what lies behind survives (a).
+fn atmosphere(dir: vec3<f32>, length: f32) -> vec4<f32> {
+    return atmosphere_from(view.camera.xyz, dir, length);
+}
+
+// The same along a ray that starts anywhere, given from the planet's centre:
+// a ray that leaves the sea starts its air at the surface.
+fn atmosphere_from(origin: vec3<f32>, dir: vec3<f32>, length: f32) -> vec4<f32> {
+    let shell = ray_sphere(origin, dir, view.sun.w);
+    let enter = max(shell.x, 0.0);
+    let leave = min(shell.y, length);
+    let path = leave - enter;
+    if path <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let through = exp(-path * DENSITY_PER_M * view.grade.x);
+
+    // Daylight where the ray runs, warm when the sun is low.
+    let middle = normalize(origin + dir * (enter + path * 0.5));
+    let sun_height = dot(middle, view.sun.xyz);
+    let day = smoothstep(-0.20, 0.25, sun_height);
+    let warm = (1.0 - smoothstep(0.0, 0.40, sun_height)) * max(dot(dir, view.sun.xyz), 0.0);
+    let tint = mix(SKY, SUNSET, warm);
+    // Long paths wash out toward white, as the real horizon does.
+    let haze = mix(tint, vec3<f32>(1.0), (1.0 - through) * 0.30);
+    return vec4<f32>(haze * (1.0 - through) * day * 1.1, through);
+}
+
+// Water takes red first, then green; blue travels furthest. Per metre.
+const WATER_ABSORB: vec3<f32> = vec3<f32>(0.35, 0.070, 0.045);
+// What the water itself scatters back: the colour of "nothing but sea".
+const WATER_SCATTER: vec3<f32> = vec3<f32>(0.012, 0.115, 0.170);
+
+// How much of the sun reaches a point (relative to the camera) past a sphere:
+// 0 in its shadow, 1 clear of it, soft across the edge. Only a sphere between
+// the point and the sun can shadow it. On the sphere's own surface that is the
+// night side; the day side is left to the surface normal, as for any light.
+fn past_sphere(relative: vec3<f32>, center: vec3<f32>, radius: f32) -> f32 {
+    let to_center = center - relative;
+    let along = dot(to_center, view.sun.xyz);
+    let miss = sqrt(max(dot(to_center, to_center) - along * along, 0.0));
+    let soft = radius * 0.06;
+    let shadow = smoothstep(radius - soft, radius + soft, miss);
+    // Ease in across the terminator, where the sphere is just coming between.
+    return mix(1.0, shadow, smoothstep(0.0, radius * 0.15, along));
+}
+
+// Sunlight at a point: whatever neither body shadows.
+fn sunlight(relative: vec3<f32>) -> f32 {
+    let planet = past_sphere(relative, -view.camera.xyz, view.camera.w);
+    let moon = past_sphere(relative, view.moon.xyz, view.moon.w);
+    return planet * moon;
+}
+
+// Whether a point belongs to the moon: its surface is the nearer one.
+fn on_moon(relative: vec3<f32>) -> bool {
+    let from_planet = view.camera.xyz + relative;
+    let from_moon = relative - view.moon.xyz;
+    return length(from_moon) - view.moon.w < length(from_planet) - view.camera.w;
+}
+
+// Up at a point: away from the body whose surface is nearer.
+fn surface_up(relative: vec3<f32>) -> vec3<f32> {
+    return normalize(select(view.camera.xyz + relative, relative - view.moon.xyz, on_moon(relative)));
+}
+
+// How much a faint light of the night sky shows through `air`, the light the
+// atmosphere scatters along its ray: daylight drowns it, and so does standing
+// in daylight, however dark that corner of the sky is.
+fn night_sky(air: vec3<f32>) -> f32 {
+    let in_air = 1.0 - smoothstep(0.0, view.sun.w - view.camera.w, view.flags.z);
+    return (1.0 - smoothstep(0.02, 0.20, max(air.r, max(air.g, air.b))))
+        * (1.0 - in_air * daylight(normalize(view.camera.xyz)));
+}
+
+// How much brighter the moon's ground is drawn than a sunlit rock is. To an
+// eye used to the dark the moon blazes; nothing here adapts, so the moon in
+// the night sky is lifted over the bloom threshold instead, as a lamp will
+// be: what glows is what is bright. Not the moon one stands on, nor the moon
+// by day.
+const MOON_SHINE: f32 = 6.0;
+// A surface that is its own colour whatever falls on it, by night as by day,
+// seen through the air between it and the camera. `color` is the light it
+// gives: a lamp's albedo times over, a screen's as it is.
+fn own_light(color: vec3<f32>, relative: vec3<f32>) -> vec3<f32> {
+    let distance = length(relative);
+    return through_medium(color, relative / distance, distance);
+}
+
+fn moon_shine(relative: vec3<f32>) -> f32 {
+    if !on_moon(relative) {
+        return 1.0;
+    }
+    let distance = length(relative);
+    let afar = 1.0 - smoothstep(0.15, 0.45, view.moon.w / length(view.moon.xyz));
+    let night = night_sky(atmosphere(relative / distance, distance).rgb);
+    return mix(1.0, MOON_SHINE, afar * night);
+}
+
+// Daylight at a place on the planet, 0 at night.
+fn daylight(up: vec3<f32>) -> f32 {
+    return smoothstep(-0.10, 0.15, dot(up, view.sun.xyz));
+}
+
+// What the medium between the camera and a surface does to its colour: air
+// above the sea, water below it.
+fn through_medium(color: vec3<f32>, dir: vec3<f32>, distance: f32) -> vec3<f32> {
+    if view.flags.z >= 0.0 {
+        let air = atmosphere(dir, distance);
+        return color * air.a + air.rgb;
+    }
+    // From under the sea. What lies past the surface is seen through the
+    // surface, which is drawn after it and lays the water between over it
+    // (water.wgsl): here it gets its air alone, from the surface on.
+    let surface = ray_sphere(view.camera.xyz, dir, view.camera.w).y;
+    if distance > surface {
+        let air = atmosphere_from(view.camera.xyz + dir * surface, dir, distance - surface);
+        return color * air.a + air.rgb;
+    }
+    return through_water(color, distance);
+}
+
+// What `wet` metres of sea between do to a colour, for a camera under it: each
+// colour dies at its own rate, and the sea's own glow fills in. Both dim with
+// the depth of the camera.
+fn through_water(color: vec3<f32>, wet: f32) -> vec3<f32> {
+    let day = daylight(normalize(view.camera.xyz));
+    // Clarity stretches how far a swimmer sees; the sea seen from the air
+    // keeps its colour.
+    let survive = exp(-WATER_ABSORB * wet / view.grade.z);
+    // Never brighter than at the surface, whoever asks from over it.
+    let glow = WATER_SCATTER * (0.08 + day) * exp(min(view.flags.z, 0.0) * 0.025);
+    return color * survive + glow * (1.0 - survive);
+}
+
+// How much of the world above shows through the sea's surface from below, by
+// how steeply it is met. Wider by far than the 48 degrees of still water: a
+// swimmer should see the shore they swim to.
+fn snell_window(facing: f32) -> f32 {
+    return smoothstep(0.03, 0.30, facing);
+}
+
+// What the stars alone give a surface open to the sky.
+const STARLIGHT: vec3<f32> = vec3<f32>(0.045, 0.058, 0.095);
+
+// Moonlight where `up` points: faint, and only as much as the moon is lit and
+// up over there.
+fn moonlight(up: vec3<f32>) -> vec3<f32> {
+    let moon = view.moon_light.xyz;
+    let moon_up = smoothstep(-0.05, 0.15, dot(up, moon));
+    let moon_lit = 0.5 - 0.5 * dot(moon, view.sun.xyz);
+    return moon_up * moon_lit * vec3<f32>(0.10, 0.12, 0.16);
+}
+
+
+// What the lamps near give a side: each falls off with the square of the
+// distance, ends at its reach, softens at the edge of its cone, and wraps a
+// little round a side turned away, as light from a patch does. No lamp
+// casts a shadow.
+fn lamplight(relative: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    var light = vec3<f32>(0.0);
+    let count = u32(view.lamps_on.x);
+    for (var i = 0u; i < count; i++) {
+        let lamp = view.lamps[i];
+        let to = lamp.at.xyz - relative;
+        let d2 = dot(to, to);
+        let near = 1.0 - d2 / (lamp.at.w * lamp.at.w);
+        if near <= 0.0 {
+            continue;
+        }
+        let toward = to * inverseSqrt(max(d2, 1e-4));
+        let facing = clamp((dot(normal, toward) + 0.5) / 1.5, 0.0, 1.0);
+        let inside = clamp(lamp.aim.w - dot(lamp.aim.xyz, toward), 0.0, 1.0);
+        light += lamp.color.rgb * facing * inside * inside * near * near / (1.0 + d2 / (lamp.color.w * lamp.color.w));
+    }
+    return light;
+}
+
+// How far a side turns towards the sun, as the cosine of the angle, before
+// the sun reaches it whole: the width of the terminator. Narrow, so ground
+// under a low sun keeps its light.
+const TERMINATOR: f32 = 0.1;
+
+// Sun and sky light on a surface, then the medium between it and the camera.
+fn lit(albedo: vec3<f32>, normal: vec3<f32>, gloss: f32, relative: vec3<f32>) -> vec3<f32> {
+    return lit_surface(albedo,normal,gloss,relative,normal);
+}
+
+fn lit_surface(albedo: vec3<f32>, normal: vec3<f32>, gloss: f32, relative: vec3<f32>, geometric_normal: vec3<f32>) -> vec3<f32> {
+    return lit_occluded(albedo, normal, gloss, relative, geometric_normal, 1.0);
+}
+
+// The same, with `open` the share of the sky a point sees: what a corner
+// shut in by cubes keeps of the light that comes from everywhere. The sun is
+// the shadow map's.
+fn lit_occluded(albedo: vec3<f32>, normal: vec3<f32>, gloss: f32, relative: vec3<f32>, geometric_normal: vec3<f32>, open: f32) -> vec3<f32> {
+    let distance = length(relative);
+    let color = lit_by(albedo, normal, gloss, relative, reach_at(relative, normal, geometric_normal, open));
+    return through_medium(color, relative / distance, distance);
+}
+
+// What of the sun and the sky reaches a side.
+struct Reach {
+    // How much of the sun the planet and the moon leave: night, eclipses.
+    day: f32,
+    // How much of the sun the bodies near leave, by the shadow map, and the
+    // side's own turn: a side turned from the sun stands in its own shadow.
+    sun: f32,
+    // How much of the sun the clouds let through.
+    cloud: f32,
+    // How far the side faces the sky, 0 down to 1 up.
+    sky: f32,
+    // The share of the sky the things round it leave open.
+    open: f32,
+}
+
+fn reach_at(relative: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>, open: f32) -> Reach {
+    // Only a side the sun reaches asks the map: behind a silhouette the map
+    // holds the far side of the same body, and what it answers there is its
+    // bias.
+    let sunward = smoothstep(0.0, TERMINATOR, dot(geometric_normal, view.sun.xyz));
+    var sun = 0.0;
+    if sunward > 0.0 {
+        sun = sunward * terrain_shadow(relative, geometric_normal);
+    }
+    let sky = 0.5 + 0.5 * dot(normal, surface_up(relative));
+    return Reach(sunlight(relative), sun, cloud_shadow(relative), sky, open);
+}
+
+// The light a side sends back where it stands, before the air between it
+// and the eye.
+fn lit_by(albedo: vec3<f32>, normal: vec3<f32>, gloss: f32, relative: vec3<f32>, reach: Reach) -> vec3<f32> {
+    let up = surface_up(relative);
+    let sun = view.sun.xyz;
+    let direct = max(dot(normal, sun), 0.0) * reach.day * reach.sun * reach.cloud;
+    // Sky from above, warm bounce from the ground below: shadowed sides keep
+    // their own colour instead of going blue. A cast shadow also hides the
+    // bright sky around the sun and the ground it would have lit: less fill
+    // in there, or relief reads as a tint.
+    let fill = mix(0.45, 1.0, reach.sun);
+    let ambient = (mix(vec3<f32>(0.10, 0.09, 0.07), SKY * 0.38 + 0.06, reach.sky) * reach.day * fill
+        // Starlight: nights are dark, never blind.
+        + STARLIGHT * reach.sky) * reach.open;
+    var color = albedo * (direct * SUN_COLOR + ambient);
+
+    // The moon casts no shadow: what hides the sky from a side hides the
+    // moon too.
+    color += albedo * max(dot(normal, view.moon_light.xyz), 0.0) * moonlight(up) * reach.open;
+    color += albedo * lamplight(relative, normal);
+
+    let half_vector = normalize(sun - normalize(relative));
+    color += gloss * reach.day * reach.sun * pow(max(dot(normal, half_vector), 0.0), 90.0) * 1.5;
+    return color;
+}
+
+// Value noise on a lattice that repeats every `period` cells, so it can be
+// fed positions wrapped by the CPU in f64 (see `placement.anchor`).
+fn lattice(cell: vec3<i32>, period: i32) -> f32 {
+    let c = vec3<u32>((cell % period + period) % period);
+    var h = (c.x * 0x8da6b343u) ^ (c.y * 0xd8163841u) ^ (c.z * 0xcb1ab31fu);
+    h = (h ^ (h >> 15u)) * 0x2c1b3c6du;
+    h = (h ^ (h >> 12u)) * 0x297a2d39u;
+    return f32((h ^ (h >> 15u)) & 0xffffu) / 65535.0;
+}
+
+fn value_noise(p: vec3<f32>, period: i32) -> f32 {
+    let cell = vec3<i32>(floor(p));
+    let f = fract(p);
+    let w = f * f * (3.0 - 2.0 * f);
+    let x00 = mix(lattice(cell, period), lattice(cell + vec3<i32>(1, 0, 0), period), w.x);
+    let x10 = mix(lattice(cell + vec3<i32>(0, 1, 0), period), lattice(cell + vec3<i32>(1, 1, 0), period), w.x);
+    let x01 = mix(lattice(cell + vec3<i32>(0, 0, 1), period), lattice(cell + vec3<i32>(1, 0, 1), period), w.x);
+    let x11 = mix(lattice(cell + vec3<i32>(0, 1, 1), period), lattice(cell + vec3<i32>(1, 1, 1), period), w.x);
+    return mix(mix(x00, x10, w.y), mix(x01, x11, w.y), w.z);
+}
+
+// The same noise with its slope: x is the value, yzw how it changes along
+// each axis, per cell. One look where a finite difference takes three.
+fn value_noise_slope(p: vec3<f32>, period: i32) -> vec4<f32> {
+    let cell = vec3<i32>(floor(p));
+    let f = fract(p);
+    let w = f * f * (3.0 - 2.0 * f);
+    let dw = 6.0 * f * (1.0 - f);
+    let c000 = lattice(cell, period);
+    let c100 = lattice(cell + vec3<i32>(1, 0, 0), period);
+    let c010 = lattice(cell + vec3<i32>(0, 1, 0), period);
+    let c110 = lattice(cell + vec3<i32>(1, 1, 0), period);
+    let c001 = lattice(cell + vec3<i32>(0, 0, 1), period);
+    let c101 = lattice(cell + vec3<i32>(1, 0, 1), period);
+    let c011 = lattice(cell + vec3<i32>(0, 1, 1), period);
+    let c111 = lattice(cell + vec3<i32>(1, 1, 1), period);
+    let value = mix(mix(mix(c000, c100, w.x), mix(c010, c110, w.x), w.y),
+        mix(mix(c001, c101, w.x), mix(c011, c111, w.x), w.y), w.z);
+    let dx = mix(mix(c100 - c000, c110 - c010, w.y), mix(c101 - c001, c111 - c011, w.y), w.z);
+    let dy = mix(mix(c010 - c000, c110 - c100, w.x), mix(c011 - c001, c111 - c101, w.x), w.z);
+    let dz = mix(mix(c001 - c000, c101 - c100, w.x), mix(c011 - c010, c111 - c110, w.x), w.y);
+    return vec4<f32>(value, vec3<f32>(dx, dy, dz) * dw);
+}
+
+// Light from 0 to 1 as the view's target takes it: as is when the target
+// encodes sRGB itself, else encoded here (`view.flags.x` is 1).
+fn on_target(c: vec3<f32>) -> vec4<f32> {
+    if view.flags.x < 0.5 {
+        return vec4<f32>(c, 1.0);
+    }
+    let low = c * 12.92;
+    let high = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return vec4<f32>(select(high, low, c <= vec3<f32>(0.0031308)), 1.0);
+}

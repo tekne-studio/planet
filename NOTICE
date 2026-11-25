@@ -1,0 +1,51 @@
+Planet is free software under the GNU General Public License, version 3
+(GPL-3.0-only): LICENSE covers the code and the docs, except where this
+notice says otherwise.
+
+Copyright (C) 2026 Tekne Studio
+
+`arcade/emulator/` is the emulator of TKN-32, the console the cabinets run,
+built from its source (https://github.com/tekne-studio/tkn-32), and every
+ROM in `arcade/roms/` is built on its `cartridge` crates. TKN-32 is under
+the MIT licence, whose notice travels with them:
+
+    Copyright (c) 2026 Tekne Studio
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+`arcade/roms/` holds the ROMs this version ships, the games' built files,
+each as `arcade/roms/roms.toml` says: under a licence, an SPDX name or its
+own notice beside it, or with its rights reserved.
+
+The ROM of Kings of Rio '95, `kings` in that list, is Tekne Studio's, all
+rights reserved. It is not under the engine's licence: no licence is granted
+for it until its licence is chosen. Planet carries and runs it with Tekne
+Studio's permission.
+
+The default asset set in `assets/` came from elsewhere, each file with its own
+terms:
+
+- `assets/avatars/*.vrm`: CC0.
+- `assets/clips/idle.glb`, `walk.glb`, `run.glb`, `jump.glb`, `fall.glb` and
+  `fly.glb`: from Hyperfy (https://github.com/hyperfy-xyz/hyperfy),
+  GPL-3.0-only, the licence Planet shares. Keyframes on a Mixamo rig, reduced
+  to the animation alone by `scripts/assets.ts`.
+- `assets/clips/swim.glb`: a Mixamo animation (Adobe), reduced the same way.
+  It is used under Adobe's terms for Mixamo and is not relicensed by this
+  repository: neither LICENSE nor this notice grants any right in it.

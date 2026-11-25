@@ -1,0 +1,7 @@
+[
+	{ "name": "chat", "on": true },
+	{ "name": "build", "on": true },
+	{ "name": "items", "on": true },
+	{ "name": "ride", "on": true },
+	{ "name": "flashlight", "on": true }
+]

@@ -1,0 +1,282 @@
+// The parts of a world on the wire: what a client asks of them and what the
+// world says of them, each the payload of an Envelope whose owner is
+// `parts`.
+//
+// Up, the ops: `place`, `set`, `remove`, `take_back`, `put_back`, `look`,
+// `chart`, `favour`, `home`. Down, the events: `placed`, `changed`,
+// `removed`, `seen`, `charted`.
+syntax = "proto3";
+
+package planet.parts.v1;
+
+import "planet/cells/v1/cells.proto";
+
+option go_package = "github.com/tekne-studio/planet/server/internal/protocol/parts;parts";
+
+// What a part is. A shape a file gives is named by the hash of its content,
+// a variant beside the cube.
+message Shape {
+  oneof shape {
+    Cube cube = 1;
+    // A model from a `.vox` file: the SHA-256 of its content, 32 bytes,
+    // the file named `asset://<hex>.vox`.
+    bytes vox = 2;
+    Media image = 3;
+    Landmark landmark = 4;
+    Portal portal = 5;
+    Clip clip = 6;
+    // A 3D model from a `.glb` file: the SHA-256 of its content, 32 bytes,
+    // the file named `asset://<hex>.glb`.
+    bytes glb = 7;
+    Cabinet cabinet = 8;
+  }
+}
+
+// An arcade cabinet of the engine's own drawing, filling the box, its
+// screen running a cartridge. `cart` is the SHA-256 of the cartridge's
+// file, 32 bytes, named `asset://<hex>.wasm`: empty, the cabinet has no
+// game and its screen is dark. `skin` is a still picture painted on its
+// body by a fixed layout, kept as a picture is: PNG, JPEG or WebP, with
+// no `millis`. With none, the body is in the part's paint.
+message Cabinet {
+  reserved 2, 3;
+  reserved "skin_kind";
+  bytes cart = 1;
+  Media skin = 4;
+}
+
+// A sound: a file played where the part stands, looping, heard within the
+// part's reach, nothing drawn of it but its gizmo when picked. The SHA-256
+// of the file, 32 bytes, its kind, and how long it plays in milliseconds.
+message Clip {
+  bytes file = 1;
+  ClipKind kind = 2;
+  uint32 millis = 3;
+}
+
+enum ClipKind {
+  CLIP_KIND_UNSPECIFIED = 0;
+  CLIP_KIND_MP3 = 1;
+  CLIP_KIND_M4A = 2;
+  CLIP_KIND_OGG = 3;
+}
+
+// The unit box, in one paint.
+message Cube {}
+
+// A landmark: a star lying in the box, bearing a name: trimmed, never
+// empty, no control character, at most 64 bytes of UTF-8. Lit with its own
+// light whatever its paint's finish; a place one travels to.
+message Landmark {
+  string name = 1;
+}
+
+// A portal: a standing ring leading to a landmark by the name the world
+// gave it; 0 leads nowhere. A body that passes through its pane is taken to
+// stand on that star, facing the way it points. `rim` is the rim's width in
+// two hundredths of the ring's width: none at 0, at most 100, the middle.
+message Portal {
+  uint64 to = 1;
+  uint32 rim = 2;
+}
+
+// A picture: its size in texels, how long it plays, and the three files its
+// owner's client made when it was placed, each the SHA-256 of its bytes, 32
+// bytes: the thumb and the low version are WebP posters, the original is
+// `kind`. `millis` is how long the original plays, 0 for a still: a GIF, an
+// animated WebP or a video moves.
+message Media {
+  uint32 width = 1;
+  uint32 height = 2;
+  bytes thumb = 3;
+  bytes low = 4;
+  bytes full = 5;
+  ImageKind kind = 6;
+  uint32 millis = 7;
+}
+
+enum ImageKind {
+  IMAGE_KIND_UNSPECIFIED = 0;
+  IMAGE_KIND_PNG = 1;
+  IMAGE_KIND_JPG = 2;
+  IMAGE_KIND_WEBP = 3;
+  IMAGE_KIND_GIF = 4;
+  IMAGE_KIND_MP4 = 5;
+}
+
+// Where a part stands in the flat frame of its seat, in blocks: its anchor
+// along u and v and over the datum, how it is turned, a unit quaternion in
+// that frame, and how long its unit box is along each of its own axes.
+message Pose {
+  double u = 1;
+  double v = 2;
+  double h = 3;
+  double qx = 4;
+  double qy = 5;
+  double qz = 6;
+  double qw = 7;
+  double sx = 8;
+  double sy = 9;
+  double sz = 10;
+}
+
+// A part as a client asks for it and the world keeps it.
+message Part {
+  planet.cells.v1.Seat seat = 1;
+  Pose pose = 2;
+  Shape shape = 3;
+  // Of the palette, as a cell's paint is.
+  uint32 paint = 4;
+  // Whether a body stands on it and is stopped by it.
+  bool solid = 5;
+  // How much it shines with its own colour: 0 lit by what falls on it, 1
+  // its own colour as a screen shows it, more a lamp.
+  float shine = 6;
+  // How far the light of a part that is a lamp goes, metres. 0 is by its
+  // size.
+  float reach_m = 7;
+  // What its builder calls it, for the list of what is near: trimmed, at
+  // most 64 bytes of UTF-8, empty when unnamed. A landmark's name is its
+  // shape's.
+  string name = 8;
+  // Whether what sounds of it is silenced: a video's track, a sound's file.
+  bool muted = 9;
+  // How loud it sounds, 0 to 1, as the panel says it; 0 is full, as unset.
+  float volume = 10;
+}
+
+// A part as the world keeps it: under the name it gave, one more for each
+// change that landed in it, and who placed it and who set it last. Each is
+// unset where the world does not know: `set_by` for a part never set.
+message Record {
+  uint64 id = 1;
+  Part part = 2;
+  uint64 version = 3;
+  // Who placed it and who set it last by the name alone, as a world kept
+  // them before it kept the account: read, never written, each a `By`
+  // whose account is not known.
+  string placed_name = 4;
+  string set_name = 5;
+  By placed_by = 6;
+  By set_by = 7;
+}
+
+// Someone who changed a part, as the world knew them then: the name they
+// had here, to show, and their account. The world keeps the account's id
+// and tells a client only whether there was one: who is who is mundos's.
+message By {
+  string name = 1;
+  // The account's id in mundos, in the world's own record; empty for a
+  // visitor, for one whose account is not known, and in every record a
+  // client is told.
+  string user = 2;
+  // No account: a name anyone could have taken. With neither `user` nor
+  // `visitor`, the account is not known.
+  bool visitor = 3;
+}
+
+// `place`: places a part. The world names it and tells everyone near with
+// `placed`, the asker included: its places are answered in the order they
+// were asked, so the first `placed` of its own is its first place.
+message Place {
+  Part part = 1;
+}
+
+// `set`: sets a part by its name: moved, turned, stretched, repainted, made
+// solid or not, or seated elsewhere.
+message Set {
+  uint64 id = 1;
+  Part part = 2;
+}
+
+// `remove`: removes a part by its name.
+message Remove {
+  uint64 id = 1;
+}
+
+// `take_back`: takes back the last change of this session's to the parts
+// that landed: a part placed is taken out, one set goes back to how it was,
+// one removed stands again, each told as the change was. Sets of one part
+// in a row are one change.
+message TakeBack {}
+
+// `put_back`: puts back the last change this session took back.
+message PutBack {}
+
+// `look`: what this client holds of the parts near it, each at the version
+// it holds it. The world answers with `seen`.
+message Look {
+  repeated Held held = 1;
+}
+
+message Held {
+  uint64 id = 1;
+  uint64 version = 2;
+}
+
+// `placed`: a part was placed, to everyone near it, the asker included.
+message Placed {
+  // Who asked.
+  uint32 session = 1;
+  Record record = 2;
+}
+
+// `changed`: a part was set, to everyone near it.
+message Changed {
+  uint32 session = 1;
+  Record record = 2;
+}
+
+// `removed`: a part was removed, to everyone near where it stood.
+message Removed {
+  uint32 session = 1;
+  uint64 id = 2;
+}
+
+// `seen`: parts as they stand, and those that stand no more. The answer to
+// `look`: the parts near the asker that it lacks or holds at another
+// version, and those it holds that are gone.
+message Seen {
+  repeated Record records = 1;
+  repeated uint64 gone = 2;
+}
+
+// `chart`: the landmarks of the world, wherever they stand. The world
+// answers the asker with `charted`.
+message Chart {}
+
+// `charted`: the landmarks of the world as they stand, at most 256: the
+// asker's home first, then its favourites, then the rest, each the nearest
+// the asker first. The answer to `chart`, always given, empty when the
+// world has none.
+message Charted {
+  repeated Record records = 1;
+  // Of the records, the asker's home, by its name in the world; 0 when it
+  // has none among them. A visitor's is never the world's to say.
+  uint64 home = 2;
+  // Of the records, the asker's favourites, by their names in the world.
+  repeated uint64 favourites = 3;
+}
+
+// `favour`: makes a landmark one of the asker's favourites, or no longer
+// one. An account's alone, kept by the world under its id.
+message Favour {
+  uint64 id = 1;
+  bool on = 2;
+}
+
+// `home`: makes a landmark the asker's home, where its body is born when a
+// page opens with no place; 0 clears it. One home at a time: a new one
+// takes the place of the last. An account's alone, kept by the world under
+// its id.
+message Home {
+  uint64 id = 1;
+}
+
+// What an account chose of the chart, as the world keeps it under the
+// account's id: its home, 0 for none, and its favourites, each a landmark
+// by its name in the world. Kept, never sent.
+message Choices {
+  uint64 home = 1;
+  repeated uint64 favourites = 2;
+}

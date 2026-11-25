@@ -1,0 +1,15 @@
+[package]
+name = "flashlight-world"
+description = "The flashlight plugin's world half: its name, its version and the name of the thing a hand grasps. It offers the world no op."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+world.workspace = true
+
+[lints]
+workspace = true

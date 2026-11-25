@@ -1,0 +1,339 @@
+// Package api is the instance's HTTP face: the routes a page asks, the world
+// socket and the front end's files. It is the one package that knows HTTP,
+// mundos's token and the world folder at once; the world core behind it is
+// told who a session is and never asks.
+package api
+
+import (
+	"context"
+	"crypto/ed25519"
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/tekne-studio/planet/server/internal/fields"
+	"github.com/tekne-studio/planet/server/internal/files"
+	"github.com/tekne-studio/planet/server/internal/folder"
+	"github.com/tekne-studio/planet/server/internal/mundos"
+	"github.com/tekne-studio/planet/server/internal/world"
+)
+
+// Config is what the environment decides about an instance.
+type Config struct {
+	// Name is the world's name in mundos, the audience of its tokens.
+	Name string
+	// MundosURL is mundos's origin, where the door is.
+	MundosURL string
+	// PublicKey checks mundos's tokens. Nil for a world that runs alone, where
+	// every session has DevLevel.
+	PublicKey ed25519.PublicKey
+	// DevLevel is every session's level in a world that runs alone. Under
+	// mundos it is anonymous: mundos says the level.
+	DevLevel world.Level
+	// WebDir holds the front end's files. Empty in development, where Vite
+	// serves them and proxies the routes here.
+	WebDir string
+	// Carried is the folder of the heavy files the version carries, the
+	// games it ships: the world keeps each as it opens. Empty carries none.
+	Carried string
+	// Version is the engine's, as the build names it.
+	Version string
+}
+
+// Fields is the fields this version carries: a world is founded only on
+// ground it can shape. `fields.Open("")` carries none.
+type Fields interface {
+	// Check is nil for a recipe that names no field or one this version
+	// carries whole, and fields.ErrMissing or fields.ErrDamaged otherwise.
+	Check(recipe world.Recipe) error
+}
+
+// Server is one instance: one world.
+type Server struct {
+	cfg    Config
+	folder *folder.Folder
+	fields Fields
+	files  *files.Files
+	hub    *world.Hub
+	keys   *world.Keys
+	// What judges a file before it is kept. Nil in a test that judges
+	// nothing.
+	judge Judge
+	now   func() time.Time
+}
+
+// Judge judges a file of a kind before the world keeps it: the code of
+// why it may not be kept, "" when it may. An error is no verdict.
+type Judge interface {
+	Judge(ctx context.Context, kind string, file []byte) (string, error)
+}
+
+// New is an instance over a world folder, the plugins its version carries,
+// the fields it carries and what judges a file before it is kept. The
+// world's files are kept under the folder.
+func New(cfg Config, f *folder.Folder, installed []world.Installed, carried Fields, judge Judge) (*Server, error) {
+	kept, err := files.Open(filepath.Join(f.Dir(), filesDir), cfg.Carried)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{cfg: cfg, folder: f, fields: carried, files: kept, hub: world.NewHub(f, installed, f.Switches()), keys: world.NewKeys(), judge: judge, now: time.Now}, nil
+}
+
+// Handler is every route of the instance. A path under /api that is no route
+// is a 404 and never the page.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/health", s.health)
+	mux.HandleFunc("GET /api/world", s.describe)
+	mux.HandleFunc("POST /api/world", s.found)
+	mux.HandleFunc("POST /api/plugins", s.plugin)
+	mux.HandleFunc("POST /api/enter", s.enter)
+	mux.HandleFunc("GET /api/me", s.me)
+	mux.HandleFunc("GET /api/socket", s.socket)
+	mux.HandleFunc("POST /api/files", s.upload)
+	mux.HandleFunc("GET /api/files", s.held)
+	mux.Handle("/api/", http.NotFoundHandler())
+	mux.HandleFunc("GET /files/{name}", s.file)
+	mux.Handle("/", frontEnd(s.cfg.WebDir))
+	return mux
+}
+
+// What a body may weigh: a recipe's params are a handful of knobs.
+const maxBody = 32 << 10
+
+func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, "ok\n")
+}
+
+// description is what a world says it is, to a page and to mundos.
+type description struct {
+	Name    string `json:"name"`
+	Founded bool   `json:"founded"`
+	// Null while the world is unfounded.
+	Recipe *recipe `json:"recipe"`
+	// What it speaks: the wire's version, the engine's, and each plugin that
+	// is on with its own.
+	Protocol int            `json:"protocol"`
+	Version  string         `json:"version"`
+	Plugins  []world.Spoken `json:"plugins"`
+	// mundos's door, which every load passes through. Empty for a world that
+	// runs alone.
+	Door string `json:"door"`
+	// Where the world's files are read from: `asset://x` is `<files>/x`.
+	Files string `json:"files"`
+}
+
+// recipe has the wire's shape, as the page and the engine read it.
+type recipe struct {
+	Seed             string          `json:"seed"`
+	GeneratorVersion int             `json:"generator_version"`
+	Params           json.RawMessage `json:"params"`
+}
+
+func (s *Server) describe(w http.ResponseWriter, r *http.Request) {
+	about := description{Name: s.cfg.Name, Protocol: world.Protocol, Version: s.cfg.Version, Plugins: s.hub.Speaks(), Files: filesRoute}
+	if s.cfg.MundosURL != "" {
+		about.Door = s.cfg.MundosURL + "/enter"
+	}
+	held, err := s.folder.Recipe(r.Context())
+	switch {
+	case err == nil:
+		about.Founded = true
+		about.Recipe = &recipe{Seed: held.Seed.String(), GeneratorVersion: held.GeneratorVersion, Params: held.Params}
+	case !errors.Is(err, world.ErrUnfounded):
+		fail(w, http.StatusInternalServerError, "unreadable")
+		return
+	}
+	answer(w, http.StatusOK, about)
+}
+
+// entered is who the server takes a page's visitor for.
+type entered struct {
+	Level string `json:"level"`
+	// The account's name, as mundos signed it. Empty for a visitor.
+	Name string `json:"name"`
+	// The account's avatar, as mundos signed it: the VRM's URL. Empty when
+	// the account has none, and for a visitor.
+	Avatar string `json:"avatar"`
+	// What the page shows on the socket and on a founding. Empty for a
+	// visitor, who enters as a guest.
+	Key string `json:"key"`
+}
+
+// enter trades what the door gave the page, a token or `guest`, for who the
+// page is here. A token that does not check is a visitor: the door is where
+// a person signs in, never this route.
+func (s *Server) enter(w http.ResponseWriter, r *http.Request) {
+	var asked struct {
+		Identity string `json:"identity"`
+	}
+	if !read(w, r, &asked) {
+		return
+	}
+	identity := world.Identity{Level: s.cfg.DevLevel}
+	if s.cfg.PublicKey != nil && asked.Identity != "" && asked.Identity != "guest" {
+		claims, err := mundos.Verify(asked.Identity, s.cfg.PublicKey, s.cfg.Name, s.now())
+		level, known := world.ParseLevel(claims.Level)
+		if err == nil && known {
+			identity = world.Identity{UserID: claims.Sub, Name: claims.Name, Level: level, Avatar: claims.Avatar}
+		} else {
+			log.Print("enter: a token was refused, entering as a visitor")
+		}
+	}
+	who := entered{Level: identity.Level.String(), Name: identity.Name, Avatar: identity.Avatar}
+	if !identity.Visitor() {
+		who.Key = s.keys.Mint(identity)
+	}
+	answer(w, http.StatusOK, who)
+}
+
+// me says whether a key still stands. A page asks before it opens a link
+// again: a key is forgotten when the server restarts and when its life ends,
+// and the page then passes through the door for another.
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	key := bearer(r)
+	identity, known := s.who(key)
+	if !known {
+		fail(w, http.StatusUnauthorized, "key")
+		return
+	}
+	answer(w, http.StatusOK, entered{Level: identity.Level.String(), Name: identity.Name, Avatar: identity.Avatar, Key: key})
+}
+
+// bearer is the key a request carries, or nothing.
+func bearer(r *http.Request) string {
+	key, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return key
+}
+
+// who is the identity a key stands for. A request with an empty key is a
+// visitor's, at the level every session has in a world that runs alone. Only a
+// key this server gave is true.
+func (s *Server) who(key string) (world.Identity, bool) {
+	if key == "" {
+		return world.Identity{Level: s.cfg.DevLevel}, true
+	}
+	return s.keys.Find(key)
+}
+
+// found freezes the recipe of an unfounded world. An admin's alone.
+func (s *Server) found(w http.ResponseWriter, r *http.Request) {
+	identity, known := s.who(bearer(r))
+	if !known {
+		fail(w, http.StatusUnauthorized, "key")
+		return
+	}
+	if identity.Level != world.LevelAdmin {
+		fail(w, http.StatusForbidden, "level")
+		return
+	}
+	var asked recipe
+	if !read(w, r, &asked) {
+		return
+	}
+	founded, err := world.NewRecipe(asked.Seed, asked.GeneratorVersion, asked.Params)
+	switch {
+	case errors.Is(err, world.ErrSeed):
+		fail(w, http.StatusBadRequest, "seed")
+		return
+	case errors.Is(err, world.ErrGeneratorVersion):
+		fail(w, http.StatusBadRequest, "generator_version")
+		return
+	case err != nil:
+		fail(w, http.StatusBadRequest, "params")
+		return
+	}
+	// A founded world says so before its field is weighed, and ground this
+	// version cannot shape founds no world: it would never start. Found
+	// still says founded to the second of two at once.
+	if _, err := s.folder.Recipe(r.Context()); err == nil {
+		fail(w, http.StatusConflict, "founded")
+		return
+	}
+	switch err := s.fields.Check(founded); {
+	case errors.Is(err, fields.ErrMissing), errors.Is(err, fields.ErrDamaged):
+		log.Printf("found: %v", err)
+		fail(w, http.StatusBadRequest, "field")
+		return
+	case err != nil:
+		log.Printf("found: %v", err)
+		fail(w, http.StatusInternalServerError, "unreadable")
+		return
+	}
+	switch err := s.folder.Found(founded); {
+	case errors.Is(err, folder.ErrFounded):
+		fail(w, http.StatusConflict, "founded")
+		return
+	case err != nil:
+		log.Printf("found: %v", err)
+		fail(w, http.StatusInternalServerError, "unwritable")
+		return
+	}
+	log.Printf("the world is founded by %q: seed %s, generator %d", identity.UserID, founded.Seed, founded.GeneratorVersion)
+	s.describe(w, r)
+}
+
+// plugin turns one of the version's plugins on or off for this world, keeps
+// the choice in the world folder and tells whoever is here. An admin's alone.
+func (s *Server) plugin(w http.ResponseWriter, r *http.Request) {
+	identity, known := s.who(bearer(r))
+	if !known {
+		fail(w, http.StatusUnauthorized, "key")
+		return
+	}
+	if identity.Level != world.LevelAdmin {
+		fail(w, http.StatusForbidden, "level")
+		return
+	}
+	var asked struct {
+		Name string `json:"name"`
+		On   *bool  `json:"on"`
+	}
+	if !read(w, r, &asked) {
+		return
+	}
+	if asked.On == nil {
+		fail(w, http.StatusBadRequest, "body")
+		return
+	}
+	if !s.hub.Carries(asked.Name) {
+		fail(w, http.StatusNotFound, "plugin")
+		return
+	}
+	if err := s.folder.Switch(asked.Name, *asked.On); err != nil {
+		log.Printf("plugin: %v", err)
+		fail(w, http.StatusInternalServerError, "unwritable")
+		return
+	}
+	s.hub.Switch(asked.Name, *asked.On)
+	log.Printf("the plugin %q is on=%t, by %q", asked.Name, *asked.On, identity.UserID)
+	s.describe(w, r)
+}
+
+// read decodes a JSON body of a sane size, or answers 400 and says false.
+func read(w http.ResponseWriter, r *http.Request, into any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(into); err != nil {
+		fail(w, http.StatusBadRequest, "body")
+		return false
+	}
+	return true
+}
+
+func answer(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// fail answers with a code a front end matches, never a sentence: the page
+// owns the words.
+func fail(w http.ResponseWriter, status int, code string) {
+	answer(w, status, map[string]string{"error": code})
+}

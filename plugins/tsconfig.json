@@ -1,0 +1,5 @@
+{
+	// A panel is part of the page: its code compiles as the app's does and
+	// reads `$lib` from the one place SvelteKit writes it, under `bun test` too.
+	"extends": "../apps/web/tsconfig.json"
+}

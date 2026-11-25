@@ -1,0 +1,166 @@
+// The life of a world on the wire: what a client asks of it and what the
+// world says of it, each the payload of an Envelope whose owner is `gaia`.
+// A free animal costs nothing on the wire: every client draws it from the
+// world's seed and clock. What the world keeps and tells is the pets, one
+// an account, and a visitor's for its session.
+//
+// Up, the ops: `tame`, `name`, `leave`, `call`, `release`, `pets`, `keep`.
+// Down, the events: `pet`, `freed`, `pets`.
+syntax = "proto3";
+
+package planet.life.v1;
+
+option go_package = "github.com/tekne-studio/planet/server/internal/protocol/life;life";
+
+// Where an animal stands on the planet, which way it faces and since when:
+// a sector, 0 to 5, a place in it in blocks, the heading in radians from
+// the sector's +u toward its +v, and the world's clock in milliseconds
+// since the Unix epoch.
+message Spot {
+  uint32 sector = 1;
+  double u = 2;
+  double v = 3;
+  double heading = 4;
+  uint64 at_ms = 5;
+}
+
+// A pet: the animal's number (its kind, its herd's region and its place in
+// the herd), its name, trimmed, no control character, at most 32 bytes of
+// UTF-8, empty until named. It stands at `spot` from `spot.at_ms`, grazing.
+// Called, it set off from `from` at `spot.at_ms` at `from_mps`, gathers
+// speed to its gallop, runs to `spot`, slows and stands there. Called from past the whistle's
+// reach, `from.at_ms` is earlier than `spot.at_ms`: it left where it was
+// then and is out of sight until it comes into it at `from`.
+message Pet {
+  uint64 number = 1;
+  string name = 2;
+  Spot spot = 3;
+  Spot from = 4;
+  // Who keeps it, by the name they had here when it was told; in the
+  // world's own record, the name they had when they tamed it.
+  string owner = 5;
+  // Told to its owner: this pet is the one told's own.
+  bool mine = 6;
+  // A visitor's: the session that keeps it, and it goes back to its herd
+  // when that session leaves. 0 for an account's.
+  uint32 session = 7;
+  // The coat it wears its wings in, empty for none: what its herd gave it
+  // when it was tamed, kept so that no later rule draws a pet anew. Unset
+  // only in a record kept before the world kept it; the world sets it by
+  // the rule of now as it reads one, and writes it back.
+  optional string wings = 8;
+  // Everything else it was born with, as it was tamed. Unset as `wings`.
+  Traits traits = 9;
+  // How fast it was going as it set off from `from`, metres a second: a
+  // pet called again on its way goes on at its speed.
+  double from_mps = 10;
+}
+
+// What an animal is born with, as values (gaia's `Traits`): what its seed
+// and its herd's rule gave it when it was tamed, which a pet keeps whatever
+// a rule becomes. Its kind's body is its kind's.
+message Traits {
+  // The coat by its name, and its colours, linear RGB: the hair, the mane
+  // and tail, the lower legs, the muzzle, the hooves.
+  string coat = 1;
+  Colour hair = 2;
+  Colour mane = 3;
+  Colour points = 4;
+  Colour muzzle = 5;
+  Colour hoof = 6;
+  // White on the face, by its name in the kind; empty for none.
+  string face = 7;
+  // How far up each leg is white, 0 to 3, left fore, right fore, left
+  // hind, right hind.
+  repeated uint32 socks = 8;
+  // The white blots of a coat in patches.
+  repeated Blot blots = 9;
+  // Height against its kind's body, and width against it.
+  double size = 10;
+  double build = 11;
+  // How tall the mane stands, metres at size 1, whether it falls, and the
+  // tail's hair.
+  double mane_m = 12;
+  bool mane_falls = 13;
+  double tail_m = 14;
+  // Long hair over the feet.
+  bool feathers = 15;
+  // How far its voice sits from its kind's, cents, past its size. Unset in
+  // a pet kept from before it was drawn: the world fills it from the herd.
+  optional double voice_cents = 16;
+}
+
+// A colour, linear RGB, 0 to 1.
+message Colour {
+  float r = 1;
+  float g = 2;
+  float b = 3;
+}
+
+// A round white blot on the body's side, at size 1: its height and place
+// along, and its radius, in metres.
+message Blot {
+  double y = 1;
+  double z = 2;
+  double radius_m = 3;
+}
+
+// `tame`: the animal the asker rides becomes its pet, standing at `spot`,
+// in the place of the one it had, which goes back to its herd. Refused
+// when the asker does not ride it, another body does, or it is another's.
+message Tame {
+  uint64 number = 1;
+  Spot spot = 2;
+}
+
+// `name`: names the asker's pet.
+message Name {
+  string name = 1;
+}
+
+// `leave`: the asker stepped down from its pet, which stands at `spot`.
+message Leave {
+  Spot spot = 1;
+}
+
+// `call`: the asker whistled its pet to `to`, beside the body. Within
+// earshot (gaia's `HEARS_M`) it was seen at `from`, and refused when it can
+// be at no such place. Past it, `from` is none and the pet comes into sight
+// at `enter`, near the body, after a wait the world counts from how far its
+// spot was (gaia's `coming_s`). A pet farther than gaia's `ANSWERS_M` does
+// not answer, and the call is refused `too_far`.
+message Call {
+  Spot from = 1;
+  Spot to = 2;
+  Spot enter = 3;
+  // How fast it goes at `from` or `enter`, metres a second.
+  double from_mps = 4;
+}
+
+// `release`: the asker's pet goes back to its herd.
+message Release {}
+
+// `pets`: every pet of the world, answered with `pets` to the asker alone.
+message Ask {}
+
+// `keep`: a visitor's pet, as its front end kept it, held by the world for
+// the session's life. Refused for an account, whose pet is the world's.
+message Keep {
+  Pet pet = 1;
+}
+
+// `pet`: a pet tamed, named, left or called, told to every session.
+message Told {
+  Pet pet = 1;
+}
+
+// `freed`: the animal of that number is nobody's pet: it walks back to its
+// herd from where it stands.
+message Freed {
+  uint64 number = 1;
+}
+
+// `pets`: every pet of the world, the answer to `pets`.
+message Pets {
+  repeated Pet pets = 1;
+}

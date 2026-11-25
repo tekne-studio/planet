@@ -1,0 +1,28 @@
+[package]
+name = "arcade-host"
+description = "The arcade emulator's native host: the runner on wasmi, each game on an engine of its own, prepared files kept on disk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arcade.workspace = true
+# auto-dispatch: tail-call dispatch where the build optimises, the loop
+# where it does not, so a debug build keeps a flat stack.
+wasmi = { version = "2.0.2", default-features = false, features = ["std", "validate", "auto-dispatch"] }
+# The check a kept prepared file is read back by, before it is used.
+crc32fast = "1.5"
+# A kept file's key: the hash of the cartridge's bytes, never a name it is given.
+sha2.workspace = true
+
+# The cases are JSON; the host's own tests write their runners and games
+# in the text format.
+[dev-dependencies]
+serde_json.workspace = true
+wat = "1.228"
+
+[lints]
+workspace = true

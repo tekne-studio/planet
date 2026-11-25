@@ -1,0 +1,86 @@
+[package]
+name = "shell-web"
+description = "Platform shell for the browser: WASM, a canvas, WebGPU with a WebGL2 fallback."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+client.workspace = true
+scene.workspace = true
+synth.workspace = true
+glam.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+plugins-client.workspace = true
+render.workspace = true
+wgpu = { workspace = true, features = ["webgl"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+console_log = "1"
+web-sys = { version = "0.3", features = [
+    "Document",
+    "Element",
+    "ErrorEvent",
+    "Event",
+    "EventTarget",
+    "HtmlCanvasElement",
+    "KeyboardEvent",
+    "MouseEvent",
+    "PointerEvent",
+    "WheelEvent",
+    "Window",
+    "Performance",
+    "Response",
+    "Blob",
+    "ImageBitmap",
+    "ImageBitmapOptions",
+    "PremultiplyAlpha",
+    "ResizeQuality",
+    "OffscreenCanvas",
+    "OffscreenCanvasRenderingContext2d",
+    "ImageData",
+    "AddEventListenerOptions",
+    "WebSocket",
+    "BinaryType",
+    "MessageEvent",
+    "Worker",
+    "CloseEvent",
+    "HtmlMediaElement",
+    "HtmlVideoElement",
+    "MediaError",
+    "VideoFrame",
+    "HtmlAudioElement",
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioScheduledSourceNode",
+    "BiquadFilterNode",
+    "BiquadFilterType",
+    "AudioContext",
+    "AudioContextState",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioWorkletNode",
+    "MessagePort",
+    "AudioParam",
+    "GainNode",
+    "BaseAudioContext",
+    "DistanceModelType",
+    "MediaElementAudioSourceNode",
+    "PannerNode",
+    "PanningModelType",
+] }
+
+[lints]
+workspace = true

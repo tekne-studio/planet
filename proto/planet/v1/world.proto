@@ -1,0 +1,275 @@
+// The wire between a client and a world server. One message per WebSocket
+// binary frame: a ClientMessage one way, a ServerMessage the other.
+//
+// The schema is the single source for Rust (crates/protocol) and Go
+// (server/internal/protocol); `bun run proto` regenerates both. A change here
+// that an older client cannot read bumps PROTOCOL in both, and Hello says
+// which one a client speaks.
+syntax = "proto3";
+
+package planet.v1;
+
+option go_package = "github.com/tekne-studio/planet/server/internal/protocol;protocol";
+
+// The body a stance is measured from. Every body is parametrised on the
+// planet's sector grid: on the moon the column is the one its radial passes
+// through, as the place code does it.
+enum Body {
+  BODY_PLANET = 0;
+  BODY_MOON = 1;
+}
+
+// How a body moves right now. One clip each, on every client.
+enum Gait {
+  GAIT_IDLE = 0;
+  GAIT_WALK = 1;
+  GAIT_RUN = 2;
+  GAIT_JUMP = 3;
+  GAIT_FALL = 4;
+  GAIT_FLY = 5;
+  GAIT_SWIM = 6;
+}
+
+// Where a body is and how it moves: what presence carries, many times a
+// second. A pose is what a link carries; a stance is what a peer sends.
+// The place is an address with fractional blocks, never a float position.
+message Stance {
+  Body body = 1;
+  // 0 to 5.
+  uint32 sector = 2;
+  // Blocks along the sector's axes. A float holds a sector side of 2^16 to
+  // 1/256 of a block, which is 2 mm.
+  float u = 3;
+  float v = 4;
+  // Feet over the datum sphere of the body.
+  float height_m = 5;
+  // Unit vector in world space, the way the body faces.
+  float facing_x = 6;
+  float facing_y = 7;
+  float facing_z = 8;
+  Gait gait = 9;
+  // What the clip is played at: along the ground on foot, through the water
+  // when swimming.
+  float speed_mps = 10;
+  // Running on foot, flying flat out.
+  bool sprint = 11;
+  // The way of moving a plugin gave the body, by its full name:
+  // `<plugin>.<way>`. Empty on foot and in flight. At most
+  // `LIMIT_WAY_BYTES`; the world clears a longer one.
+  string way = 12;
+  // The animal the way carries, by its number: its kind, its herd's region
+  // and its place in the herd, under 2^53. Zero for none, and with no way.
+  uint64 carrier = 13;
+  // What a plugin put in the body's hand, by its full name:
+  // `<plugin>.<thing>`. Empty for an empty hand. At most
+  // `LIMIT_HAND_BYTES`; the world clears a longer one.
+  string hand = 14;
+}
+
+// Sizes and rates both sides hold to, read by each from here: a number of
+// the schema, never sent.
+enum Limit {
+  LIMIT_NONE = 0;
+  // Bytes of a stance's way: a plugin's name, a dot and the way's.
+  LIMIT_WAY_BYTES = 32;
+  // Bytes of a stance's hand: a plugin's name, a dot and the thing's.
+  LIMIT_HAND_BYTES = 24;
+  // Bytes of a sound's voice: a name of the core's.
+  LIMIT_VOICE_BYTES = 16;
+  // A session sounds at most this many voices in a window of
+  // LIMIT_SOUND_WINDOW_MS. One more is dropped unheard.
+  LIMIT_SOUND_BURST = 4;
+  LIMIT_SOUND_WINDOW_MS = 2000;
+}
+
+// What a client says first. Who it is was settled before: the key it was
+// given on entering rides the socket URL, and a visitor comes as a guest.
+message Hello {
+  // The protocol this client speaks. Refused when it is not the server's.
+  uint32 protocol = 1;
+  // The avatar worn, as an asset reference: a path under the asset root, or
+  // a URL. A person's own avatar loads through the same reference.
+  string avatar = 2;
+  // What to be called, at most `NameChars`. An account's name, as mundos
+  // signed it, wins over it; a visitor is called this or nothing.
+  string name = 3;
+}
+
+// The avatar changed.
+message Wear {
+  string avatar = 1;
+}
+
+// The name changed. Empty is a name too: back to nobody in particular.
+message Rename {
+  string name = 1;
+}
+
+// The body sounded a voice of the core's from its mouth, by its name (the
+// whistle), with the seed it was struck with: every client renders it alike.
+message Sound {
+  string voice = 1;
+  uint32 seed = 2;
+}
+
+// An owner's message, carried by the server and never read by it. The server
+// routes it by the owner's name and checks who may ask for `kind`; the
+// payload is the owner's own, encoded by its own schema: a plugin's under
+// `plugins/<plugin>/wire/`, the cells' under `proto/planet/cells/`.
+message Envelope {
+  // The owner's name: a plugin's, as the world's statement says it, or a
+  // system of the core's, `cells`.
+  string plugin = 1;
+  // Up, the op asked for. Down, the event said. A name within the owner.
+  string kind = 2;
+  bytes payload = 3;
+  // Up, the asker's own number for an op it wants answered, and zero for
+  // one it does not. It comes back in an Answer.
+  uint32 id = 4;
+}
+
+// What became of an op asked with an id: it landed, or the code of why it
+// was refused. To the asker alone.
+message Answer {
+  uint32 id = 1;
+  // Empty when it landed. A code, never a sentence: `level`, `plugin`,
+  // `fault`, or one of the owner's own.
+  string code = 2;
+}
+
+message ClientMessage {
+  oneof message {
+    Hello hello = 1;
+    Stance stance = 2;
+    Wear wear = 3;
+    Rename rename = 5;
+    Envelope envelope = 6;
+    Sound sound = 7;
+  }
+  reserved 4;
+}
+
+// Seed + params + generator version, as the world folder holds it. The
+// params are the JSON the generator version owns.
+message Recipe {
+  // A u64 as 16 lowercase hex digits.
+  string seed = 1;
+  uint32 generator_version = 2;
+  string params_json = 3;
+}
+
+// Someone in the world.
+message Peer {
+  // Given by the world actor, unique while the world is active.
+  uint32 session = 1;
+  // As the person set it. Empty when they set none.
+  string name = 2;
+  // Signed out. Looks, never builds.
+  bool visitor = 3;
+  string avatar = 4;
+  // Absent until the peer has said where it is.
+  Stance stance = 5;
+}
+
+// What a session may do, as mundos says it for one entry. The order is the
+// order of trust: a builder builds, an admin builds and founds the world.
+enum Level {
+  LEVEL_ANONYMOUS = 0;
+  LEVEL_SIGNED_IN = 1;
+  LEVEL_BUILDER = 2;
+  LEVEL_ADMIN = 3;
+}
+
+// A plugin that is on in this world, as the world's statement says it.
+message Plugin {
+  string name = 1;
+  // The version of its wire and of its seam. A client that holds another
+  // leaves the plugin off.
+  uint32 version = 2;
+}
+
+// The answer to Hello: who you are here, what world this is, who is here.
+message Welcome {
+  uint32 session = 1;
+  Recipe recipe = 2;
+  repeated Peer peers = 3;
+  // What this session may do, for its life. A client offers its tools by it.
+  Level level = 4;
+  // The plugins that are on. A client mounts what it holds of them.
+  repeated Plugin plugins = 5;
+  // The world's clock as the server reads it, milliseconds since the Unix
+  // epoch. Every client sets its own by it, so the sun, the moon and the
+  // weather are the same in every eye.
+  uint64 clock_ms = 6;
+  // The account's avatar, as mundos signed it with the entry: the VRM's URL.
+  // Empty when the account has none, and for a visitor. The client wears it.
+  string avatar = 7;
+  // A visitor, with no account: the world keeps nothing of its own for it,
+  // so its client keeps its home and favourites.
+  bool visitor = 8;
+}
+
+// The plugins that are on, said again whenever the admin switches one.
+message Plugins {
+  repeated Plugin plugins = 1;
+}
+
+message Joined {
+  Peer peer = 1;
+}
+
+message Left {
+  uint32 session = 1;
+}
+
+message Wearing {
+  uint32 session = 1;
+  string avatar = 2;
+}
+
+message Renamed {
+  uint32 session = 1;
+  string name = 2;
+}
+
+// A peer sounded a voice, told to every other session whatever the distance:
+// each client strikes it at that peer's mouth within the voice's own reach.
+message Sounded {
+  uint32 session = 1;
+  string voice = 2;
+  uint32 seed = 3;
+}
+
+message Moved {
+  uint32 session = 1;
+  Stance stance = 2;
+}
+
+// Every stance that changed since the last tick, yours included: ignore your
+// own session. Sent on every tick that has something to say, and every few
+// seconds regardless, so a silent link is a dead one.
+message Stances {
+  repeated Moved moved = 1;
+}
+
+// Sent instead of Welcome, then the socket closes.
+message Refused {
+  string reason = 1;
+}
+
+message ServerMessage {
+  oneof message {
+    Welcome welcome = 1;
+    Joined joined = 2;
+    Left left = 3;
+    Stances stances = 4;
+    Wearing wearing = 5;
+    Refused refused = 6;
+    Renamed renamed = 8;
+    Envelope envelope = 9;
+    Plugins plugins = 10;
+    Answer answer = 11;
+    Sounded sounded = 12;
+  }
+  reserved 7;
+}

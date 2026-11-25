@@ -1,0 +1,87 @@
+//! The desktop side of the asset seam: files under one root folder, and a
+//! picture decoded here, so the engine carries no codec.
+
+use std::path::PathBuf;
+
+use client::{Client, Command, Form};
+
+/// `PLANET_ASSETS`, else `./assets`: run from the repo root, or point at a copy.
+fn root() -> PathBuf {
+    std::env::var_os("PLANET_ASSETS").map_or_else(|| PathBuf::from("assets"), PathBuf::from)
+}
+
+/// Where a world's own files are read from, `asset://<hash>.<ext>` by name:
+/// `PLANET_FILES`, the `files/` folder of a world folder. Unset, a world's
+/// file is out of reach: the desktop has no socket to fetch it by.
+fn files() -> Option<PathBuf> {
+    std::env::var_os("PLANET_FILES").map(PathBuf::from)
+}
+
+/// Where a reference is on disk: a world's file under the files folder, a
+/// default asset under the root. An absolute URL needs an HTTP client,
+/// which arrives with the socket: none.
+pub fn locate(reference: &str) -> Option<PathBuf> {
+    if let Some(name) = reference.strip_prefix("asset://") {
+        files().map(|files| files.join(name))
+    } else if reference.contains("://") {
+        None
+    } else {
+        Some(root().join(reference))
+    }
+}
+
+/// Answers every pending request from disk. Reads are small and local, so
+/// they happen inline. Whether there was any: an answer may ask for more,
+/// a 3D model for the pictures it holds.
+pub fn serve(client: &mut Client) -> bool {
+    let requests = client.drain_asset_requests();
+    let any = !requests.is_empty();
+    for request in requests {
+        match request.form {
+            Form::Bytes => client.asset_loaded(request.id, read(&request.path)),
+            Form::Picture { max_side } => client.picture_loaded(
+                request.id,
+                read(&request.path).and_then(|bytes| decode(&bytes, max_side)),
+            ),
+            // A picture inside a file the client holds: nothing to read.
+            Form::Embedded { bytes, max_side } => {
+                client.picture_loaded(request.id, decode(&bytes, max_side))
+            }
+        }
+    }
+    any
+}
+
+/// The bytes of the file a reference names.
+fn read(reference: &str) -> Result<Vec<u8>, String> {
+    match locate(reference) {
+        Some(path) => std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display())),
+        None => Err(format!("{reference}: out of the desktop's reach")),
+    }
+}
+
+/// A picture's bytes as RGBA pixels, no wider than `max_side` on a side.
+fn decode(bytes: &[u8], max_side: u32) -> Result<scene::Image, String> {
+    let decoded = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let decoded = if decoded.width().max(decoded.height()) > max_side {
+        decoded.resize(max_side, max_side, image::imageops::FilterType::Triangle)
+    } else {
+        decoded
+    };
+    let rgba = decoded.into_rgba8();
+    Ok(scene::Image {
+        width: rgba.width(),
+        height: rgba.height(),
+        rgba: rgba.into_raw(),
+    })
+}
+
+/// Wears the named avatar (`Kyle`), or any avatar the manifest offers.
+pub fn wear(client: &mut Client, name: Option<&str>) {
+    client.command(match name {
+        Some(name) => Command::SetAvatar {
+            path: format!("avatars/{name}.vrm"),
+        },
+        None => Command::RandomAvatar,
+    });
+}

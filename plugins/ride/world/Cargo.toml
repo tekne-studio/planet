@@ -1,0 +1,15 @@
+[package]
+name = "ride-world"
+description = "The ride plugin's world half: its name, its version and the names of its ways of moving. It offers the world no op."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+world.workspace = true
+
+[lints]
+workspace = true

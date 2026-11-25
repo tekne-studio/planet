@@ -1,0 +1,19 @@
+# What the image is not built from. The Dockerfile names what it copies.
+.git
+.github
+.env
+.env.*
+out
+target
+node_modules
+**/node_modules
+server/bin
+server/internal/module/world.wasm
+server/internal/arcade/emulator
+server/world
+server/pb_data
+apps/web/build
+apps/web/.svelte-kit
+apps/web/src/lib/engine/pkg
+# A field's preview picture is for people, never for the engine.
+assets/fields/*.png

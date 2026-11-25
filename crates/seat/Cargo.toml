@@ -1,0 +1,24 @@
+[package]
+name = "seat"
+description = "How cells are seated on a world, as both sides hold it: plots, where a volume starts and ends by the ground, a gesture on the wire, how far a volume is held."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+topology.workspace = true
+worldgen.workspace = true
+voxel.workspace = true
+part.workspace = true
+protocol.workspace = true
+glam.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
