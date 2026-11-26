@@ -7,6 +7,10 @@ use core::f64::consts::PI;
 use crate::fauna::ease::smoothstep;
 use crate::fauna::rig::LEGS;
 
+/// Under this pace, metres a second at size 1, a body stands: its stride
+/// stops and every foot is down. From it a swing lifts a foot.
+pub(crate) const STILL_MPS: f64 = 0.02;
+
 /// One gait of a kind, as data.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Gait {
@@ -101,11 +105,21 @@ impl Gait {
     /// Where a leg's foot is, `stride` strides along, at a pace. Down, it
     /// moves back under the body as fast as the body moves forward, so it
     /// stays where it landed; up, it swings forward to land again.
+    /// Standing, wherever in its stride it stopped, every foot is down at
+    /// rest.
     pub fn hoof(&self, leg: usize, stride: f64, pace: f64) -> Hoof {
+        if pace < STILL_MPS {
+            return Hoof {
+                along_m: 0.0,
+                lift_m: 0.0,
+                down: true,
+                swing: 0.0,
+            };
+        }
         let t = (stride - self.lands[leg]).rem_euclid(1.0);
         // How far the body goes while a foot is down.
         let reach = pace * self.duty / self.hz_at(pace);
-        let moving = smoothstep(0.02, 0.5, pace);
+        let moving = smoothstep(STILL_MPS, 0.5, pace);
         if t < self.duty {
             let s = t / self.duty;
             Hoof {

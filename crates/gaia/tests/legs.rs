@@ -891,15 +891,50 @@ const LANDING_S: f64 = 0.4;
 /// falling away under it, seconds.
 const FALLING_S: f64 = 1.0;
 
+/// How long a halted horse is watched standing, seconds.
+const STAND_S: f64 = 2.0;
+
+/// Checks a halted animal stands as one that only ever stood where it is,
+/// facing its way, on that ground: every foot down on it, each within a
+/// few centimetres of where that one's is, and its body as high, its legs
+/// as straight.
+fn stands_square(animal: &Animal, ground: &impl Ground, said: &str) {
+    assert!(
+        animal.planted().iter().all(|&down| down),
+        "{said}: down {:?}",
+        animal.planted()
+    );
+    let mut stood = Animal::new(animal.kind, animal.look.clone());
+    for _ in 0..60 {
+        let going = Going::standing(animal.position(), animal.heading());
+        stood.step(1.0 / 60.0, going, ground);
+    }
+    for (leg, (foot, stands)) in animal.feet().iter().zip(stood.feet()).enumerate() {
+        let off = (ground.under(*foot).point - *foot).length();
+        assert!(off < 1e-6, "{said}: foot {leg} {off} m off the ground");
+        let far = (*foot - stands).length();
+        assert!(
+            far < 0.06,
+            "{said}: foot {leg} {far} m from where it stands"
+        );
+    }
+    let (body, _) = animal.legs().expect("drawn");
+    let (stood, _) = stood.legs().expect("drawn");
+    let low = (body.translation - stood.translation).length();
+    assert!(low < 0.03, "{said}: its body {low} m from where it stands");
+}
+
 /// A ridden jump as the ride's paces take it: from `speed_mps` at `fps`
 /// over [`Rolling`] ground `roll` steep, jump held `held_s` from the press
 /// and let go. It gathers on at its pace, as deep as the hold, until it
 /// has gathered for its least and is let go; then it flies its kind's arc
 /// as high as the hold says, under the planet's pull, carried at least
 /// as fast as its jump springs on, and lands where the ground meets the
-/// arc, easing back to its pace. How sharply its legs moved from the press
-/// through its landing; every frame none bends the wrong way or points up
-/// and no fetlock goes under the ground.
+/// arc, easing back to its pace. Then it halts as a rider's paces slow and
+/// stands [`STAND_S`]. How sharply its legs moved from the press through
+/// its landing, and from a halt, where landing comes to a stand, until it
+/// stood; every frame none bends the wrong way or points up and no fetlock
+/// goes under the ground; standing, it stands square.
 fn jumping(speed_mps: f64, roll: f64, fps: f64, held_s: f64) -> Sharpness {
     let carry = HORSE.carry.expect("a horse carries");
     let least = match speed_mps {
@@ -929,22 +964,31 @@ fn jumping(speed_mps: f64, roll: f64, fps: f64, held_s: f64) -> Sharpness {
     let heading = DVec3::new(1.0, 0.0, 0.3).normalize();
     let settle = (2.0 * fps) as usize;
     let (mut along_m, mut left_m, mut landed_s) = (0.0, 0.0, None::<f64>);
-    let mut mps = speed_mps;
+    let (mut mps, mut stood_s) = (speed_mps, 0.0);
     let flies_s = 2.0 * rise_mps / PULL_MPS2 + FALLING_S;
-    let frames = settle + ((leaves_s + flies_s + LANDING_S) * fps) as usize + 1;
+    let halts_s = aloft_mps / carry.decel_mps2;
+    let frames = settle + ((leaves_s + flies_s + LANDING_S + halts_s + STAND_S) * fps) as usize;
     let legs = sharpness(&mut animal, fps, frames, |animal, frame| {
         let s = frame.saturating_sub(settle) as f64 * dt;
-        if landed_s.is_some_and(|at| s > at + LANDING_S) {
+        if stood_s >= STAND_S {
             return false;
         }
         let pressed = frame >= settle;
         let flown_s = s - leaves_s;
         let aloft = pressed && flown_s > 0.0 && landed_s.is_none();
-        // Landed, it eases back to its pace as a rider's paces ease.
+        // Landed, it eases back to its pace as a rider's paces ease, then
+        // halts.
+        let wanted_mps = match landed_s {
+            Some(at) if s > at + LANDING_S => 0.0,
+            _ => speed_mps,
+        };
         mps = match aloft {
             true => aloft_mps,
-            false => mps + (speed_mps - mps).clamp(-carry.decel_mps2 * dt, carry.accel_mps2 * dt),
+            false => mps + (wanted_mps - mps).clamp(-carry.decel_mps2 * dt, carry.accel_mps2 * dt),
         };
+        if landed_s.is_some() && mps == 0.0 {
+            stood_s += dt;
+        }
         along_m += mps * dt;
         let under = ground.under(heading * along_m).point;
         if pressed && flown_s <= 0.0 {
@@ -983,18 +1027,23 @@ fn jumping(speed_mps: f64, roll: f64, fps: f64, held_s: f64) -> Sharpness {
                 );
             }
         }
-        pressed
+        let landing = landed_s.is_none_or(|at| s <= at + LANDING_S);
+        pressed && (landing || speed_mps == 0.0)
     });
-    assert!(landed_s.is_some(), "{speed_mps} m/s, {roll} roll: it lands");
+    let said = format!("{speed_mps} m/s, {roll} roll, {fps} fps, held {held_s} s");
+    assert!(landed_s.is_some(), "{said}: it lands");
+    assert!(stood_s >= STAND_S, "{said}: stood {stood_s} s");
+    stands_square(&animal, &ground, &said);
     legs
 }
 
 /// Its legs take a ridden jump whole, tapped and held to its most: from
 /// a halt, a walk, a trot and a gallop, on the flat and up and down slopes
 /// of about 17 degrees, at 60 frames a second and at 30, they gather,
-/// drive, tuck and land no more sharply than they run on that ground at
-/// that rate, or than they go at the pace it jumps from, at which it
-/// gathers; none bends the wrong way and no hoof goes through the ground.
+/// drive, tuck, land, halt and stand no more sharply than they run on that
+/// ground at that rate, or than they go at the pace it jumps from, at
+/// which it gathers; none bends the wrong way and no hoof goes through the
+/// ground; halted, it stands square on every foot.
 #[test]
 fn a_ridden_jump_tapped_and_held_lands_whole() {
     let hold_s = HORSE.carry.expect("a horse carries").jump.hold_s;
@@ -1016,22 +1065,31 @@ fn a_ridden_jump_tapped_and_held_lands_whole() {
 }
 
 /// A rider's halt from `from_mps` at `fps` over [`Rolling`] ground `roll`
-/// steep: it goes at that speed, then slows as a rider's paces slow, to a
-/// stand. How sharply its legs moved from the halt on; every frame none
-/// bends the wrong way and every foot down reaches its ground.
-fn halting(from_mps: f64, roll: f64, fps: f64) -> Sharpness {
+/// steep, `phase` of a stride after it has gone two seconds: slowed as a
+/// rider's paces slow when `eased`, else stopped at once, as a wall stops
+/// it; then it stands [`STAND_S`]. How sharply its legs moved from the
+/// halt on; every frame none bends the wrong way and every foot down
+/// reaches its ground; standing, it stands square.
+fn halting(from_mps: f64, roll: f64, fps: f64, phase: f64, eased: bool) -> Sharpness {
     let decel_mps2 = HORSE.carry.expect("a horse carries").decel_mps2;
     let ground = Rolling { roll };
     let mut animal = Animal::new(&HORSE, Look::new(&HORSE, 0, None));
+    let size = animal.look.traits.size;
+    let pace = from_mps.abs() / size.sqrt();
+    let stride_s = size.sqrt() / HORSE.gaits.at(pace).hz_at(pace);
     let dt = 1.0 / fps;
     let heading = DVec3::new(1.0, 0.0, 0.3).normalize();
-    let settle = (2.0 * fps) as usize;
-    let frames = settle + ((from_mps / decel_mps2 + 1.0) * fps) as usize;
+    let settle = ((2.0 + phase * stride_s) * fps) as usize;
+    let frames = settle + ((from_mps.abs() / decel_mps2 + STAND_S) * fps) as usize;
     let (mut along_m, mut mps) = (0.0, from_mps);
-    sharpness(&mut animal, fps, frames, |animal, frame| {
+    let legs = sharpness(&mut animal, fps, frames, |animal, frame| {
         let halting = frame >= settle;
         if halting {
-            mps = (mps - decel_mps2 * dt).max(0.0);
+            let slowed = match eased {
+                true => (decel_mps2 * dt).min(mps.abs()),
+                false => mps.abs(),
+            };
+            mps -= mps.signum() * slowed;
         }
         along_m += mps * dt;
         let position = ground.under(heading * along_m).point;
@@ -1046,7 +1104,12 @@ fn halting(from_mps: f64, roll: f64, fps: f64) -> Sharpness {
             legs_bend(animal, frame);
         }
         halting
-    })
+    });
+    let said = format!(
+        "from {from_mps} m/s at {phase} of a stride, eased {eased}, {roll} roll, {fps} fps"
+    );
+    stands_square(&animal, &ground, &said);
+    legs
 }
 
 /// Halted from a hop's landing and from a gallop, on the flat and on
@@ -1061,11 +1124,39 @@ fn halted_a_foot_left_behind_steps_up() {
             let run = running(roll, fps);
             for from_mps in [4.0, 9.0] {
                 let most = run.or(going_at(from_mps, roll, fps));
-                let legs = halting(from_mps, roll, fps);
+                let legs = halting(from_mps, roll, fps, 0.0, true);
                 assert!(
                     legs.within(&most),
                     "from {from_mps} m/s, {roll} roll, {fps} fps: {legs:?} against {most:?}"
                 );
+            }
+        }
+    }
+}
+
+/// Where in a stride a halt is tried: this many points through it.
+const PHASES: usize = 16;
+
+/// Halted anywhere in its stride, from its walk, its trot, its gallop, its
+/// run and backing, slowed as a rider's paces slow or stopped at once, on
+/// the flat and on slopes, at 60 frames a second and at 30: it stands on
+/// every foot, square. A foot the halt caught in the air steps down to
+/// where it stands, never stays up, and once every foot is down the one
+/// furthest from where it stands steps there, a foot at a time.
+#[test]
+fn halted_anywhere_in_its_stride_it_stands_square() {
+    let carry = HORSE.carry.expect("a horse carries");
+    let backing = carry.backing.expect("a horse backs");
+    let froms = carry.paces.iter().map(|pace| pace.speed_mps);
+    let froms: Vec<f64> = froms.chain([-backing.top_mps]).collect();
+    for fps in [60.0, 30.0] {
+        for roll in [0.0, 3.0] {
+            for &from_mps in &froms {
+                for phase in (0..PHASES).map(|k| k as f64 / PHASES as f64) {
+                    for eased in [true, false] {
+                        halting(from_mps, roll, fps, phase, eased);
+                    }
+                }
             }
         }
     }

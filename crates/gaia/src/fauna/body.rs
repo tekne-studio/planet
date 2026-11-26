@@ -11,7 +11,7 @@ use glam::{DAffine3, DMat3, DQuat, DVec3, Vec3};
 use scene::BoxPart;
 
 use crate::fauna::ease::{Follow, smoothstep};
-use crate::fauna::gait::Gait;
+use crate::fauna::gait::{Gait, STILL_MPS};
 use crate::fauna::kind::{Kind, Spring};
 use crate::fauna::look::{Look, Traits};
 use crate::fauna::rig::{LEGS, Leg, Rig};
@@ -38,6 +38,9 @@ const GONE_M: f64 = 0.15;
 /// A foot down further than this from where its gait has it, metres at
 /// size 1, steps there.
 const SLIP_M: f64 = 0.45;
+/// Halted, a foot down further than this from where it stands, metres at
+/// size 1, steps there once every other foot is down: it stands square.
+const SQUARE_M: f64 = 0.05;
 /// Moved further than this in a step past what its speed carries it,
 /// metres, the animal is set anew where it is: its feet and its body leave
 /// what they stood on.
@@ -553,10 +556,44 @@ struct Foot {
     /// In the air and landing, where it is posed in the air, which it
     /// comes down from onto the ground.
     came: Option<Came>,
-    /// Stepping to where its gait has it down: how long since it lifted,
-    /// seconds, and where from, which it leaves going with the body, as a
-    /// swing does.
-    step: Option<(f64, Spot)>,
+    /// Stepping to where its gait has it down.
+    step: Option<Step>,
+}
+
+/// A foot stepping to where its gait has it down, as a swing does.
+#[derive(Clone, Copy, Debug)]
+struct Step {
+    /// How long since it lifted, seconds.
+    s: f64,
+    /// Where from, which it leaves going with the body, and how high it was
+    /// there, metres.
+    from: Spot,
+    from_m: f64,
+    /// How high it lifts on the way, metres: as high as its gait lifts a
+    /// foot, less for a step shorter than [`SLIP_M`].
+    arc_m: f64,
+}
+
+impl Step {
+    /// A step from `at`, `lift_m` over the ground, to `to`, by a gait that
+    /// lifts a foot `gait_lift_m`: it lifts in proportion to how far it
+    /// goes, all of it from [`SLIP_M`] on, at `size`.
+    fn from(
+        at: Spot,
+        lift_m: f64,
+        to: DVec3,
+        gait_lift_m: f64,
+        size: f64,
+        frame: DAffine3,
+    ) -> Step {
+        let far_m = (at.at(frame) - to).length() + lift_m;
+        Step {
+            s: 0.0,
+            from: at,
+            from_m: lift_m,
+            arc_m: gait_lift_m * (far_m / (SLIP_M * size)).min(1.0),
+        }
+    }
 }
 
 /// A foot's pose in the air, which it comes down from as the body lands.
@@ -830,7 +867,7 @@ impl Animal {
         }
         let hz = gait.hz_at(pace) / self.look.traits.size.sqrt();
         let was = self.stride;
-        self.stride += dt * hz * smoothstep(0.0, 0.25, pace) * self.stride_way();
+        self.stride += dt * hz * smoothstep(STILL_MPS, 0.25, pace) * self.stride_way();
         self.clock_s += dt;
         self.settle(dt, ground, springs);
         self.struck(dt, was, &gait)
@@ -1012,6 +1049,25 @@ impl Animal {
             let near = 1.0 - smoothstep(REACH_M.0 * size, REACH_M.1 * size, lift_m);
             near * smoothstep(0.0, REACH_DESCENT_MPS, -climb_mps)
         });
+        // Halted, it stands square: once every foot is down, the one
+        // furthest from where it stands steps there, a foot at a time.
+        let halted = self.carriage.is_some() && pace < STILL_MPS && self.leap.is_none();
+        let down = self
+            .feet
+            .iter()
+            .all(|foot| foot.planted.is_some() && foot.step.is_none() && foot.came.is_none());
+        let squaring = (halted && down)
+            .then(|| {
+                (0..LEGS)
+                    .filter_map(|leg| {
+                        let stands = frame.transform_point3(wide(rig.leg(leg).foot));
+                        let far_m = (self.feet[leg].planted? - ground.under(stands).point).length();
+                        (far_m > SQUARE_M * size).then_some((leg, far_m))
+                    })
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(leg, _)| leg)
+            })
+            .flatten();
         for leg in 0..LEGS {
             let hind = Rig::hind(leg);
             if flying {
@@ -1084,25 +1140,38 @@ impl Animal {
             // a stride, as a sudden change of pace leaves one, steps to
             // where its gait has it down: it swings there as its gait swings
             // a foot, lifted as high.
+            let lift_m = gait.lift_m * size;
             if let Some(planted) = foot.planted {
                 let gone = (ground.under(planted).point - planted).length() > GONE_M * size;
                 let left = (planted - planned).length() > SLIP_M * size;
-                if gone || (hoof.down && left) {
+                if gone || (hoof.down && left) || squaring == Some(leg) {
                     foot.planted = None;
                     foot.slip = planted - planned;
-                    foot.step = hoof.down.then(|| (0.0, Spot::of(planted, false, frame)));
+                    foot.step = hoof.down.then(|| {
+                        let from = Spot::of(planted, false, frame);
+                        Step::from(from, foot.peel_m, planned, lift_m, size, frame)
+                    });
                 }
+            }
+            // Halted, it stands on every foot: one the halt caught in the
+            // air, wherever its swing had it, steps down to where it stands.
+            // One never set is put there.
+            if halted && foot.planted.is_none() && foot.step.is_none() {
+                let from = Spot::of(foot.at, false, frame);
+                foot.step = Some(Step::from(from, foot.lift_m, planned, lift_m, size, frame));
             }
             let swing_s = (1.0 - gait.duty) * size.sqrt() / gait.hz_at(pace);
             match (hoof.down, foot.step) {
-                (true, Some((step_s, from))) if step_s < swing_s => {
-                    let swing = step_s / swing_s;
+                (true, Some(step)) if step.s < swing_s => {
+                    let swing = step.s / swing_s;
                     let ease = smoothstep(0.0, 1.0, swing);
-                    foot.at = ground.under(from.at(frame).lerp(planned, ease)).point;
-                    foot.lift_m =
-                        gait.lift_m * libm::sin(PI * swing) * size + foot.peel_m * (1.0 - ease);
+                    foot.at = ground.under(step.from.at(frame).lerp(planned, ease)).point;
+                    foot.lift_m = step.arc_m * libm::sin(PI * swing) + step.from_m * (1.0 - ease);
                     foot.swing = swing;
-                    foot.step = Some((step_s + dt, from));
+                    foot.step = Some(Step {
+                        s: step.s + dt,
+                        ..step
+                    });
                     continue;
                 }
                 // Lifted by its gait as it steps, it swings on from where
