@@ -617,7 +617,7 @@ pub const HORSE: Kind = Kind {
                 steep: Some(0.35),
                 jump: Some(Least {
                     gather_s: 0.22,
-                    height_m: 1.2,
+                    height_m: 0.8,
                 }),
             },
             Pace {
@@ -626,7 +626,7 @@ pub const HORSE: Kind = Kind {
                 steep: Some(0.25),
                 jump: Some(Least {
                     gather_s: 0.22,
-                    height_m: 1.2,
+                    height_m: 0.8,
                 }),
             },
         ],
@@ -649,12 +649,12 @@ pub const HORSE: Kind = Kind {
             gather_s: 0.45,
             height_m: 0.5,
         }),
-        // Held, any jump rises to 1.8 m, held for under a second; from a
-        // halt or a walk it springs on at about a trot, so a tap there
-        // flies a hop of two metres and more.
+        // Held, any jump rises to 3 m, held a second; from a halt or a
+        // walk it springs on at about a trot, so a tap there flies a hop
+        // of two metres and more.
         jump: Jump {
-            most_m: 1.8,
-            hold_s: 0.8,
+            most_m: 3.0,
+            hold_s: 1.0,
             forward_mps: 4.0,
         },
         // It backs a step at a time, then faster while held, never as

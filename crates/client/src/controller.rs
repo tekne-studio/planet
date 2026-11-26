@@ -3347,21 +3347,33 @@ mod tests {
     }
 
     impl Ride {
-        /// Galloping at a wall six metres ahead, jump tapped as it sets off
-        /// when `jump`.
-        fn gallop(cells: i32, jump: bool, roof: Option<i32>) -> Ride {
+        /// Galloping at a wall under the middle of the arc jump held
+        /// `held_s` as it sets off flies, unasked when none: the tap's when
+        /// unasked.
+        fn gallop(cells: i32, held_s: Option<f64>, roof: Option<i32>) -> Ride {
+            let paces = crate::paces::tests::horse();
+            let pace = 2;
+            let speed_mps = paces.paces[pace].speed_mps;
+            let least = paces.paces[pace].jump.expect("a gallop jumps");
+            let s = held_s.unwrap_or(TAP_S).max(least.gather_s);
+            let arc = paces
+                .jump
+                .arc(paces.jump.height_m(least, s), speed_mps, GRAVITY_MPS2);
             Ride {
-                pace: 2,
+                pace,
                 press_s: 0.0,
-                held_s: jump.then_some(3.0 / 60.0),
+                held_s,
                 cells,
-                ahead: 11.5,
+                ahead: (speed_mps * s + arc.length_m() / 2.0) / BLOCK_M,
                 roof,
             }
         }
     }
 
-    /// What a horse ridden by [`ride_at`] did, in the three seconds after
+    /// Jump tapped, seconds: three frames.
+    const TAP_S: f64 = 3.0 / 60.0;
+
+    /// What a horse ridden by [`ride_at`] did, in the four seconds after
     /// jump is pressed, metres along from where it set off.
     #[derive(Debug)]
     struct Rode {
@@ -3402,7 +3414,9 @@ mod tests {
             };
             assert!(build.apply(&generator, point.sector, &[over]));
         }
+        // Under the roof, while the horse is: it may gallop out from under.
         let ceiling_m = ride.roof.map(|roof| floor_m + f64::from(roof) * BLOCK_M);
+        let roofed = |controller: &Controller| controller.point().u < f64::from(plot + 41);
         let built = Built {
             cells: &build,
             parts: &Parts::default(),
@@ -3438,7 +3452,7 @@ mod tests {
             landed_m: None,
             paced: false,
         };
-        for frame in 0..press + 180 {
+        for frame in 0..press + 240 {
             let wish = Wish {
                 up: held.contains(&frame),
                 ..Wish::default()
@@ -3451,7 +3465,7 @@ mod tests {
             } else if rode.took_off_m.is_some() {
                 rode.landed_m = rode.landed_m.or(Some(along_m(&controller)));
             }
-            if let Some(ceiling_m) = ceiling_m {
+            if let Some(ceiling_m) = ceiling_m.filter(|_| roofed(&controller)) {
                 let under_m = ceiling_m - controller.height_m;
                 assert!(under_m >= paces.room_m - 1e-9, "its back in the roof");
                 assert!(controller.eye_m() < under_m, "the eye in the roof");
@@ -3468,11 +3482,11 @@ mod tests {
         rode
     }
 
-    /// A horse galloping at a wall across its way, `cells` high, six metres
-    /// ahead, as [`Ride::gallop`] rides it: how far it got, the highest its
-    /// feet rose and whether it still gallops.
-    fn gallop_at(cells: i32, jump: bool, roof: Option<i32>) -> (f64, f64, bool) {
-        let rode = ride_at(Ride::gallop(cells, jump, roof));
+    /// A horse galloping at a wall across its way, `cells` high, as
+    /// [`Ride::gallop`] rides it: how far it got, the highest its feet rose
+    /// and whether it still gallops.
+    fn gallop_at(cells: i32, held_s: Option<f64>, roof: Option<i32>) -> (f64, f64, bool) {
+        let rode = ride_at(Ride::gallop(cells, held_s, roof));
         (rode.far_m, rode.highest_m, rode.paced)
     }
 
@@ -3480,8 +3494,9 @@ mod tests {
     /// most, clears a wall across its way when its arc has its feet over
     /// the wall's top where the horse comes over it, every point of it
     /// going where its middle goes, and meets it otherwise, to within one
-    /// frame of its flight: a wall one, two or three cells high, just past
-    /// its nose as it leaves the ground or under the middle of its arc.
+    /// frame of its flight: a wall a cell high and every cell higher to one
+    /// past its most, just past its nose as it leaves the ground or under
+    /// the middle of its arc.
     /// Over it, it comes down past it or on its top and goes on in its
     /// pace; met, it leaves the ground all the same and comes down in
     /// front of it, and gets past only a wall that is a step.
@@ -3489,9 +3504,10 @@ mod tests {
     fn a_horse_clears_a_wall_when_its_arc_does() {
         let paces = crate::paces::tests::horse();
         let reach_m = collision::BODY_HALF * BLOCK_M;
+        let highest = (paces.jump.most_m / BLOCK_M) as i32 + 1;
         for pace in 0..3 {
             let frame_m = paces.paces[pace].speed_mps.max(paces.jump.forward_mps) / 60.0;
-            for held_s in [1.0 / 60.0, 0.3, 0.4, 0.5, 0.8] {
+            for held_s in [1.0 / 60.0, 0.3, 0.4, 0.5, paces.jump.hold_s] {
                 let ride = Ride {
                     pace,
                     press_s: 1.0,
@@ -3516,7 +3532,7 @@ mod tests {
                     // of flight either side.
                     let over_m = near_m - reach_m;
                     let [early_m, late_m] = [-frame_m, frame_m].map(|by_m| arc_m(over_m + by_m));
-                    for cells in 1..=3 {
+                    for cells in 1..=highest {
                         let top_m = f64::from(cells) * BLOCK_M;
                         let clears = early_m.min(late_m) > top_m;
                         if clears == (early_m.max(late_m) < top_m) {
@@ -3552,21 +3568,46 @@ mod tests {
         }
     }
 
-    /// A galloping horse jumps as high as its gallop's jump on open ground
-    /// and gallops on; it flies a wall a walker could not step and its arc
-    /// clears, and balks at one it does not, or unasked.
+    /// A galloping horse jumps as high as its gallop's least tapped and its
+    /// kind's most held, on open ground, and gallops on. Held, it flies a
+    /// wall a walker could not step and its arc clears; tapped, its arc
+    /// under that wall's top, it meets it, as it does one past its most;
+    /// unasked, it balks.
     #[test]
     fn a_horse_clears_only_what_its_jump_clears() {
-        let (_, highest_m, galloping) = gallop_at(0, true, None);
-        assert!((highest_m - 1.2).abs() < 0.1, "{highest_m}");
-        assert!(galloping);
+        let paces = crate::paces::tests::horse();
+        let tapped_m = paces.paces[2].jump.expect("a gallop jumps").height_m;
+        let (most_m, hold_s) = (paces.jump.most_m, Some(paces.jump.hold_s));
+        let (_, highest_m, galloping) = gallop_at(0, Some(TAP_S), None);
+        assert!(
+            (highest_m - tapped_m).abs() < 0.1 && galloping,
+            "{highest_m}"
+        );
+        let (_, highest_m, galloping) = gallop_at(0, hold_s, None);
+        assert!((highest_m - most_m).abs() < 0.1 && galloping, "{highest_m}");
 
-        let (far_m, _, galloping) = gallop_at(2, true, None);
-        assert!(far_m > 9.0 && galloping, "over a metre: {far_m}");
-        let (far_m, _, galloping) = gallop_at(2, false, None);
-        assert!(far_m < 6.0 && !galloping, "unasked: {far_m}");
-        let (far_m, _, galloping) = gallop_at(4, true, None);
-        assert!(far_m < 6.0 && !galloping, "two metres: {far_m}");
+        // Two cells, a metre: over a tap, under the most.
+        assert!(tapped_m < 1.0 && 1.0 < most_m);
+        let (far_m, _, galloping) = gallop_at(2, hold_s, None);
+        assert!(far_m > 20.0 && galloping, "held over a metre: {far_m}");
+        let ride = Ride::gallop(2, Some(TAP_S), None);
+        let (far_m, _, galloping) = gallop_at(2, Some(TAP_S), None);
+        assert!(
+            far_m < ride.ahead * BLOCK_M && !galloping,
+            "tapped: {far_m}"
+        );
+        let (far_m, _, galloping) = gallop_at(2, None, None);
+        assert!(
+            far_m < ride.ahead * BLOCK_M && !galloping,
+            "unasked: {far_m}"
+        );
+        let past = (most_m / BLOCK_M) as i32 + 1;
+        let ride = Ride::gallop(past, hold_s, None);
+        let (far_m, _, galloping) = gallop_at(past, hold_s, None);
+        assert!(
+            far_m < ride.ahead * BLOCK_M && !galloping,
+            "past its most: {far_m}"
+        );
     }
 
     /// A body on a floor and a horse eight cells along `u` from it, facing
@@ -4205,12 +4246,12 @@ mod tests {
     /// rider's eye, saddled over two and a half metres, stays under it.
     #[test]
     fn a_horse_under_a_roof_jumps_only_where_its_arc_has_room() {
-        let (far_m, _, galloping) = gallop_at(0, false, Some(6));
+        let (far_m, _, galloping) = gallop_at(0, None, Some(6));
         assert!(far_m > 9.0 && galloping, "{far_m}");
-        let (_, highest_m, galloping) = gallop_at(0, true, Some(6));
+        let (_, highest_m, galloping) = gallop_at(0, Some(TAP_S), Some(6));
         assert_eq!(highest_m, 0.0, "jumped under the roof");
         assert!(!galloping, "balks");
-        let (far_m, highest_m, galloping) = gallop_at(2, true, Some(6));
+        let (far_m, highest_m, galloping) = gallop_at(2, Some(TAP_S), Some(6));
         assert!(far_m < 6.0 && !galloping, "{far_m}");
         assert_eq!(highest_m, 0.0, "jumped under the roof");
     }

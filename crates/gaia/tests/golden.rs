@@ -120,10 +120,10 @@ fn fauna_is_frozen() {
 }
 
 const GOLDEN_FAUNA: [u64; 4] = [
-    0xe4b7_5806_a3eb_b396,
-    0xfabd_85f7_8af2_0fb1,
-    0x03f0_e2bb_d07c_fd48,
-    0xc5e6_5725_39c6_412b,
+    0x67d2_e6e0_c1e0_72d1,
+    0xc217_b0bd_03bf_2a8e,
+    0x3041_84a2_98c8_aa63,
+    0x7e43_5302_f137_2db2,
 ];
 
 const GOLDEN_FLORA: [u64; 4] = [

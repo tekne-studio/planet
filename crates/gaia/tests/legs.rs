@@ -993,8 +993,8 @@ fn jumping(speed_mps: f64, roll: f64, fps: f64, held_s: f64) -> Sharpness {
 /// a halt, a walk, a trot and a gallop, on the flat and up and down slopes
 /// of about 17 degrees, at 60 frames a second and at 30, they gather,
 /// drive, tuck and land no more sharply than they run on that ground at
-/// that rate; none bends the wrong way and no hoof goes through the
-/// ground.
+/// that rate, or than they go at the pace it jumps from, at which it
+/// gathers; none bends the wrong way and no hoof goes through the ground.
 #[test]
 fn a_ridden_jump_tapped_and_held_lands_whole() {
     let hold_s = HORSE.carry.expect("a horse carries").jump.hold_s;
@@ -1002,11 +1002,12 @@ fn a_ridden_jump_tapped_and_held_lands_whole() {
         for roll in [0.0, 3.0] {
             let run = running(roll, fps);
             for speed_mps in [0.0, 1.5, 3.6, 9.0] {
+                let most = run.or(going_at(speed_mps, roll, fps));
                 for held_s in [0.0, hold_s] {
                     let legs = jumping(speed_mps, roll, fps, held_s);
                     assert!(
-                        legs.within(&run),
-                        "{speed_mps} m/s, {roll} roll, {fps} fps, held {held_s} s: {legs:?} against a run's {run:?}"
+                        legs.within(&most),
+                        "{speed_mps} m/s, {roll} roll, {fps} fps, held {held_s} s: {legs:?} against {most:?}"
                     );
                 }
             }

@@ -859,76 +859,42 @@ pub(crate) mod tests {
         room_m: None,
     };
 
-    /// A horse as the ride plugin gives one.
+    /// A horse as the ride plugin gives one: its kind's table, named.
     pub(crate) fn horse() -> Paces {
+        let kind = &gaia::fauna::horse::HORSE;
+        let carry = kind.carry.expect("a horse carries a rider");
+        let [ahead_m, behind_m] = kind.reach_m();
         Paces {
-            paces: vec![
-                Pace {
-                    name: "walk",
-                    speed_mps: 1.5,
-                    turn_per_s: 2.2,
-                    steep: None,
-                    jump: Some(Least {
-                        gather_s: 0.35,
-                        height_m: 0.6,
-                    }),
-                },
-                Pace {
-                    name: "trot",
-                    speed_mps: 3.6,
-                    turn_per_s: 1.5,
-                    steep: Some(0.6),
-                    jump: Some(Least {
-                        gather_s: 0.25,
-                        height_m: 0.7,
-                    }),
-                },
-                Pace {
-                    name: "gallop",
-                    speed_mps: 9.0,
-                    turn_per_s: 0.8,
-                    steep: Some(0.35),
-                    jump: Some(Least {
-                        gather_s: 0.22,
-                        height_m: 1.2,
-                    }),
-                },
-                Pace {
-                    name: "run",
-                    speed_mps: 11.7,
-                    turn_per_s: 0.6,
-                    steep: Some(0.25),
-                    jump: Some(Least {
-                        gather_s: 0.22,
-                        height_m: 1.2,
-                    }),
-                },
-            ],
-            stepped: 2,
-            sprint: 3,
-            accel_mps2: 4.0,
-            decel_mps2: 6.0,
-            wade_m: 0.6,
-            room_m: 2.6,
-            ahead_m: 1.2,
-            behind_m: 0.9,
+            paces: carry
+                .paces
+                .iter()
+                .zip(["walk", "trot", "gallop", "run"])
+                .map(|(pace, name)| Pace {
+                    name,
+                    speed_mps: pace.speed_mps,
+                    turn_per_s: pace.turn_per_s,
+                    steep: pace.steep,
+                    jump: pace.jump.map(Into::into),
+                })
+                .collect(),
+            stepped: carry.stepped,
+            sprint: carry.sprint,
+            accel_mps2: carry.accel_mps2,
+            decel_mps2: carry.decel_mps2,
+            wade_m: carry.wade_m,
+            room_m: carry.height_m,
+            ahead_m,
+            behind_m,
             eye_per_s: 10.0,
-            standing: Some(Least {
-                gather_s: 0.45,
-                height_m: 0.5,
-            }),
-            jump: Jump {
-                most_m: 1.8,
-                hold_s: 0.8,
-                forward_mps: 4.0,
-            },
+            standing: carry.standing.map(Into::into),
+            jump: carry.jump.into(),
             flight: None,
-            backing: Some(Backing {
+            backing: carry.backing.map(|backing| Backing {
                 name: "back",
-                from_mps: 0.6,
-                gain_mps2: 0.8,
-                top_mps: 1.4,
-                turn_per_s: 1.2,
+                from_mps: backing.from_mps,
+                gain_mps2: backing.gain_mps2,
+                top_mps: backing.top_mps,
+                turn_per_s: backing.turn_per_s,
             }),
         }
     }

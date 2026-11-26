@@ -546,8 +546,9 @@ struct Foot {
     along_m: f64,
     swing: f64,
     /// Where it comes away from into its pose aloft as the body leaves the
-    /// ground: on the ground, where it is now; in the air, where it was as
-    /// it left. `at`, `lift_m` and `along_m`.
+    /// ground: a hind foot down, where it is now, on the ground; any other,
+    /// where it is under the body, which it leaves with; in the air, where
+    /// it was as it left. `at`, `lift_m` and `along_m`.
     left: Option<(Spot, f64, f64)>,
     /// In the air and landing, where it is posed in the air, which it
     /// comes down from onto the ground.
@@ -908,6 +909,8 @@ impl Animal {
         let up = foot.up;
         let flying = self.flies();
         let lift_m = (self.position - foot.point).dot(up);
+        // How high up its arc was last step: where it leaves the ground from.
+        let was_m = self.air.high_m;
         let landed = self
             .air
             .track((lift_m, self.position.dot(up)), flying, self.winging, dt);
@@ -1016,8 +1019,9 @@ impl Animal {
                 let foot = &mut self.feet[leg];
                 let aloft = frame.transform_point3(wide(rig.leg(leg).foot) - DVec3::Z * along_m);
                 // A foot comes away from where it left the ground: a hind
-                // one down there drives the body off before it tucks. One
-                // further from it than a leap was never on that ground.
+                // one down there drives the body off before it tucks; a fore
+                // one leaves with the body, folding. One further from it
+                // than a leap was never on that ground.
                 let near = (foot.at - aloft).length() <= LEAP_M;
                 let left = (foot.left.filter(|_| near)).unwrap_or((
                     Spot::of(aloft, false, frame),
@@ -1203,21 +1207,22 @@ impl Animal {
                 lower = lower.max(needed * coming(foot).map_or(1.0, |(_, down)| down));
             }
             // Landed, each foot comes down from where it was in the air onto
-            // where its gait has it, bearing the body as it does.
-            for foot in &mut self.feet {
+            // where its gait has it, bearing the body as it does. Carried
+            // down with the body, it meets the ground on the way and goes no
+            // lower, as it does in the air.
+            for (leg, foot) in self.feet.iter_mut().enumerate() {
                 match coming(foot) {
                     Some((came, down)) => {
                         foot.at = came.at.at(frame).lerp(foot.at, down);
-                        foot.lift_m = came.lift_m + (foot.lift_m - came.lift_m) * down;
+                        let ground_m = (ground.under(foot.at).point - foot.at).dot(up);
+                        foot.lift_m =
+                            (came.lift_m + (foot.lift_m - came.lift_m) * down).max(ground_m);
                         foot.along_m = came.along_m + (foot.along_m - came.along_m) * down;
                     }
                     None => foot.came = None,
                 }
-                foot.left = Some((
-                    Spot::of(foot.at, foot.planted.is_some(), frame),
-                    foot.lift_m,
-                    foot.along_m,
-                ));
+                let drives = foot.planted.is_some() && Rig::hind(leg);
+                foot.left = Some((Spot::of(foot.at, drives, frame), foot.lift_m, foot.along_m));
             }
         }
         height -= lower.min(SINK_M * size);
@@ -1249,10 +1254,13 @@ impl Animal {
                 // from it than a leap, it was never on that ground.
                 c.height.off = match flying {
                     true => {
-                        let near = c.height.off.abs() <= LEAP_M;
-                        let left = *c
-                            .left_m
-                            .get_or_insert(if near { c.height.off } else { 0.0 });
+                        let left = *c.left_m.get_or_insert_with(|| {
+                            let over_m = c.at.dot(up) - was_m;
+                            match over_m.abs() <= LEAP_M {
+                                true => over_m,
+                                false => 0.0,
+                            }
+                        });
                         left * (1.0 - smoothstep(0.0, LEAVE_S, self.air.aloft_s))
                     }
                     // Landed this step, it is where its arc brought it
