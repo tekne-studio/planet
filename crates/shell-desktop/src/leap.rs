@@ -1,16 +1,18 @@
 //! Pictures of a ridden horse's jump, with a fixed clock and seed: how a
 //! jump is looked at. `bun run shot --leap out/leap` mounts the nearest
 //! horse and, on the flattest ground near and on a slope of about 17
-//! degrees facing up it, at a walk and at a gallop, holds the jump key for
-//! a tap, for half the hold that reaches the highest jump and for all of
-//! it, then lets go. On a floor laid over the flattest ground it trots and
-//! gallops at a wall two cells high and jumps it, at a tap and at a full
-//! hold, timed to top over the wall, or as near as its nose lets it. Every fourth frame from the press is drawn from
-//! its side, the sun behind the eye; the eye goes along with it over the
-//! ground and keeps the height it pressed at, so the arc is seen. Each
+//! degrees facing up it, from a halt, at a walk and at a gallop, holds the
+//! jump key for a tap, for half the hold that reaches the highest jump and
+//! for all of it, then lets go. On a floor laid over the flattest ground,
+//! bare, so its feet are seen, it jumps from a halt, and trots and gallops
+//! at a wall two cells high and jumps it, each at a tap and at a full hold,
+//! at the wall timed to top over it, or as near as its nose lets it. Every
+//! fourth frame from the press to two seconds after it comes down is drawn
+//! from its side, the sun behind the eye; the eye goes along with it over
+//! the ground and keeps the height it pressed at, so the arc is seen. Each
 //! frame is `<run>/side-<ms>.png`, and `leap.json` lists every frame of 60
-//! a second with how far along and how high over where it pressed the
-//! body was, and how fast it went.
+//! a second with how far along and how high over where it pressed the body
+//! was, and how fast it went.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -38,13 +40,18 @@ fn holds() -> [(&'static str, f64); 3] {
     let hold_s = carry().jump.hold_s;
     [("tap", 0.0), ("half", hold_s / 2.0), ("full", hold_s)]
 }
-/// The paces it jumps from, by how many presses of forward reach them, and
-/// how long it goes at one before the press, seconds.
-const PACES: [(&str, u32, f64); 2] = [("walk", 1, 1.5), ("gallop", 3, 3.0)];
+/// The paces it jumps from, by how many presses of forward reach them,
+/// which of its paces they are, none for a halt, and how long it goes at
+/// one before the press, seconds.
+const PACES: [(&str, u32, Option<usize>, f64); 3] = [
+    ("halt", 0, None, 0.0),
+    ("walk", 1, Some(0), 1.5),
+    ("gallop", 3, Some(2), 3.0),
+];
 /// The paces it jumps the wall from, by how many presses reach them and
 /// which of its paces they are.
 const AT_WALL: [(&str, u32, usize); 2] = [("trot", 2, 1), ("gallop", 3, 2)];
-/// How long it is looked at after the key is let go, seconds.
+/// How long it is looked at after it comes down, seconds.
 const AFTER_S: f64 = 2.0;
 /// A picture every this many frames of 60 a second.
 const EVERY: u32 = 4;
@@ -77,7 +84,7 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
     // on the slope it sets off as far down it, so it jumps on the slope.
     let mut run_up_m = [0.0; PACES.len()];
     for (ground, footing, way) in [("flat", flat.point, None), ("slope", slope, Some(uphill))] {
-        for (i, (pace, presses, going_s)) in PACES.into_iter().enumerate() {
+        for (i, (pace, presses, which, going_s)) in PACES.into_iter().enumerate() {
             for (hold, hold_s) in holds() {
                 let up = footing.normalize();
                 let tangent =
@@ -100,7 +107,8 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
                 let jump = Jump {
                     name: &name,
                     hold_s,
-                    press_at: None,
+                    least: least(which)?,
+                    wall_u: None,
                 };
                 jump.take(
                     client,
@@ -118,11 +126,30 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
     // A wall two cells high across a floor laid over the flattest ground.
     let (start, floor, toward, wall_u) = walled(client, flat.point)?;
     let up = DVec3::from(grid.direction(start));
+    // From a halt on the floor, short of the wall, every foot is seen as
+    // it lands and comes to stand.
+    for (hold, hold_s) in [holds()[0], holds()[2]] {
+        stand(client, &mut input, start, Some(floor), up, toward)?;
+        let name = format!("floor-halt-{hold}");
+        let jump = Jump {
+            name: &name,
+            hold_s,
+            least: least(None)?,
+            wall_u: None,
+        };
+        jump.take(
+            client,
+            &mut headless,
+            &mut input,
+            size,
+            sun,
+            dir,
+            &mut listed,
+        )?;
+        halt(client, &mut input);
+    }
     for (pace, presses, which) in AT_WALL {
-        let least = carry().paces[which]
-            .jump
-            .map(Least::from)
-            .ok_or("--leap: a pace with no jump")?;
+        let least = least(Some(which))?;
         for (hold, hold_s) in [holds()[0], holds()[2]] {
             stand(client, &mut input, start, Some(floor), up, toward)?;
             set_off(client, &mut input, presses, 0.0);
@@ -130,7 +157,8 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
             let jump = Jump {
                 name: &name,
                 hold_s,
-                press_at: Some((wall_u, least)),
+                least,
+                wall_u: Some(wall_u),
             };
             jump.take(
                 client,
@@ -150,13 +178,14 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
     Ok(())
 }
 
-/// One jump looked at: its name, how long the key is held, and, at a wall,
-/// the column of the wall's near side it is timed against and the least
-/// jump of the pace it jumps from.
+/// One jump looked at: its name, how long the key is held, the least jump
+/// of the pace or the halt it jumps from, and, at a wall, the column of the
+/// wall's near side it is timed against.
 struct Jump<'a> {
     name: &'a str,
     hold_s: f64,
-    press_at: Option<(f64, Least)>,
+    least: Least,
+    wall_u: Option<f64>,
 }
 
 impl Jump<'_> {
@@ -172,13 +201,13 @@ impl Jump<'_> {
         listed: &mut String,
     ) -> Result<(), String> {
         let held = (self.hold_s * 60.0).round().max(1.0) as u32;
+        let ridden = ridden(client)?;
         // At a wall it goes on at its pace until the press tops the arc
         // over the wall's middle, as a rider times it by eye.
-        if let Some((wall_u, least)) = self.press_at {
-            let ridden = ridden(client)?;
+        if let Some(wall_u) = self.wall_u {
             for _ in 0..600 {
                 let u = client.host("ride").feet().point.u;
-                let lead_m = lead_m(self.hold_s, speed_mps(client), least, ridden);
+                let lead_m = lead_m(self.hold_s, speed_mps(client), self.least, ridden);
                 if u + lead_m / BLOCK_M >= wall_u + 0.5 {
                     break;
                 }
@@ -196,7 +225,8 @@ impl Jump<'_> {
         };
         let folder = dir.join(self.name);
         std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-        let frames = held + (AFTER_S * 60.0) as u32;
+        let down_s = down_s(self.hold_s, speed_mps(client), self.least, ridden);
+        let frames = ((down_s + AFTER_S) * 60.0).ceil() as u32;
         let generator = client.generator().clone();
         let land = Land(&generator);
         input.key(Key::Up, true);
@@ -240,6 +270,30 @@ impl Jump<'_> {
     }
 }
 
+/// The least jump from the horse's pace `which`, or from a halt.
+fn least(which: Option<usize>) -> Result<Least, String> {
+    match which {
+        Some(pace) => carry().paces[pace].jump,
+        None => carry().standing,
+    }
+    .map(Least::from)
+    .ok_or_else(|| "--leap: a pace with no jump".to_string())
+}
+
+/// The arc of a jump held `hold_s` from a pace or a halt whose least is
+/// `least`, going at `speed_mps`, for the horse `ridden`.
+fn arc(hold_s: f64, speed_mps: f64, least: Least, ridden: Near) -> client::Arc {
+    let jump = client::Jump::from(carry().jump).scaled(ridden.speed_share);
+    jump.arc(jump.height_m(least, hold_s), speed_mps, GRAVITY_MPS2)
+}
+
+/// How long after the press that jump comes down on ground as high as it
+/// left, seconds: carried until it is let go and gathered for its least,
+/// then its arc's time in the air.
+fn down_s(hold_s: f64, speed_mps: f64, least: Least, ridden: Near) -> f64 {
+    hold_s.max(least.gather_s) + arc(hold_s, speed_mps, least, ridden).air_s()
+}
+
 /// How far ahead of where the key is pressed, going at `speed_mps`, the
 /// arc of a jump held `hold_s` from a pace whose least is `least` tops,
 /// metres, for the horse `ridden`: carried at its pace until it is let go
@@ -248,8 +302,7 @@ impl Jump<'_> {
 /// as it leaves the ground, wider than the half of its body a wall stops
 /// and a frame's going, so it jumps and meets the wall in the air.
 fn lead_m(hold_s: f64, speed_mps: f64, least: Least, ridden: Near) -> f64 {
-    let jump = client::Jump::from(carry().jump).scaled(ridden.speed_share);
-    let arc = jump.arc(jump.height_m(least, hold_s), speed_mps, GRAVITY_MPS2);
+    let arc = arc(hold_s, speed_mps, least, ridden);
     let [nose_m, _] = HORSE.reach_m().map(|m| m * ridden.size);
     let shortest_m = nose_m + BLOCK_M + BLOCK_M / 2.0;
     speed_mps * hold_s.max(least.gather_s) + (arc.length_m() / 2.0).max(shortest_m)
