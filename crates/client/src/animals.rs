@@ -25,15 +25,18 @@
 //! its keeper left it, grazing, or runs to where it was called, gathering
 //! speed to its gallop and slowing to stand there ([`fauna::Run`]), in
 //! closed form from what the world told, so every client draws it at one
-//! place. Within the reach of the view, as a herd.
+//! place on the planet. Within the reach of the view, as a herd.
 //!
-//! Herds stand on the generator's ground alone, so every client agrees
-//! whatever it has loaded of what is built; hooves step on what is built
-//! too, as a walker's feet do. No animal moves for a body: a herd goes its
-//! way whoever is near, and a pet stays where it was kept. What is not the
-//! herd's is each client's own: one left walking home is stepped frame by
-//! frame here, and two clients may draw it a few metres apart while it
-//! does.
+//! Herds stand on the generator's ground, so every client agrees whatever
+//! it has loaded of what is built; hooves step on what is built within a
+//! step, as a walker's feet do. An animal out of its herd, left or a pet,
+//! stands on its own [`Feet`], held by what is built as a body on its feet
+//! is: on the floor it was left on, stopped by a wall, down a drop as a
+//! body falls. No animal moves for a body: a herd goes its way whoever is
+//! near, and a pet stays where it was kept. What is not the herd's is each
+//! client's own: one left walking home is stepped frame by frame here, and
+//! two clients may draw it a few metres apart while it does; a pet's
+//! height is its feet's, which the world's record does not say.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -48,8 +51,8 @@ use topology::{BLOCK_M, Grid, Sector, SurfacePoint};
 use worldgen::{Generator, Material};
 
 use crate::cells::Cells;
-use crate::collision::STEP_M;
-use crate::controller::Built;
+use crate::collision::{self, BODY_M, Held, STEP_M, Spine};
+use crate::controller::{self, Built, GRAVITY_MPS2};
 use crate::pets::{Pet, Spot};
 use crate::way::{Step, Straddle};
 
@@ -212,21 +215,195 @@ struct Body {
     gather_s: Option<f64>,
 }
 
-/// Where an unridden animal is against where its herd has it.
+/// Where an unridden animal is against where its herd has it. Out of its
+/// herd it is on its own [`Feet`].
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Away {
     /// Where its herd has it.
     Home,
     /// Stepped down from at `since_s` on the world's clock: it stands there
     /// and grazes, facing as it was ridden.
-    Left { since_s: f64, heading: DVec3 },
+    Left {
+        since_s: f64,
+        heading: DVec3,
+        feet: Feet,
+    },
     /// Walking back to where its herd has it.
-    Returning,
+    Returning { feet: Feet },
     /// Trotting to where its herd has it now: what was built turned the
     /// place it was at away.
     Catching,
     /// A pet, where the world keeps it.
-    Kept,
+    Kept { feet: Feet },
+}
+
+impl Away {
+    /// Its own feet, out of its herd: none where its herd has it.
+    fn feet(self) -> Option<Feet> {
+        match self {
+            Away::Left { feet, .. } | Away::Returning { feet } | Away::Kept { feet } => Some(feet),
+            Away::Home | Away::Catching => None,
+        }
+    }
+}
+
+/// An animal out of its herd on its own feet, held by what is built as a
+/// body on its feet is, each column read as a walker's
+/// ([`controller::held`]): it stands on the floor it is on, walks on what
+/// is built, steps a step, is stopped by a wall and comes down a drop as
+/// a body falls.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Feet {
+    point: SurfacePoint,
+    /// Over the datum, metres.
+    height_m: f64,
+    /// How fast it falls, metres a second; none while a floor holds it.
+    falling_mps: Option<f64>,
+}
+
+impl Feet {
+    /// Standing where a body stands, world space: on the floor there, as
+    /// the next [`Feet::settle`] finds it.
+    fn at(position: DVec3, generator: &Generator) -> Feet {
+        let sphere = generator.sphere();
+        Feet {
+            point: sphere.blocks().surface_point(position.to_array()),
+            height_m: position.length() - sphere.radius_m(),
+            falling_mps: None,
+        }
+    }
+
+    /// Where it stands, world space.
+    fn position(&self, generator: &Generator) -> DVec3 {
+        DVec3::from(generator.sphere().position(self.point, self.height_m))
+    }
+
+    /// How it leaps: in the air while it falls, and on its feet else.
+    fn leap(&self) -> Option<Leap> {
+        self.falling_mps.map(|_| Leap::Flying)
+    }
+
+    /// What holds it at a column, with its feet as high as they are.
+    fn held(&self, point: SurfacePoint, ground: &Hooves<'_>) -> Held {
+        let seat = Seat::Sector(point.sector);
+        controller::held(
+            seat,
+            point,
+            self.height_m,
+            ground.generator,
+            Some(ground.built),
+        )
+    }
+
+    /// Whether `body` standing here turns from `facing` to `heading`,
+    /// both along the ground, as a body on its feet turns: never into a
+    /// wall.
+    fn turns(&self, [facing, heading]: [DVec3; 2], body: &Body, ground: &Hooves<'_>) -> bool {
+        if facing == heading {
+            return true;
+        }
+        let grid = ground.generator.sphere().blocks();
+        let off = |[du, dv]: [f64; 2]| {
+            let point = SurfacePoint::new(self.point.sector, self.point.u + du, self.point.v + dv);
+            self.held(grid.wrapped(point), ground)
+        };
+        let (was, will) = (
+            self.spine(facing, body, ground),
+            self.spine(heading, body, ground),
+        );
+        collision::turns(
+            self.held(self.point, ground),
+            &was,
+            &will,
+            off,
+            self.admits(body),
+        )
+    }
+
+    /// Walks `body` `metres` along `heading`, as a body on its feet walks:
+    /// a cell at a time, stopped by a wall and slid along it. How far it
+    /// went, metres along the ground, and whether it went the whole way,
+    /// what is built in it stopping none of it.
+    fn walk(
+        &mut self,
+        heading: DVec3,
+        metres: f64,
+        body: &Body,
+        ground: &Hooves<'_>,
+    ) -> (f64, bool) {
+        let generator = ground.generator;
+        let (grid, radius_m) = (generator.sphere().blocks(), self.radius_m(generator));
+        let (du, dv) = controller::address_step(grid, self.point, radius_m, heading * metres);
+        let asked = grid.wrapped(SurfacePoint::new(
+            self.point.sector,
+            self.point.u + du,
+            self.point.v + dv,
+        ));
+        let spine = self.spine(heading, body, ground);
+        let footing = |point| self.held(point, ground);
+        let pieces = collision::cell_by_cell(du, dv);
+        let to = collision::walk(
+            grid,
+            self.point,
+            [du, dv],
+            pieces,
+            &spine,
+            footing,
+            self.admits(body),
+        );
+        let from = self.position(generator);
+        self.point = to;
+        ((self.position(generator) - from).length(), to == asked)
+    }
+
+    /// How far its feet are from the planet's centre, metres.
+    fn radius_m(&self, generator: &Generator) -> f64 {
+        generator.sphere().radius_m() + self.height_m
+    }
+
+    /// The spine of `body` standing here facing `toward`: as long as its
+    /// kind's at its size.
+    fn spine(&self, toward: DVec3, body: &Body, ground: &Hooves<'_>) -> Spine {
+        let generator = ground.generator;
+        let grid = generator.sphere().blocks();
+        let (du, dv) = controller::address_step(grid, self.point, self.radius_m(generator), toward);
+        let [ahead_m, behind_m] = body.kind.reach_m().map(|m| m * body.animal.traits().size);
+        Spine::along([du, dv], ahead_m, behind_m)
+    }
+
+    /// Whether a point of `body` goes from one footing to another, its
+    /// middle on a third, as a walker's does: as tall as one with a rider,
+    /// the room it needs under a roof.
+    fn admits(&self, body: &Body) -> impl Fn(Held, Held, Held, f64) -> bool {
+        let (height_m, room_m) = (
+            self.height_m,
+            body.kind.carry.map_or(BODY_M, |c| c.height_m),
+        );
+        move |seat, was, will, _| collision::afoot(seat, was, will, height_m, room_m)
+    }
+
+    /// Comes to rest on what holds it after `dt`, as a body on its feet
+    /// does: on a floor it is at or under, on one within a step down while
+    /// it stood, else falling to it. A wall built over it, or one a pet's
+    /// run in closed form takes it into, sets it on top, as a body.
+    fn settle(&mut self, dt: f64, ground: &Hooves<'_>) {
+        let floor_m = self.held(self.point, ground).footing().floor_m;
+        let stands = |height_m: f64, stood: bool| {
+            floor_m.filter(|&floor_m| {
+                height_m <= floor_m || stood && collision::steps_down(height_m, floor_m)
+            })
+        };
+        if let Some(floor_m) = stands(self.height_m, self.falling_mps.is_none()) {
+            (self.height_m, self.falling_mps) = (floor_m, None);
+            return;
+        }
+        let falling_mps = self.falling_mps.unwrap_or(0.0) + GRAVITY_MPS2 * dt;
+        self.height_m -= falling_mps * dt;
+        self.falling_mps = Some(falling_mps);
+        if let Some(floor_m) = stands(self.height_m, false) {
+            (self.height_m, self.falling_mps) = (floor_m, None);
+        }
+    }
 }
 
 impl Body {
@@ -679,14 +856,16 @@ impl Animals {
                 continue;
             }
             let heading = body.facing.unwrap_or_else(|| body.animal.heading());
+            let at = body.animal.position();
             if who.is_none() {
-                self.stepped_off = Some((body.number, body.animal.position(), heading));
+                self.stepped_off = Some((body.number, at, heading));
             }
             let left = Body {
                 facing: None,
                 away: Away::Left {
                     since_s: now_s,
                     heading,
+                    feet: Feet::at(at, generator),
                 },
                 ..body
             };
@@ -697,7 +876,9 @@ impl Animals {
     /// Each pet unridden within [`VIEW_M`] of `near` stands where the world
     /// keeps it, or runs there when called; one farther is let go. Stepped
     /// down from a moment before the world says where it was left, it
-    /// stands where it is until then.
+    /// stands where it is until then. Its feet keep their height from
+    /// where it was left, held by what is built: the world's record says
+    /// where on the planet it stands, never how high.
     fn keep_pets(
         &mut self,
         dt: f64,
@@ -745,17 +926,47 @@ impl Animals {
                 continue;
             };
             let told_s = pet.spot.at_ms as f64 / 1000.0;
-            let (going, away) = match had.as_ref().map(|body| body.away) {
-                Some(Away::Left { since_s, heading }) if told_s < since_s => {
-                    let at = had.as_ref().map(|body| body.animal.position());
+            let away = had.as_ref().map(|body| body.away);
+            let (going, away) = match away {
+                Some(Away::Left {
+                    since_s,
+                    heading,
+                    mut feet,
+                }) if told_s < since_s => {
+                    feet.settle(dt, ground);
                     let going = Going {
                         graze: fauna::grazing((now_s - since_s).max(0.0), seed),
-                        ..Going::standing(at.unwrap_or_default(), heading)
+                        leap: feet.leap(),
+                        ..Going::standing(feet.position(generator), heading)
                     };
-                    (going, Away::Left { since_s, heading })
+                    (
+                        going,
+                        Away::Left {
+                            since_s,
+                            heading,
+                            feet,
+                        },
+                    )
                 }
                 _ => match kept(pet, kind, seed, now_s, generator) {
-                    Some(going) => (going, Away::Kept),
+                    // Where the world keeps it, at the height its feet
+                    // had, or first drawn, on the ground there.
+                    Some(going) => {
+                        let mut feet = away.and_then(Away::feet).map_or_else(
+                            || Feet::at(going.position, generator),
+                            |feet| Feet {
+                                point: grid.surface_point(going.position.to_array()),
+                                ..feet
+                            },
+                        );
+                        feet.settle(dt, ground);
+                        let going = Going {
+                            position: feet.position(generator),
+                            leap: feet.leap(),
+                            ..going
+                        };
+                        (going, Away::Kept { feet })
+                    }
                     None => continue,
                 },
             };
@@ -777,10 +988,12 @@ impl Animals {
     }
 
     /// Each animal left waits where it was left while a body is near, as
-    /// long as its kind waits, then walks back to where its herd has it; at
-    /// home, it is its herd's again. A pet freed whose herd no longer holds
-    /// its place has no home there: it grazes where it was left, and is
-    /// gone once no body is within view of it.
+    /// long as its kind waits, then walks back to where its herd has it,
+    /// straight, on its own feet; at home, it is its herd's again. What is
+    /// built in its way stops it: it stands there while a body is in view
+    /// of it, and is its herd's again once none is. A pet freed whose herd
+    /// no longer holds its place has no home there: it grazes where it was
+    /// left, and is gone once no body is within view of it.
     fn walk_home(
         &mut self,
         dt: f64,
@@ -798,56 +1011,80 @@ impl Animals {
             let Some(mut body) = self.left.remove(&number) else {
                 continue;
             };
-            let from = body.animal.position();
-            let Some(home) = home else {
-                if !bodies.all().any(|at| (at - from).length() <= VIEW_M) {
-                    continue;
-                }
-                let (since_s, heading) = match body.away {
-                    Away::Left { since_s, heading } => (since_s, heading),
-                    _ => (now_s, body.animal.heading()),
-                };
-                body.away = Away::Left { since_s, heading };
-                let going = Going {
-                    graze: fauna::grazing((now_s - since_s).max(0.0), body.seed),
-                    ..Going::standing(from, heading)
-                };
-                amble(&mut body, going, dt, ground, &mut self.ambled);
-                body.stepped = self.frame;
-                self.seen.push(body.near(false, &self.pets));
-                self.left.insert(number, body);
-                continue;
+            let mut feet =
+                (body.away.feet()).unwrap_or_else(|| Feet::at(body.animal.position(), generator));
+            let from = feet.position(generator);
+            let near_m = (bodies.all().map(|body| (body - from).length()))
+                .reduce(f64::min)
+                .unwrap_or(f64::INFINITY);
+            let facing = body.animal.heading();
+            let (since_s, heading) = match body.away {
+                Away::Left {
+                    since_s, heading, ..
+                } => (since_s, heading),
+                _ => (now_s, facing),
             };
-            let mut going = home;
-            // A pet freed goes home at once.
-            if body.away == Away::Kept {
-                body.away = Away::Returning;
-            }
-            if let Away::Left { since_s, heading } = body.away {
-                let waited_s = now_s - since_s;
-                let carry = body.kind.carry;
-                let (wait_s, wait_m) = carry.map_or((0.0, 0.0), |c| (c.wait_s, c.wait_m));
-                let watched = bodies.all().any(|at| (at - from).length() <= wait_m);
-                if waited_s < wait_s && watched {
-                    going = Going {
-                        graze: fauna::grazing(waited_s.max(0.0), body.seed),
-                        ..Going::standing(from, heading)
+            let waited_s = now_s - since_s;
+            let carry = body.kind.carry;
+            let (wait_s, wait_m) = carry.map_or((0.0, 0.0), |c| (c.wait_s, c.wait_m));
+            let waits = matches!(body.away, Away::Left { .. }) && waited_s < wait_s;
+            let walk_mps = body.kind.herding.wander_mps;
+            // Where it walks this frame and how far it went: nowhere while
+            // it waits, or with no home to walk to.
+            let walked = match home {
+                Some(_) if waits && near_m <= wait_m => None,
+                None => None,
+                Some(home) => {
+                    // Home within a step, its herd draws it from here, so it
+                    // never leaps there.
+                    let Some(toward) = along(from, home.position, walk_mps * dt) else {
+                        body.away = Away::Home;
+                        self.free.insert(number, body);
+                        continue;
                     };
-                } else {
-                    body.away = Away::Returning;
+                    Some(match feet.turns([facing, toward], &body, ground) {
+                        true => (toward, feet.walk(toward, walk_mps * dt, &body, ground)),
+                        false => (facing, (0.0, false)),
+                    })
                 }
-            }
-            if body.away == Away::Returning {
-                let walk_mps = body.kind.herding.wander_mps;
-                // Home within a step, its herd draws it from here, so it
-                // never leaps there.
-                let Some(step) = toward(from, home.position, walk_mps, dt, ground) else {
+            };
+            // Standing, or stopped by what is built, out of every body's
+            // view it is its herd's again, or gone with no home; in view it
+            // stands, or goes along what stopped it as a body would.
+            let stopped = walked.is_none_or(|(_, (_, whole))| !whole);
+            if stopped && near_m > VIEW_M {
+                if home.is_some() {
                     body.away = Away::Home;
                     self.free.insert(number, body);
-                    continue;
-                };
-                going = step;
+                }
+                continue;
             }
+            feet.settle(dt, ground);
+            let at = feet.position(generator);
+            let going = match walked {
+                None => {
+                    body.away = Away::Left {
+                        since_s,
+                        heading,
+                        feet,
+                    };
+                    Going {
+                        graze: fauna::grazing(waited_s.max(0.0), body.seed),
+                        ..Going::standing(at, heading)
+                    }
+                }
+                Some((heading, (went_m, _))) => {
+                    body.away = Away::Returning { feet };
+                    Going {
+                        speed_mps: if went_m > 0.0 { went_m / dt } else { 0.0 },
+                        ..Going::standing(at, heading)
+                    }
+                }
+            };
+            let going = Going {
+                leap: feet.leap(),
+                ..going
+            };
             amble(&mut body, going, dt, ground, &mut self.ambled);
             body.stepped = self.frame;
             self.seen.push(body.near(false, &self.pets));
@@ -1159,19 +1396,22 @@ fn catch(body: &mut Body, going: Going, dt: f64, ground: &Hooves<'_>, replaced: 
 /// A step at `mps` from `from` toward `to`, along the ground and facing
 /// that way; `None` within a step of it.
 fn toward(from: DVec3, to: DVec3, mps: f64, dt: f64, ground: &Hooves<'_>) -> Option<Going> {
-    let up = from.normalize_or(DVec3::Z);
-    let toward = to - from;
-    let along = toward - up * toward.dot(up);
-    if along.length() <= mps * dt {
-        return None;
-    }
-    let heading = along.normalize();
+    let heading = along(from, to, mps * dt)?;
     Some(Going {
         position: ground.under(from + heading * mps * dt).point,
         heading,
         speed_mps: mps,
         ..Going::standing(from, heading)
     })
+}
+
+/// Which way along the ground from `from` toward `to`, a unit; `None`
+/// within `step_m` of it.
+fn along(from: DVec3, to: DVec3, step_m: f64) -> Option<DVec3> {
+    let up = from.normalize_or(DVec3::Z);
+    let toward = to - from;
+    let along = toward - up * toward.dot(up);
+    (along.length() > step_m).then(|| along.normalize())
 }
 
 /// What a free animal did this frame, for whether it is heard.
@@ -1431,8 +1671,9 @@ fn worn<'a>(pet: &'a Pet, kind: &Kind) -> Option<&'a Traits> {
 /// Where a pet goes at `now_s` as the world keeps it: called, on its way
 /// from where it set off to where it was called, along the great circle
 /// as [`called`] runs it; else standing there, grazing since it came. On
-/// the generator's ground, as a herd stands. None while it is out of
-/// sight, called from afar and not yet come.
+/// the generator's ground, as a herd stands: a pet drawn takes the place
+/// alone, and stands on its [`Feet`]. None while it is out of sight,
+/// called from afar and not yet come.
 fn kept(pet: &Pet, kind: &Kind, seed: u64, now_s: f64, generator: &Generator) -> Option<Going> {
     kept_run(pet, kind, seed, now_s, generator).map(|(going, _)| going)
 }
@@ -2466,6 +2707,202 @@ mod tests {
             .u
             - f64::from(x);
         assert!(gone > 49.0, "it ended at {gone}, short of the stair's foot");
+    }
+
+    /// A world with a deck of cells: a slab from cell 24 to 39 each way of
+    /// the plot [`crate::Cells::floor`] lays a floor over, its top 3.5 m
+    /// over that floor; with `fenced`, a fence two metres high round its
+    /// edge. The deck's middle, and how high its top stands over the
+    /// datum, metres.
+    fn decked(fenced: bool) -> (World, SurfacePoint, f64) {
+        use voxel::{Gesture, Span};
+        let mut world = World::new();
+        let side = f64::from(world.generator.sphere().blocks().side());
+        let sector = Sector::new(4).unwrap();
+        let point = SurfacePoint::new(sector, side * 0.41, side * 0.37);
+        let [x, y, top] = world.cells.floor(&world.generator, point);
+        let (low, high, deck) = (24, 39, top + 6);
+        let laid = |[u0, v0]: [i32; 2], [u1, v1]: [i32; 2], [z0, z1]: [i32; 2]| Gesture::Create {
+            span: Span::between([x + u0, y + v0, z0], [x + u1, y + v1, z1]),
+            paint: 1,
+        };
+        let mut gestures = vec![laid([low, low], [high, high], [deck, deck])];
+        if fenced {
+            let fence = [deck + 1, deck + 4];
+            gestures.extend([
+                laid([low, low], [high, low], fence),
+                laid([low, high], [high, high], fence),
+                laid([low, low], [low, high], fence),
+                laid([high, low], [high, high], fence),
+            ]);
+        }
+        assert!(world.cells.apply(&world.generator, sector, &gestures));
+        let middle = SurfacePoint::new(sector, f64::from(x + 32), f64::from(y + 32));
+        (world, middle, f64::from(deck + 1) * BLOCK_M)
+    }
+
+    /// Whether an animal drawn is in a cell: its middle or its nose, from
+    /// a fifth of a metre over its feet to its back. Its rump trails over the edge it
+    /// comes down from, as a ridden one's does.
+    fn in_a_cell(world: &World, near: &Near) -> bool {
+        let sphere = world.generator.sphere();
+        let feet_m = near.at.length() - sphere.radius_m();
+        let [ahead_m, _] = near.kind.reach_m().map(|m| m * near.size);
+        let carry = near.kind.carry.expect("a horse carries");
+        let back_m = carry.saddle.y * near.size;
+        [0.0, ahead_m].into_iter().any(|along_m| {
+            let at = near.at + near.heading * along_m;
+            let point = sphere.blocks().surface_point(at.to_array());
+            let column = [point.u, point.v];
+            let heights = [feet_m + 0.2, feet_m + back_m];
+            world.cells.covered(point.sector, column, heights)
+        })
+    }
+
+    /// How high an animal drawn stands, metres over the datum.
+    fn feet_m(world: &World, near: &Near) -> f64 {
+        near.at.length() - world.generator.sphere().radius_m()
+    }
+
+    /// The horse a number names, ridden onto the middle of a deck `deck_m`
+    /// over the datum, facing as [`rider`] has it, at `now_s`.
+    fn ridden_onto(
+        world: &World,
+        animals: &mut Animals,
+        number: u64,
+        middle: SurfacePoint,
+        deck_m: f64,
+        now_s: f64,
+    ) -> Rider {
+        let on_deck = DVec3::from(world.generator.sphere().position(middle, deck_m));
+        let riders = [rider(None, number, on_deck)];
+        let riding = Bodies {
+            riders: &riders,
+            on_foot: &[],
+        };
+        world.step(animals, now_s, middle, riding);
+        let [rider] = riders;
+        rider
+    }
+
+    /// A horse left on a deck 3.5 m over the floor under it, no body near,
+    /// walks home at once: it stands on the deck to its edge, comes down
+    /// off it as a body falls, never more than a step in a frame, and no
+    /// frame of the way puts it in a cell.
+    #[test]
+    fn a_horse_left_on_a_deck_walks_off_its_edge_and_comes_down() {
+        let (world, middle, deck_m) = decked(false);
+        let number = a_horse(&world);
+        let mut animals = Animals::default();
+        let mut now_s = 1.0e3;
+        ridden_onto(&world, &mut animals, number, middle, deck_m, now_s);
+        let mut was_m = deck_m;
+        let mut down = false;
+        for frame in 0..60 * 20 {
+            now_s += 1.0 / 60.0;
+            world.step(&mut animals, now_s, middle, NONE);
+            let near = *drawn(&animals, number)
+                .first()
+                .unwrap_or_else(|| panic!("gone at frame {frame}"));
+            assert!(!in_a_cell(&world, &near), "frame {frame}: in a cell");
+            let feet_m = feet_m(&world, &near);
+            assert!(
+                was_m - feet_m <= STEP_M + 1e-6,
+                "frame {frame}: down {} m at once",
+                was_m - feet_m
+            );
+            down |= feet_m < deck_m - 3.0;
+            was_m = feet_m;
+        }
+        assert!(down, "it never came down off the deck");
+    }
+
+    /// A horse left inside a fence on a deck 3.5 m over the floor: it
+    /// stands on the deck while a body is near; walking home, the fence
+    /// stops it, and no frame puts it in a cell or off the deck; once no
+    /// body is in view of it, it is its herd's again.
+    #[test]
+    fn a_horse_left_in_a_fence_on_a_deck_is_held_by_it() {
+        let (world, middle, deck_m) = decked(true);
+        let number = a_horse(&world);
+        let mut animals = Animals::default();
+        let mut now_s = 1.0e3;
+        let rider = ridden_onto(&world, &mut animals, number, middle, deck_m, now_s);
+        let up = rider.at.normalize();
+        let east = up.any_orthonormal_vector();
+        let carry = gaia::fauna::horse::HORSE.carry.expect("a horse carries");
+        // Beside it, then past where it waits for a body but in view.
+        let beside = [rider.at + east * 1.5];
+        let off = [rider.at + east * (carry.wait_m + 10.0)];
+        for (on_foot, seconds) in [(&beside, 10), (&off, 20)] {
+            let bodies = Bodies {
+                riders: &[],
+                on_foot,
+            };
+            for frame in 0..60 * seconds {
+                now_s += 1.0 / 60.0;
+                world.step(&mut animals, now_s, middle, bodies);
+                let near = *drawn(&animals, number)
+                    .first()
+                    .unwrap_or_else(|| panic!("gone at frame {frame}"));
+                assert!(!in_a_cell(&world, &near), "frame {frame}: in a cell");
+                let off_m = feet_m(&world, &near) - deck_m;
+                assert!(off_m.abs() < 1e-6, "frame {frame}: {off_m} m off the deck");
+            }
+        }
+        let gone = [rider.at + east * (VIEW_M + 10.0)];
+        let bodies = Bodies {
+            riders: &[],
+            on_foot: &gone,
+        };
+        world.step(&mut animals, now_s + 1.0 / 60.0, middle, bodies);
+        assert!(!animals.left.contains_key(&number), "still left");
+    }
+
+    /// A pet left on a deck 3.5 m over the floor, its keeper stepped down
+    /// and the world then saying where it stands: it stands on the deck
+    /// for a minute, a body near and then none.
+    #[test]
+    fn a_pet_left_on_a_deck_stands_on_it_once_the_world_says_where() {
+        let (world, middle, deck_m) = decked(false);
+        let number = a_horse(&world);
+        let mut animals = Animals::default();
+        let mut now_s = 1.0e3;
+        let on_deck = DVec3::from(world.generator.sphere().position(middle, deck_m));
+        let pet = |at_ms: u64| Pet {
+            number,
+            spot: spot_of(
+                on_deck,
+                rider(None, number, on_deck).facing,
+                at_ms,
+                &world.generator,
+            ),
+            mine: true,
+            ..Pet::default()
+        };
+        animals.set_pets([pet(0)].iter(), &world.generator);
+        let rider = ridden_onto(&world, &mut animals, number, middle, deck_m, now_s);
+        now_s += 1.0 / 60.0;
+        world.step(&mut animals, now_s, middle, NONE);
+        // The world says it on its own clock, after the client stepped down.
+        let left_ms = (now_s * 1000.0).ceil() as u64;
+        animals.set_pets([pet(left_ms)].iter(), &world.generator);
+        let beside = [rider.at + rider.facing.cross(rider.at.normalize()) * 1.5];
+        for (on_foot, seconds) in [(&beside[..], 30), (&[][..], 30)] {
+            let bodies = Bodies {
+                riders: &[],
+                on_foot,
+            };
+            for frame in 0..60 * seconds {
+                now_s += 1.0 / 60.0;
+                world.step(&mut animals, now_s, middle, bodies);
+                let near = *drawn(&animals, number)
+                    .first()
+                    .unwrap_or_else(|| panic!("gone at frame {frame}"));
+                let off_m = feet_m(&world, &near) - deck_m;
+                assert!(off_m.abs() < 1e-6, "frame {frame}: {off_m} m off the deck");
+            }
+        }
     }
 
     /// A floor laid on a grazing horse: its herd places it again off what
