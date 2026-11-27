@@ -259,6 +259,49 @@ impl Engine {
         self.state.borrow_mut().client.command_json(json);
     }
 
+    /// Stands in for a world's word where none is linked, as a headless
+    /// picture does: every plugin this version carries on, and life with
+    /// them, so a measure sees the world whole.
+    pub fn rehearse(&self) {
+        self.state
+            .borrow_mut()
+            .client
+            .rehearse(client::Level::Anonymous);
+    }
+
+    /// Sets the world's clock, seconds: the hour a measure holds still.
+    pub fn set_clock(&self, seconds: f64) {
+        self.state.borrow_mut().client.set_clock(seconds);
+    }
+
+    /// Starts measuring what each frame costs, the CPU's steps by the
+    /// page's clock (`render::Renderer::measure`); [`Engine::measured`]
+    /// says what it read.
+    pub fn measure(&self) {
+        self.state.borrow_mut().renderer.measure(Some(now_ms));
+    }
+
+    /// Leaves the foliage out of the view and of each cascade a measure
+    /// times, where `cascades` holds that cascade's index.
+    pub fn measure_without(&self, view: bool, cascades: &[u8]) {
+        let without = render::Without {
+            view,
+            cascades: core::array::from_fn(|k| cascades.contains(&(k as u8))),
+        };
+        self.state.borrow_mut().renderer.measure_without(without);
+    }
+
+    /// Counts the foliage's fragments in the next frame drawn.
+    pub fn count_foliage(&self) {
+        self.state.borrow_mut().renderer.count_foliage();
+    }
+
+    /// What the measure read so far, as JSON: `null` without one.
+    pub fn measured(&self) -> String {
+        let measured = self.state.borrow().renderer.measured();
+        measured.map_or_else(|| "null".to_owned(), |measured| measured.json())
+    }
+
     /// Presses a key or lets it go, by the name the web gives it (`Space`,
     /// `KeyF`), as the keyboard does: what a button on the screen does in
     /// place of a key.

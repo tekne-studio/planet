@@ -26,7 +26,9 @@ struct Vertex {
 }
 
 struct Varying {
-    @builtin(position) clip: vec4<f32>,
+    // The same in every pipeline that draws foliage: one tested against the
+    // depth another wrote meets it exactly.
+    @builtin(position) @invariant clip: vec4<f32>,
     @location(0) relative: vec3<f32>,
     @location(1) normal: vec3<f32>,
     // rgb: the middle tone, as painted. a: how open to the sky.
@@ -259,9 +261,25 @@ fn painted(mid: vec3<f32>, normal: vec3<f32>, relative: vec3<f32>, open: f32, le
     return through_medium(color, dir, distance);
 }
 
+// Whether a fragment in view is cut away: outside its instance's share of
+// a crossing, or a card's point outside its clump. Wood is cut only by the
+// crossing.
+fn cut(in: Varying) -> bool {
+    if !drawn(in.relative, in.placed) {
+        return true;
+    }
+    return in.card.w > WOOD + 0.5 && !inside(in.card.xy, in.card.z, in.card.w, in.half_lean.x);
+}
+
+// Whether a fragment in the sun's pass casts: wood whole, and a mass as a
+// round card.
+fn casts(in: Varying) -> bool {
+    return in.card.w < MASS - 0.5 || length(in.card.xy) <= 0.9;
+}
+
 @fragment
 fn fs(in: Varying) -> @location(0) vec4<f32> {
-    if !drawn(in.relative, in.placed) {
+    if cut(in) {
         discard;
     }
     let what = in.card.w;
@@ -275,9 +293,6 @@ fn fs(in: Varying) -> @location(0) vec4<f32> {
         return vec4<f32>(painted(mid, normal, at, open, false), 1.0);
     }
     let uv = in.card.xy;
-    if !inside(uv, in.card.z, what, in.half_lean.x) {
-        discard;
-    }
     let open = in.color.a;
     var lit_at = in.relative;
     if what < LEAF + 0.5 {
@@ -299,10 +314,9 @@ fn fs(in: Varying) -> @location(0) vec4<f32> {
     return vec4<f32>(painted(mid, normal, lit_at, mix(open, ROOTS_OPEN, base), true), 1.0);
 }
 
-// The sun's pass: wood whole, and a mass as a round card.
 @fragment
 fn fs_shadow(in: Varying) {
-    if in.card.w > MASS - 0.5 && length(in.card.xy) > 0.9 {
+    if !casts(in) {
         discard;
     }
 }

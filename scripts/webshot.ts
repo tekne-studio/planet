@@ -12,9 +12,11 @@
 //   bun run webshot --profile out/ada   (a browser kept between runs: what a page kept is there on the next)
 //   bun run webshot --webgl   (a browser without WebGPU: the engine on its WebGL2 floor)
 //   bun run webshot --touch   (a phone held sideways: fingers, no mouse, its size)
+//   bun run webshot --flora out/flora   (what plants cost the browser's frame, where `bun run shot --flora` stood: scripts/flora.ts)
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { flora } from './flora';
 import { ROOT } from './lib';
 
 const args = process.argv.slice(2);
@@ -22,7 +24,9 @@ const option = (name: string, fallback: string) => {
 	const at = args.indexOf(`--${name}`);
 	return at >= 0 && args[at + 1] ? args[at + 1] : fallback;
 };
-const url = `${option('origin', 'http://[::1]:5173')}${option('path', '/')}`;
+const floraDir = args.includes('--flora') ? resolve(ROOT, option('flora', 'out/flora')) : '';
+// The measure runs an engine of its own, on a page that runs none.
+const url = `${option('origin', 'http://[::1]:5173')}${option('path', floraDir ? '/ds' : '/')}`;
 const out = resolve(ROOT, option('out', 'out/web.png'));
 const waitMs = Number(option('wait', '15')) * 1000;
 // Run in the page once it has settled, before the picture: a click, a walk.
@@ -50,6 +54,9 @@ const chrome = Bun.spawn(
 		'--headless=new',
 		`--remote-debugging-port=${PORT}`,
 		'--enable-unsafe-webgpu',
+		// The GPU's timestamps whole: Chrome rounds them to a tenth of a
+		// millisecond otherwise.
+		...(floraDir ? ['--enable-webgpu-developer-features'] : []),
 		`--user-data-dir=${profile}`,
 		'--window-size=1280,720',
 		...(lang ? [`--lang=${lang}`, `--accept-lang=${lang}`] : []),
@@ -124,6 +131,12 @@ if (touch) {
 }
 await send('Page.navigate', { url });
 await Bun.sleep(waitMs);
+if (floraDir) {
+	await flora(send, floraDir);
+	socket.close();
+	chrome.kill();
+	process.exit(0);
+}
 if (filmMs > 0) {
 	await send('Page.startScreencast', { format: 'png' });
 	filming = performance.now();

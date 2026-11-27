@@ -29,10 +29,13 @@ impl Gpu {
         // is the downlevel defaults, raised to what this adapter has.
         let required_limits =
             wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
+        // Timestamps where the adapter writes them, for a measure: a frame
+        // writes none unless one runs.
+        let required_features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("planet"),
-                required_features: wgpu::Features::empty(),
+                required_features,
                 required_limits,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::default(),

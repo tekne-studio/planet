@@ -28,6 +28,14 @@ fn modules(read: DepthRead) -> Vec<(&'static str, String)> {
         ("grass", shader(include_str!("shaders/grass.wgsl"))),
         ("foliage", shader(&crate::foliage::source(false))),
         ("foliage casting", shader(&crate::foliage::source(true))),
+        (
+            "foliage count",
+            shader(&crate::measure::count_source(false)),
+        ),
+        (
+            "foliage count casting",
+            shader(&crate::measure::count_source(true)),
+        ),
         ("water", shader(&crate::terrain::water_source(read))),
         ("boxes", shader(include_str!("shaders/boxes.wgsl"))),
         ("pane", shader(include_str!("shaders/pane.wgsl"))),

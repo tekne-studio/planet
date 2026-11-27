@@ -412,6 +412,12 @@ impl Composer {
     /// The picture into `target`, the chain's last stage; `then` records
     /// into its own pass after it, so what is laid over the finished
     /// picture costs no pass of its own.
+    /// The last stage, into `target`, `then` drawn over it; timed by a
+    /// measure's `timestamp_writes`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the last stage, and what times it"
+    )]
     pub fn output(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -419,6 +425,7 @@ impl Composer {
         targets: &Targets,
         at: Cursor,
         target: &wgpu::TextureView,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
         then: impl FnOnce(&mut wgpu::RenderPass<'_>),
     ) {
         Self::pass_then(
@@ -427,6 +434,7 @@ impl Composer {
             view,
             &targets.inputs[at.0],
             target,
+            timestamp_writes,
             then,
         );
     }
@@ -438,7 +446,7 @@ impl Composer {
         input: &wgpu::BindGroup,
         target: &wgpu::TextureView,
     ) {
-        Self::pass_then(encoder, stage, view, input, target, |_| {});
+        Self::pass_then(encoder, stage, view, input, target, None, |_| {});
     }
 
     fn pass_then(
@@ -447,6 +455,7 @@ impl Composer {
         view: &wgpu::BindGroup,
         input: &wgpu::BindGroup,
         target: &wgpu::TextureView,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
         then: impl FnOnce(&mut wgpu::RenderPass<'_>),
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -465,7 +474,7 @@ impl Composer {
                 depth_slice: None,
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes,
             occlusion_query_set: None,
             multiview_mask: None,
         });

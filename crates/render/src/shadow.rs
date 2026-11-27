@@ -13,6 +13,14 @@ pub const RADII: [f64; CASCADES] = [40.0, 400.0, 4000.0];
 /// A low sun throws a mountain's shadow several times its height.
 const REACH: [f64; CASCADES] = [2400.0, 2400.0, 12000.0];
 
+/// How far a caster's depth is pushed from the sun, so a surface never
+/// shades itself.
+pub const BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState {
+    constant: -2,
+    slope_scale: -1.5,
+    clamp: 0.0,
+};
+
 /// What the shaders must agree on, stated once: prepended to every module.
 pub fn prelude() -> String {
     format!("const SHADOW_CASCADES: u32 = {CASCADES}u;\nconst SHADOW_SIZE: f32 = {SIZE}.0;\n")

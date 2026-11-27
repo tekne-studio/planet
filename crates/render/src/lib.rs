@@ -18,13 +18,15 @@ mod foliage;
 mod gpu;
 #[cfg(not(target_arch = "wasm32"))]
 mod headless;
+mod measure;
 mod mips;
 mod models;
 mod overlay;
 mod panes;
 mod pictures;
 
-pub use foliage::Counted as FoliageCounted;
+pub use foliage::{Counted as FoliageCounted, Spent as FoliageSpent};
+pub use measure::{Fragments, Measured, Without};
 mod shadow;
 mod skinned;
 mod terrain;
@@ -140,6 +142,8 @@ pub struct Renderer {
     composer: compose::Composer,
     clouds: clouds::Clouds,
     overlays: overlay::Overlays,
+    /// A measure a shell asked for, of the first view: none in the world.
+    measure: Option<measure::Measure>,
 }
 
 impl Renderer {
@@ -276,7 +280,39 @@ impl Renderer {
             composer,
             clouds,
             overlays,
+            measure: None,
         }
+    }
+
+    /// Starts measuring each frame, its first view's: the GPU's time of
+    /// each pass where the device writes timestamps, and with a `clock`,
+    /// milliseconds by the shell's, what the CPU spends placing the
+    /// foliage. What it read is [`Renderer::measured`].
+    pub fn measure(&mut self, clock: Option<fn() -> f64>) {
+        self.measure = Some(measure::Measure::new(&self.device, &self.queue, clock));
+    }
+
+    /// Leaves the foliage's draws `without` says out of the frames a
+    /// measure times, each priced by the time the frame saves without it.
+    pub fn measure_without(&mut self, without: Without) {
+        if let Some(measure) = &mut self.measure {
+            measure.without = without;
+        }
+    }
+
+    /// Counts the foliage's fragments in the next frame drawn, in view and
+    /// in each cascade: a measure's, started if none is.
+    pub fn count_foliage(&mut self) {
+        let measure = self
+            .measure
+            .get_or_insert_with(|| measure::Measure::new(&self.device, &self.queue, None));
+        measure.count_next = true;
+    }
+
+    /// What the measure has read so far; none without one.
+    pub fn measured(&self) -> Option<Measured> {
+        let measure = self.measure.as_ref()?;
+        Some(measure.measured.lock().expect("unpoisoned").clone())
     }
 
     /// Uploads and drops patch meshes and takes a world's foliage shapes, in
@@ -340,7 +376,7 @@ impl Renderer {
     pub fn foliage_counted(&self) -> FoliageCounted {
         self.views
             .first()
-            .map_or_else(Default::default, |view| view.foliage.counted)
+            .map_or_else(Default::default, |view| view.foliage.counted[0])
     }
 
     pub fn render(&mut self, frame: &Frame, views: &[View<'_>]) {
@@ -367,6 +403,24 @@ impl Renderer {
         let drawn =
             |size: [u32; 2], share: f32| size.map(|n| ((n as f32 * share).ceil() as u32).max(1));
         let resolution = frame.effects.resolution;
+        let mut measure = self.measure.take();
+        if let Some(measure) = &mut measure {
+            let frames = {
+                let mut measured = measure.measured.lock().expect("unpoisoned");
+                measured.drawn += 1;
+                measured.drawn
+            };
+            if let Some(timer) = &mut measure.timer {
+                timer.begin(frames, measure.without);
+            }
+            if let Some(view) = views.first().filter(|_| measure.count_next) {
+                measure.count_next = false;
+                let counter = measure.counter.get_or_insert_with(|| {
+                    measure::Counter::new(&self.device, &self.view_layout, &self.shadow_layout)
+                });
+                counter.arm(&self.device, drawn(view.size, resolution));
+            }
+        }
         let through = frame
             .through
             .as_ref()
@@ -380,7 +434,8 @@ impl Renderer {
                     whole: false,
                     hidden: None,
                 };
-                let at = self.draw_world(&mut encoder, resources, frame, &weather, &sight, None);
+                let at =
+                    self.draw_world(&mut encoder, resources, frame, &weather, &sight, None, None);
                 let targets = resources.targets.as_ref().expect("drawn");
                 self.panes
                     .through_group(&self.device, self.composer.picture(targets, &at))
@@ -403,6 +458,7 @@ impl Renderer {
                     .map(|(overlay, _)| overlay.picture),
             };
             let resources = &mut slots[index];
+            let measuring = measure.as_mut().filter(|_| index == 0);
             let mut at = self.draw_world(
                 &mut encoder,
                 resources,
@@ -410,7 +466,13 @@ impl Renderer {
                 &weather,
                 &sight,
                 through.as_ref(),
+                measuring,
             );
+            if let Some(measure) = measure.as_ref().filter(|_| index == 0) {
+                let mut measured = measure.measured.lock().expect("unpoisoned");
+                measured.spent = resources.foliage.spent;
+                measured.counted = resources.foliage.counted;
+            }
             let targets = resources.targets.as_ref().expect("drawn");
             // A body's passage through a portal draws the picture into it
             // and out again, before the picture is finished: the bloom
@@ -423,12 +485,17 @@ impl Renderer {
                 self.composer
                     .bloom(&mut encoder, &resources.bind_group, targets, &mut at);
             }
+            let writes = measure
+                .as_mut()
+                .filter(|_| index == 0)
+                .and_then(|measure| measure.writes(measure::OUTPUT));
             self.composer.output(
                 &mut encoder,
                 &resources.bind_group,
                 targets,
                 at,
                 view.target,
+                writes,
                 |pass| {
                     if let Some((overlay, picture)) = laid {
                         self.overlays.draw(pass, picture, &overlay);
@@ -438,13 +505,30 @@ impl Renderer {
         }
         self.views = slots;
         self.through = through_slot;
+        if let Some(timer) = measure.as_mut().and_then(|measure| measure.timer.as_mut()) {
+            timer.resolve(&mut encoder);
+        }
         self.queue.submit([encoder.finish()]);
+        if let Some(measure) = &mut measure {
+            if let Some(timer) = &mut measure.timer {
+                timer.read(&measure.measured);
+            }
+            if let Some(counter) = &mut measure.counter {
+                counter.read(&self.device, &self.queue, &measure.measured);
+            }
+        }
+        self.measure = measure;
     }
 
     /// Draws the world one sight sees into its resources' targets, up to
     /// the stages that finish a picture: the sun's shadows, the opaque
     /// world and the sky, then the sea and the clouds, then what goes over
-    /// them. Returns where the picture so far is.
+    /// them. Returns where the picture so far is. A `measure` times its
+    /// passes and counts what it asks.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one sight drawn, and what measures it"
+    )]
     fn draw_world(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -453,7 +537,14 @@ impl Renderer {
         weather: &clouds::WeatherNow,
         sight: &Sight<'_>,
         through: Option<&wgpu::BindGroup>,
+        mut measure: Option<&mut measure::Measure>,
     ) -> compose::Cursor {
+        // A count draws the foliage in passes of its own; a measure may
+        // leave some of it out.
+        let apart = measure.as_ref().is_some_and(|measure| measure.apart());
+        let without = measure
+            .as_ref()
+            .map_or_else(Default::default, |measure| measure.without);
         let [width, height] = sight.size.map(|n| n.max(1));
         let camera = &sight.camera;
         let shadows = sight.whole && frame.effects.shadows;
@@ -545,6 +636,7 @@ impl Renderer {
                     matrices,
                 )
             }),
+            measure.as_ref().and_then(|measure| measure.clock),
         );
 
         if let Some((matrices, casters)) = &casting {
@@ -557,26 +649,20 @@ impl Renderer {
                     0,
                     bytemuck::bytes_of(&light),
                 );
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("sun shadows"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &resources.shadows.layers[cascade],
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(0.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_bind_group(0, &resources.shadows.groups[cascade], &[]);
+                let layer = &resources.shadows.layers[cascade];
+                let group = &resources.shadows.groups[cascade];
+                let writes = measure
+                    .as_deref_mut()
+                    .and_then(|measure| measure.writes(measure::CASCADE[cascade]));
+                let mut pass = depth_pass(encoder, layer, wgpu::LoadOp::Clear(0.0), writes);
+                pass.set_bind_group(0, group, &[]);
                 self.terrain
                     .draw_shadow(&mut pass, &resources.casters, casters, *matrix);
-                self.foliage
-                    .draw_shadow(&mut pass, &resources.foliage, &foliage, cascade);
+                let drawn = !without.cascades[cascade];
+                if drawn && !apart {
+                    self.foliage
+                        .draw_shadow(&mut pass, &resources.foliage, &foliage, cascade);
+                }
                 self.volumes
                     .draw_shadow(&mut pass, &resources.volumes, &volumes, *matrix);
                 self.boxes.draw_shadow(&mut pass, &resources.boxes, *boxes);
@@ -591,6 +677,22 @@ impl Renderer {
                     *matrix,
                     &self.pictures,
                 );
+                drop(pass);
+                if drawn && apart {
+                    let mut pass = depth_pass(encoder, layer, wgpu::LoadOp::Load, None);
+                    pass.set_bind_group(0, group, &[]);
+                    self.foliage
+                        .draw_shadow(&mut pass, &resources.foliage, &foliage, cascade);
+                }
+                if let Some(counter) = counting(measure.as_deref()) {
+                    counter.cascade(encoder, cascade, layer, &|pass, pipeline| {
+                        pass.set_bind_group(0, group, &[]);
+                        let instances = &resources.foliage;
+                        let gathering = Some(cascade);
+                        self.foliage
+                            .draw_by(pass, pipeline, instances, &foliage, gathering, None);
+                    });
+                }
             }
         }
 
@@ -602,35 +704,39 @@ impl Renderer {
             resources.targets = Some(self.composer.targets(&self.device, [width, height]));
         }
         let targets = resources.targets.as_ref().expect("just ensured");
+        let group = &resources.bind_group;
+        // What the counts draw in view: the foliage of this frame, or one
+        // form of it.
+        let counted = |pass: &mut wgpu::RenderPass<'_>,
+                       pipeline: &wgpu::RenderPipeline,
+                       form: Option<usize>| {
+            pass.set_bind_group(0, group, &[]);
+            self.foliage
+                .draw_by(pass, pipeline, &resources.foliage, &foliage, None, form);
+        };
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("world"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &targets.color[0],
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &targets.depth,
-                depth_ops: Some(wgpu::Operations {
-                    // Reversed depth: far is 0. Kept: the stages read it.
-                    load: wgpu::LoadOp::Clear(0.0),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_bind_group(0, &resources.bind_group, &[]);
+        let writes = measure
+            .as_deref_mut()
+            .and_then(|measure| measure.writes(measure::VIEW));
+        let mut pass = world_pass(encoder, targets, true, writes);
+        pass.set_bind_group(0, group, &[]);
         self.terrain.draw(&mut pass, &resources.patches, &drawn);
         self.volumes.draw(&mut pass, &resources.volumes, &volumes);
-        self.foliage.draw(&mut pass, &resources.foliage, &foliage);
+        if apart {
+            drop(pass);
+            if let Some(counter) = counting(measure.as_deref()) {
+                counter.view_before(encoder, &targets.depth, &counted);
+            }
+            if !without.view {
+                let mut leaves = world_pass(encoder, targets, false, None);
+                leaves.set_bind_group(0, group, &[]);
+                self.foliage.draw(&mut leaves, &resources.foliage, &foliage);
+            }
+            pass = world_pass(encoder, targets, false, None);
+            pass.set_bind_group(0, group, &[]);
+        } else if !without.view {
+            self.foliage.draw(&mut pass, &resources.foliage, &foliage);
+        }
         if let Some((boxes, skinned, models)) = &placed {
             if frame.effects.grass {
                 self.terrain
@@ -650,6 +756,9 @@ impl Renderer {
         pass.set_pipeline(&self.sky);
         pass.draw(0..3, 0..1);
         drop(pass);
+        if let Some(counter) = counting(measure.as_deref()) {
+            counter.view_after(encoder, &targets.depth, &counted);
+        }
 
         // Then the sea and the clouds, the nearer last: a camera under the
         // sea sees the clouds through its surface, any other sees them over it.
@@ -930,6 +1039,80 @@ impl Renderer {
     }
 }
 
+/// The counter of a measure, when this frame counts.
+fn counting(measure: Option<&measure::Measure>) -> Option<&measure::Counter> {
+    measure?
+        .counter
+        .as_ref()
+        .filter(|counter| counter.counting())
+}
+
+/// A pass of the sun's into one cascade's map.
+fn depth_pass<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    layer: &wgpu::TextureView,
+    load: wgpu::LoadOp<f32>,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("sun shadows"),
+        color_attachments: &[],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: layer,
+            depth_ops: Some(wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }),
+        timestamp_writes,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
+}
+
+/// A pass of the opaque world into a sight's targets: the first clears
+/// them, one after it goes on drawing into them.
+fn world_pass<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    targets: &compose::Targets,
+    first: bool,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("world"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &targets.color[0],
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: if first {
+                    wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                } else {
+                    wgpu::LoadOp::Load
+                },
+                store: wgpu::StoreOp::Store,
+            },
+            depth_slice: None,
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &targets.depth,
+            depth_ops: Some(wgpu::Operations {
+                // Reversed depth: far is 0. Kept: the stages read it.
+                load: if first {
+                    wgpu::LoadOp::Clear(0.0)
+                } else {
+                    wgpu::LoadOp::Load
+                },
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }),
+        timestamp_writes,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
+}
+
 /// `origin - camera`, the one subtraction that keeps `f32` honest.
 fn relative(origin: DVec3, camera: DVec3) -> Vec3 {
     (origin - camera).as_vec3()
@@ -1078,11 +1261,7 @@ fn pipeline(
             }),
             stencil: Default::default(),
             bias: if shadow {
-                wgpu::DepthBiasState {
-                    constant: -2,
-                    slope_scale: -1.5,
-                    clamp: 0.0,
-                }
+                shadow::BIAS
             } else {
                 Default::default()
             },

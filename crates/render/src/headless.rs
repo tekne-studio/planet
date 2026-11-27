@@ -33,20 +33,7 @@ impl Headless {
         let instance = wgpu::Instance::default();
         let gpu = pollster::block_on(Gpu::new(&instance, None))?;
         let renderer = Renderer::new(&gpu, FORMAT);
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("headless frame"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let texture = target(&gpu.device, [width, height]);
         Ok(Headless {
             gpu,
             renderer,
@@ -55,31 +42,20 @@ impl Headless {
         })
     }
 
+    /// Draws at another size from now on, holding all it holds.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.size = [width, height];
+        self.texture = target(&self.gpu.device, self.size);
+    }
+
     /// CPU submission plus GPU completion, without readback or PNG encoding.
     /// Warm up first. This is a fixed-scene diagnostic, not interactive FPS.
     pub fn measure(&mut self, frame: &Frame, count: usize) -> (f64, f64) {
         let count = count.max(1);
-        let target = self
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
         let mut elapsed = Vec::with_capacity(count);
         for index in 0..count + 8 {
             let start = std::time::Instant::now();
-            self.renderer.render(
-                frame,
-                &[View {
-                    camera: frame.camera,
-                    target: &target,
-                    size: self.size,
-                }],
-            );
-            self.gpu
-                .device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: None,
-                })
-                .expect("GPU completion");
+            self.draw(frame);
             if index >= 8 {
                 elapsed.push(start.elapsed().as_secs_f64() * 1000.0);
             }
@@ -89,6 +65,34 @@ impl Headless {
             elapsed[count / 2],
             elapsed[((count as f64 * 0.95) as usize).min(count - 1)],
         )
+    }
+
+    /// Renders the frame and waits for the GPU to finish it, and for what a
+    /// measure reads back of it.
+    pub fn draw(&mut self, frame: &Frame) {
+        let target = self
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.renderer.render(
+            frame,
+            &[View {
+                camera: frame.camera,
+                target: &target,
+                size: self.size,
+            }],
+        );
+        self.gpu
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("GPU completion");
+    }
+
+    /// The adapter it draws on.
+    pub fn adapter(&self) -> wgpu::AdapterInfo {
+        self.gpu.adapter.get_info()
     }
 
     /// Renders the frame and returns its pixels, RGBA8 sRGB, top row first.
@@ -184,6 +188,23 @@ impl Headless {
             .copied()
             .collect()
     }
+}
+
+fn target(device: &wgpu::Device, [width, height]: [u32; 2]) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("headless frame"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
 }
 
 pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {

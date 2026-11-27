@@ -201,6 +201,9 @@ pub fn run(shot: Shot) -> Result<(), String> {
         return crate::clouds::run(&mut client, shot.size, shot.boom_m, dir);
     }
     let mut headless = Headless::new(width, height)?;
+    if let Some(dir) = &shot.flora {
+        return crate::flora::run(&mut client, &mut headless, dir);
+    }
     if let Some(cabinet) = &shot.cabinet {
         crate::play::run(&mut client, &mut headless, cabinet)?;
         client.set_clock(shot.clock_s);

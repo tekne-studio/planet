@@ -73,13 +73,49 @@ pub struct Foliage {
     shapes: Vec<Option<Shape>>,
 }
 
-/// What one sight drew of the foliage: how many in each form, and the draws
-/// and triangles it took.
+/// What one gathering of foliage drew, in view or in a cascade of the sun's
+/// shadows: how many in each form, and the draws and triangles it took.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Counted {
     pub forms: [u32; FOLIAGE_FORMS],
     pub draws: u32,
     pub triangles: u64,
+}
+
+/// What the CPU spent placing one sight's foliage, milliseconds by the
+/// clock a measure lends: walking every instance of the patches drawn and
+/// choosing its forms, sorting each gathering by form, and writing the
+/// instances out to the GPU.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Spent {
+    pub gather_ms: f64,
+    pub sort_ms: f64,
+    pub write_ms: f64,
+}
+
+/// The instance buffer's layout and the mesh's, one for every pipeline that
+/// draws foliage.
+const VERTEX: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x4, 9 => Float32x3
+];
+const INSTANCE: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    4 => Float32x3, 5 => Float32x3, 6 => Float32x3, 7 => Float32x3, 8 => Float32,
+    10 => Float32x2
+];
+
+pub(crate) fn buffers() -> [Option<wgpu::VertexBufferLayout<'static>>; 2] {
+    [
+        Some(wgpu::VertexBufferLayout {
+            array_stride: size_of::<FoliageVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &VERTEX,
+        }),
+        Some(wgpu::VertexBufferLayout {
+            array_stride: size_of::<Instance>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &INSTANCE,
+        }),
+    ]
 }
 
 /// The foliage's shader, one source for both passes: `casting`, the sun's,
@@ -100,24 +136,7 @@ impl Foliage {
         shadow_layout: &wgpu::BindGroupLayout,
         format: wgpu::TextureFormat,
     ) -> Foliage {
-        let buffers = &[
-            Some(wgpu::VertexBufferLayout {
-                array_stride: size_of::<FoliageVertex>() as u64,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![
-                    0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4, 3 => Float32x4,
-                    9 => Float32x3
-                ],
-            }),
-            Some(wgpu::VertexBufferLayout {
-                array_stride: size_of::<Instance>() as u64,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![
-                    4 => Float32x3, 5 => Float32x3, 6 => Float32x3, 7 => Float32x3, 8 => Float32,
-                    10 => Float32x2
-                ],
-            }),
-        ];
+        let buffers = &buffers();
         let make = |layout: &wgpu::BindGroupLayout, surface: Surface, casting: bool| {
             let source = source(casting);
             pipeline(
@@ -174,7 +193,12 @@ impl Foliage {
     /// the centre of its space relative to the camera, and of the patches
     /// that cast, the foliage each cascade of the sun's shadows holds, each
     /// in the forms `effects` calls for at its distance. An instance naming
-    /// a shape the renderer does not hold is skipped.
+    /// a shape the renderer does not hold is skipped. With a `clock`, a
+    /// measure's, milliseconds, what each step spent is kept in `instances`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a sight's foliage and the clock that times it"
+    )]
     pub fn place<'a>(
         &self,
         device: &wgpu::Device,
@@ -186,7 +210,10 @@ impl Foliage {
             impl Iterator<Item = (Vec3, &'a [FoliageInstance])>,
             &[Mat4; CASCADES],
         )>,
+        clock: Option<fn() -> f64>,
     ) -> Placed {
+        let now = || clock.map_or(0.0, |clock| clock());
+        let start = now();
         let reach = Reach::new(effects);
         let mut sets = core::mem::take(&mut instances.sets);
         sets.iter_mut().for_each(Vec::clear);
@@ -227,9 +254,24 @@ impl Foliage {
                 }
             }
         }
-        let [view, cascades @ ..] = instances.write(device, queue, &mut sets);
+        let gathered = now();
+        // Cut leaves write depth and blend nothing: the order within a run
+        // draws the same picture.
+        for set in &mut sets {
+            set.sort_unstable_by_key(|(key, _)| *key);
+        }
+        let sorted = now();
+        let [view, cascades @ ..] = instances.write(device, queue, &sets);
+        instances.spent = Spent {
+            gather_ms: gathered - start,
+            sort_ms: sorted - gathered,
+            write_ms: now() - sorted,
+        };
         instances.sets = sets;
-        instances.counted = self.count(&view);
+        instances.counted[0] = self.count(&view, |mesh| &mesh.drawn);
+        for (counted, cascade) in instances.counted[1..].iter_mut().zip(&cascades) {
+            *counted = self.count(cascade, |mesh| &mesh.casts);
+        }
         Placed { view, cascades }
     }
 
@@ -254,16 +296,20 @@ impl Foliage {
         Some((shape, instance))
     }
 
-    /// What a gathering in view draws.
-    fn count(&self, gathered: &Gathered) -> Counted {
+    /// What a gathering draws, of each mesh the run of indices `run` says.
+    fn count(&self, gathered: &Gathered, run: impl Fn(&Mesh) -> &Range<u32>) -> Counted {
         let mut counted = Counted::default();
         for (key, placed) in &gathered.runs {
             let Some(mesh) = self.mesh(*key) else {
                 continue;
             };
+            let indices = run(mesh).len() as u64;
+            if indices == 0 {
+                continue;
+            }
             counted.forms[*key as usize % FOLIAGE_FORMS] += placed.len() as u32;
             counted.draws += 1;
-            counted.triangles += u64::from(mesh.drawn.len() as u32 / 3) * placed.len() as u64;
+            counted.triangles += indices / 3 * placed.len() as u64;
         }
         counted
     }
@@ -291,6 +337,33 @@ impl Foliage {
         self.draw_with(pass, &self.shadow_pipeline, instances, gathered, |mesh| {
             mesh.casts.clone()
         });
+    }
+
+    /// Draws the view's gathering, or with `cascade` that cascade's, all of
+    /// it or one `form`, with a pipeline of the foliage's layouts and
+    /// source: a measure's.
+    pub(crate) fn draw_by(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        pipeline: &wgpu::RenderPipeline,
+        instances: &Instances,
+        placed: &Placed,
+        cascade: Option<usize>,
+        form: Option<usize>,
+    ) {
+        let gathered = cascade.map_or(&placed.view, |cascade| &placed.cascades[cascade]);
+        let runs = gathered
+            .runs
+            .iter()
+            .filter(|(key, _)| form.is_none_or(|form| *key as usize % FOLIAGE_FORMS == form))
+            .cloned()
+            .collect();
+        let gathered = Gathered { runs };
+        let run = |mesh: &Mesh| match cascade {
+            None => mesh.drawn.clone(),
+            Some(_) => mesh.casts.clone(),
+        };
+        self.draw_with(pass, pipeline, instances, &gathered, run);
     }
 
     /// Draws a gathering, of each mesh the run of indices `run` says.
@@ -459,8 +532,10 @@ pub struct Instances {
     sets: [Vec<(u32, Instance)>; 1 + CASCADES],
     /// The last frame's instances as written, kept likewise.
     data: Vec<Instance>,
-    /// What the sight drew in view, the last frame.
-    pub counted: Counted,
+    /// What the sight drew the last frame, in view then in each cascade.
+    pub counted: [Counted; 1 + CASCADES],
+    /// What placing them spent, the last frame a measure timed.
+    pub spent: Spent,
 }
 
 impl Instances {
@@ -471,7 +546,8 @@ impl Instances {
             capacity,
             sets: Default::default(),
             data: Vec::new(),
-            counted: Counted::default(),
+            counted: Default::default(),
+            spent: Spent::default(),
         }
     }
 
@@ -484,13 +560,13 @@ impl Instances {
         })
     }
 
-    /// Writes each gathering by key, one after another, and says where
-    /// each key's run of each one is.
+    /// Writes each gathering, sorted by key, one after another, and says
+    /// where each key's run of each one is.
     fn write<const N: usize>(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        sets: &mut [Vec<(u32, Instance)>; N],
+        sets: &[Vec<(u32, Instance)>; N],
     ) -> [Gathered; N] {
         let total = sets.iter().map(Vec::len).sum::<usize>();
         if total > self.capacity {
@@ -499,10 +575,7 @@ impl Instances {
         }
         let data = &mut self.data;
         data.clear();
-        let gathered = sets.each_mut().map(|set| {
-            // Cut leaves write depth and blend nothing: the order within a
-            // run draws the same picture.
-            set.sort_unstable_by_key(|(key, _)| *key);
+        let gathered = sets.each_ref().map(|set| {
             let mut runs: Vec<(u32, Range<u32>)> = Vec::new();
             for &(key, instance) in set.iter() {
                 let at = data.len() as u32;
