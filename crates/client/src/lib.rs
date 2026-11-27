@@ -66,7 +66,7 @@ pub use carts::{GAME_LONGEST, GAME_WAITS_S, PADS, Running, UPDATES_PER_S};
 pub use cells::{Aim, Cells, Guide, Met, PALETTE, REACH_M, Refusal, Seat, Sight};
 pub use collision::BODY_M;
 use controller::Refused;
-pub use controller::{Built, Controller, GRAVITY_MPS2, LOOK_RAD_PER_PX, Wish};
+pub use controller::{Built, Controller, GRAVITY_MPS2, Wish};
 use controls::Controls;
 pub use controls::{Look, Pad};
 use figure::{Clips, Figure, Motion, Playing};

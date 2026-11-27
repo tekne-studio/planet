@@ -8,6 +8,7 @@
 //! by the name the web gives them.
 
 use crate::boom::ZOOM_PER_LINE;
+use crate::controller::LOOK_RAD_PER_PX;
 
 /// How far a stick is pushed, of its whole reach, when it runs: on foot,
 /// and on a mount at the pace sprint means.
@@ -250,6 +251,13 @@ impl Input {
         (self.stick != [0.0; 2]).then_some(self.stick[1])
     }
 
+    /// Turns the eye by angles, radians: right, and down, as the pointer's
+    /// motion that would.
+    pub fn look_by(&mut self, [right_rad, down_rad]: [f64; 2]) {
+        let [x, y] = [right_rad, down_rad].map(|rad| (rad / LOOK_RAD_PER_PX) as f32);
+        self.look = [self.look[0] + x, self.look[1] + y];
+    }
+
     /// Brings the eye nearer by a ratio, as two fingers spreading apart do:
     /// at two the eye is half as far, at a half twice as far.
     pub fn zoom_by(&mut self, ratio: f32) {
@@ -429,6 +437,18 @@ mod tests {
         input.zoom_by(0.0);
         input.zoom_by(f32::INFINITY);
         assert_eq!(input.take_frame().zoom, 0.0);
+    }
+
+    #[test]
+    fn an_angle_turns_the_eye_as_far_as_it_says() {
+        let mut input = Input::default();
+        input.look_by([0.3, -0.1]);
+        input.look_by([0.1, 0.0]);
+        let turned = input
+            .take_frame()
+            .look
+            .map(|px| f64::from(px) * LOOK_RAD_PER_PX);
+        assert!((turned[0] - 0.4).abs() < 1e-6 && (turned[1] + 0.1).abs() < 1e-6);
     }
 
     #[test]

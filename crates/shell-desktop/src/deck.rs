@@ -5,7 +5,7 @@
 //! lands it there and steps down from it, the body staying where it
 //! stepped down. The body's own eye, its boom drawn out to [`BOOM_M`],
 //! follows the pegasus, as a person beside it would; each picture is that
-//! eye (`watch`) and one [`NEAR`] the pegasus, inside what that eye sees
+//! eye (`watch`) and one [`NEAR_M`] from the pegasus, inside what that eye sees
 //! (`near`), since a frame draws only the ground its own eye sees. They are
 //! drawn as it is left and [`AT_S`] after, and every [`EVERY`] frames of
 //! the [`OFF_S`] from when it comes off the deck's edge walking home. Each
@@ -53,9 +53,13 @@ const OFF_M: f64 = 0.05;
 /// degrees.
 const BOOM_M: f64 = 24.0;
 const DOWN_DEG: f64 = 22.0;
-/// Near: how far from the pegasus the eye stands, how high over its feet,
-/// how far round from the body's eye, degrees, and how high it looks at.
-const NEAR: [f64; 4] = [7.0, 2.5, 40.0, 1.2];
+/// Near: how far from the pegasus the eye stands, metres, how high over
+/// its feet, metres, how far round from the body's eye, degrees, and how
+/// high over its feet it looks, metres.
+const NEAR_M: f64 = 7.0;
+const NEAR_HIGH_M: f64 = 2.5;
+const NEAR_ROUND_DEG: f64 = 40.0;
+const NEAR_LOOK_M: f64 = 1.2;
 
 /// Writes the frames into `dir`; `boom_m` is how long the body's boom is
 /// as the shot begins.
@@ -64,7 +68,7 @@ pub fn run(client: &mut Client, size: [u32; 2], boom_m: f64, dir: &Path) -> Resu
     let mut input = Input::default();
     // The boom drawn out and the eye looking down, before anything moves.
     input.zoom_by((boom_m / BOOM_M) as f32);
-    input.look = looking(client, None);
+    input.look_by(looking(client, None));
     tick(client, &mut input, 0.0);
     (input.zoom, input.look) = (0.0, [0.0; 2]);
     // A pegasus, taking off under its rider.
@@ -114,7 +118,7 @@ pub fn run(client: &mut Client, size: [u32; 2], boom_m: f64, dir: &Path) -> Resu
     let mut pegasus = drawn_at(client, number)?;
     for frame in 0..=(WATCHED_S * 60.0) as u32 {
         if frame > 0 {
-            input.look = looking(client, Some(pegasus.at));
+            input.look_by(looking(client, Some(pegasus.at)));
             tick(client, &mut input, 0.0);
             input.look = [0.0; 2];
             pegasus = drawn_at(client, number)?;
@@ -135,9 +139,9 @@ pub fn run(client: &mut Client, size: [u32; 2], boom_m: f64, dir: &Path) -> Resu
             let up = pegasus.at.normalize();
             let ahead = watch.camera.rotation * DVec3::NEG_Z;
             let ahead = (ahead - up * ahead.dot(up)).normalize_or(up.any_orthonormal_vector());
-            let [away, high, round, look] = NEAR;
-            let from = DQuat::from_axis_angle(up, round.to_radians()) * -ahead;
-            let (near, seen) = (pegasus.at + from * away + up * high, pegasus.at + up * look);
+            let from = DQuat::from_axis_angle(up, NEAR_ROUND_DEG.to_radians()) * -ahead;
+            let near = pegasus.at + from * NEAR_M + up * NEAR_HIGH_M;
+            let seen = pegasus.at + up * NEAR_LOOK_M;
             let pictures = [
                 ("watch", headless.render(&watch)),
                 ("near", picture(client, &mut headless, near, seen, up)),
@@ -168,9 +172,9 @@ pub fn run(client: &mut Client, size: [u32; 2], boom_m: f64, dir: &Path) -> Resu
     Ok(())
 }
 
-/// The pointer's motion that turns the body's eye [`DOWN_DEG`] down and,
-/// given `at`, toward it from the body.
-fn looking(client: &Client, at: Option<DVec3>) -> [f32; 2] {
+/// How far to turn the body's eye, radians, right and down: [`DOWN_DEG`]
+/// down and, given `at`, toward it from the body.
+fn looking(client: &Client, at: Option<DVec3>) -> [f64; 2] {
     let here = client.here();
     let pitch = here.pitch_deg.unwrap_or(0.0) + DOWN_DEG;
     let up = DVec3::from(client.up());
@@ -183,7 +187,7 @@ fn looking(client: &Client, at: Option<DVec3>) -> [f32; 2] {
             Some((bearing - here.bearing_deg?).rem_euclid(360.0))
         })
         .map_or(0.0, |turn| if turn > 180.0 { turn - 360.0 } else { turn });
-    [turn, pitch].map(|deg| (deg.to_radians() / client::LOOK_RAD_PER_PX) as f32)
+    [turn, pitch].map(f64::to_radians)
 }
 
 /// The animal a number names, as drawn this frame.

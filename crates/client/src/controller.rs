@@ -188,7 +188,7 @@ const EYE_SETTLE_PER_S: f64 = 16.0;
 /// still rises into the saddle in a second as the body mounts.
 const RIDING_PER_S: f64 = 3.0;
 /// How far a pixel of the pointer's motion turns the eye, radians.
-pub const LOOK_RAD_PER_PX: f64 = 0.0025;
+pub(crate) const LOOK_RAD_PER_PX: f64 = 0.0025;
 const PITCH_LIMIT: f64 = 1.45;
 const TURN_PER_S: f64 = 12.0;
 /// In a steered way the camera follows the heading. Turned by the pointer,
