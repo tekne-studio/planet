@@ -19,6 +19,7 @@ use crate::collision::{self, BODY_M, Footing, Held, STEP_M, Spine};
 use crate::hover::{self, Glide, Hover, Step};
 use crate::paces::{Ahead, Arc, Flight, Paces, Pacing, Reins};
 use crate::parts::Parts;
+use crate::seam::Mode;
 use crate::spring::{Follow, Spring};
 use crate::trunks::Trunks;
 use crate::way::{Profile, Steering};
@@ -89,29 +90,6 @@ pub(crate) fn held(
         built: built.and_then(|built| built.footing(generator, seat, point, feet_m)),
     }
 }
-
-/// A displacement on the planet, world space, as blocks along each
-/// address axis of a column of `grid`, `radius_m` from its centre.
-pub(crate) fn address_step(
-    grid: Grid,
-    point: SurfacePoint,
-    radius_m: f64,
-    delta: DVec3,
-) -> (f64, f64) {
-    let tangents = grid.tangents(point);
-    // Metres per block along each address axis, at this height.
-    let (tu, tv) = (
-        DVec3::from(tangents.du) * radius_m,
-        DVec3::from(tangents.dv) * radius_m,
-    );
-    // Solve `du * tu + dv * tv = delta` on the tangent plane. The axes are
-    // not orthogonal, so this is a 2x2 system, not two dot products.
-    let (a, b, c) = (tu.dot(tu), tu.dot(tv), tv.dot(tv));
-    let (p, q) = (tu.dot(delta), tv.dot(delta));
-    let det = a * c - b * b;
-    ((c * p - b * q) / det, (a * q - b * p) / det)
-}
-use crate::seam::Mode;
 
 const WALK_MPS: f64 = 4.8;
 /// Running is this much faster than walking; flying fast, than cruising.
@@ -2298,7 +2276,7 @@ impl Controller {
     /// address axis of the column the body is in, at its height.
     fn address_step(&self, delta: DVec3) -> (f64, f64) {
         let radius_m = self.sphere.radius_m() + self.height_m;
-        address_step(self.sphere.blocks(), self.point, radius_m, delta)
+        collision::address_step(self.sphere.blocks(), self.point, radius_m, delta)
     }
 
     /// The up a step measures height along, `height_m` changed by a move's

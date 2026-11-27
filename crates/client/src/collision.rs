@@ -186,6 +186,23 @@ pub fn steps_down(height_m: f64, floor_m: f64) -> bool {
     height_m - floor_m <= STEP_M
 }
 
+/// A displacement on the planet, world space, as blocks along each
+/// address axis of a column of `grid`, `radius_m` from its centre.
+pub fn address_step(grid: Grid, point: SurfacePoint, radius_m: f64, delta: DVec3) -> (f64, f64) {
+    let tangents = grid.tangents(point);
+    // Metres per block along each address axis, at this height.
+    let (tu, tv) = (
+        DVec3::from(tangents.du) * radius_m,
+        DVec3::from(tangents.dv) * radius_m,
+    );
+    // Solve `du * tu + dv * tv = delta` on the tangent plane. The axes are
+    // not orthogonal, so this is a 2x2 system, not two dot products.
+    let (a, b, c) = (tu.dot(tu), tu.dot(tv), tv.dot(tv));
+    let (p, q) = (tu.dot(delta), tv.dot(delta));
+    let det = a * c - b * b;
+    ((c * p - b * q) / det, (a * q - b * p) / det)
+}
+
 /// Whether a body turns where it stands from its spine `was` to its spine
 /// `will`, its middle on `seat`: each point admitted from where it was to
 /// where it swings, as a step admits it. `footing` reads what holds a
