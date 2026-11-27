@@ -293,6 +293,15 @@
 		}
 	}
 
+	// So is the day, and the world answers with the day: the one it took, or
+	// the one in force and why not. Until then no other length is asked.
+	let choosing = $state(false);
+
+	function chooseDay(minutes: number) {
+		choosing = true;
+		view?.command({ type: 'set_day', minutes });
+	}
+
 	// The address bar is where you are. What this page writes there as you
 	// move is where you already stand; what a hand puts there is somewhere to
 	// go: the link that brought you here, or a place pasted over it. The
@@ -462,9 +471,13 @@
 			ring = event.closed;
 		}
 		else if (event.type === 'stats') stats = event;
-		else if (event.type === 'day') day = event;
-		else if (event.type === 'session') {
+		else if (event.type === 'day') {
+			day = event;
+			choosing = false;
+		} else if (event.type === 'session') {
 			session = event.status;
+			// An ask on its way went with the link.
+			if (session !== 'online') choosing = false;
 			me = event.session;
 		} else if (event.type === 'peers') peers = event.peers;
 		else if (event.type === 'statement') spoken = event.plugins;
@@ -772,8 +785,9 @@
 				? {
 						minutes: day.minutes,
 						lengths: day.lengths,
-						busy: session !== 'online',
-						onchoose: (minutes) => view?.command({ type: 'set_day', minutes })
+						busy: session !== 'online' || choosing,
+						refused: day.refused,
+						onchoose: chooseDay
 					}
 				: undefined}
 			onclose={() => show(null)}

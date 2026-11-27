@@ -52,6 +52,7 @@ pub struct Stance {
 }
 /// What a client says first. Who it is was settled before: the key it was
 /// given on entering rides the socket URL, and a visitor comes as a guest.
+/// Its `protocol` stays as it is in every protocol, as Refused does.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Hello {
     /// The protocol this client speaks. Refused when it is not the server's.
@@ -88,13 +89,18 @@ pub struct Sound {
     pub seed: u32,
 }
 /// How long the world's day is, in minutes: the time the sun takes round.
-/// Up, an admin's op: the day is to be this long, one of `DayLength`; any
-/// other ask is dropped unheard. Down, to everyone here once it is: the sun
-/// is where the new length puts it, at once.
+/// Up, an admin's op: the day is to be this long, one of `DayLength`. Another
+/// level's ask, another length or the day in force is dropped unheard. Down,
+/// to everyone here once it is: the sun is where the new length puts it, at
+/// once; or to the asker alone, the day still in force and why the ask did
+/// not land.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Day {
     #[prost(uint32, tag="1")]
     pub minutes: u32,
+    /// Down to the asker alone; none up and to everyone.
+    #[prost(enumeration="DayRefusal", tag="2")]
+    pub refusal: i32,
 }
 /// An owner's message, carried by the server and never read by it. The server
 /// routes it by the owner's name and checks who may ask for `kind`; the
@@ -317,11 +323,13 @@ pub struct Relayed {
     #[prost(uint64, tag="5")]
     pub clock_ms: u64,
 }
-/// Sent instead of Welcome, then the socket closes.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+/// Sent instead of Welcome, then the socket closes. It stays as it is in
+/// every protocol, as Hello's `protocol` does, with its tag in ServerMessage:
+/// a client of any version reads why it was refused.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Refused {
-    #[prost(string, tag="1")]
-    pub reason: ::prost::alloc::string::String,
+    #[prost(enumeration="Refusal", tag="2")]
+    pub refusal: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServerMessage {
@@ -482,6 +490,11 @@ pub enum Limit {
     /// what a client spaced. One more is dropped, for every member alike.
     RelayPerSecond = 120,
     RelayBurst = 240,
+    /// A session asks for at most this many days in a window of
+    /// LIMIT_DAY_WINDOW_MS, each a write to the world folder. One more is
+    /// answered DAY_REFUSAL_RATE.
+    DayBurst = 3,
+    DayWindowMs = 10000,
 }
 impl Limit {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -499,6 +512,8 @@ impl Limit {
             Self::RelayBytes => "LIMIT_RELAY_BYTES",
             Self::RelayPerSecond => "LIMIT_RELAY_PER_SECOND",
             Self::RelayBurst => "LIMIT_RELAY_BURST",
+            Self::DayBurst => "LIMIT_DAY_BURST",
+            Self::DayWindowMs => "LIMIT_DAY_WINDOW_MS",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -513,6 +528,8 @@ impl Limit {
             "LIMIT_RELAY_BYTES" => Some(Self::RelayBytes),
             "LIMIT_RELAY_PER_SECOND" => Some(Self::RelayPerSecond),
             "LIMIT_RELAY_BURST" => Some(Self::RelayBurst),
+            "LIMIT_DAY_BURST" => Some(Self::DayBurst),
+            "LIMIT_DAY_WINDOW_MS" => Some(Self::DayWindowMs),
             _ => None,
         }
     }
@@ -556,6 +573,38 @@ impl DayLength {
         }
     }
 }
+/// Why an admin's ask for a day did not land.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DayRefusal {
+    None = 0,
+    /// Past LIMIT_DAY_BURST within LIMIT_DAY_WINDOW_MS: ask again later.
+    Rate = 1,
+    /// The world folder could not keep it.
+    Fault = 2,
+}
+impl DayRefusal {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::None => "DAY_REFUSAL_NONE",
+            Self::Rate => "DAY_REFUSAL_RATE",
+            Self::Fault => "DAY_REFUSAL_FAULT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DAY_REFUSAL_NONE" => Some(Self::None),
+            "DAY_REFUSAL_RATE" => Some(Self::Rate),
+            "DAY_REFUSAL_FAULT" => Some(Self::Fault),
+            _ => None,
+        }
+    }
+}
 /// What a session may do, as mundos says it for one entry. The order is the
 /// order of trust: a builder builds, an admin builds and founds the world.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -586,6 +635,43 @@ impl Level {
             "LEVEL_SIGNED_IN" => Some(Self::SignedIn),
             "LEVEL_BUILDER" => Some(Self::Builder),
             "LEVEL_ADMIN" => Some(Self::Admin),
+            _ => None,
+        }
+    }
+}
+/// Why a link was refused, a code a client acts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum Refusal {
+    None = 0,
+    /// The first frame was no Hello.
+    Hello = 1,
+    /// Hello's protocol is not the server's: this build never links to this
+    /// world, and a page reloads for the world's own.
+    Protocol = 2,
+    /// The world could not start: a later link may find it.
+    World = 3,
+}
+impl Refusal {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::None => "REFUSAL_NONE",
+            Self::Hello => "REFUSAL_HELLO",
+            Self::Protocol => "REFUSAL_PROTOCOL",
+            Self::World => "REFUSAL_WORLD",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "REFUSAL_NONE" => Some(Self::None),
+            "REFUSAL_HELLO" => Some(Self::Hello),
+            "REFUSAL_PROTOCOL" => Some(Self::Protocol),
+            "REFUSAL_WORLD" => Some(Self::World),
             _ => None,
         }
     }

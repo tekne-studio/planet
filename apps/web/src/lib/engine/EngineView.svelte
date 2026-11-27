@@ -3,6 +3,7 @@
 	import { Alert, Veil } from '$lib/ds';
 	import { t } from '$lib/i18n';
 	import { keep, kept } from '$lib/kept';
+	import { linkUp, reloadOnce } from './outdated';
 	import { DamagedField, fetchField } from '$lib/fields';
 	import { fieldId, type Recipe } from '$lib/world';
 	import type { Link } from '$lib/instance';
@@ -101,7 +102,7 @@
 	/** The engine's own life, before any world is asked of it. */
 	type Phase = 'loading' | 'ready' | 'missing' | 'unsupported' | 'failed';
 	/** What the veil says while it is down, and `running` once it lifts. */
-	type Status = Exclude<Phase, 'ready'> | 'shaping' | 'entering' | 'unshaped' | 'damaged' | 'refused' | 'running';
+	type Status = Exclude<Phase, 'ready'> | 'shaping' | 'entering' | 'outdated' | 'unshaped' | 'damaged' | 'refused' | 'running';
 
 	let canvas: HTMLCanvasElement | undefined = $state();
 	let engine = $state.raw<Engine>();
@@ -128,6 +129,11 @@
 	let damaged = $state(false);
 	/** The engine refused the recipe the page asked for. */
 	let refused = $state(false);
+	/**
+	 * The world refused this build's protocol: the page reloads for the
+	 * world's own build, or, once it has, asks a hand to.
+	 */
+	let outdated = $state<'reloading' | 'reload' | null>(null);
 	// The veil stays down until the picture is the world the page asked for,
 	// drawn: the engine builds a world of its own before the page's arrives,
 	// the page's waits on a fetch when a field shapes it, and its ground takes
@@ -135,17 +141,19 @@
 	const status = $derived<Status>(
 		phase !== 'ready'
 			? phase
-			: unshaped
-				? 'unshaped'
-				: damaged
-					? 'damaged'
-					: refused
-						? 'refused'
-						: fetching
-							? 'shaping'
-							: recipe && !(standing && settled && !homing)
-								? 'entering'
-								: 'running'
+			: outdated
+				? 'outdated'
+				: unshaped
+					? 'unshaped'
+					: damaged
+						? 'damaged'
+						: refused
+							? 'refused'
+							: fetching
+								? 'shaping'
+								: recipe && !(standing && settled && !homing)
+									? 'entering'
+									: 'running'
 	);
 	/** The word of the wait, while something is on its way. */
 	const wait = $derived(
@@ -257,6 +265,14 @@
 				retryMs = 1000;
 				clearTimeout(retry);
 				retry = undefined;
+				linkUp(() => sessionStorage);
+			}
+			// No link of this build comes up again: no retry, one reload.
+			if (event.status === 'outdated' && !outdated) {
+				clearTimeout(retry);
+				retry = undefined;
+				outdated = reloadOnce(() => sessionStorage) ? 'reloading' : 'reload';
+				if (outdated === 'reloading') location.reload();
 			}
 			if (event.status === 'offline' && linked && !retry) {
 				retry = setTimeout(() => connect(true), retryMs);
@@ -417,7 +433,9 @@
 </script>
 
 {#snippet alerts()}
-	{#if status === 'unshaped'}
+	{#if status === 'outdated'}
+		<Alert title={t('engine.outdated.title')}>{t(outdated === 'reloading' ? 'engine.outdated.reloading' : 'engine.outdated.reload')}</Alert>
+	{:else if status === 'unshaped'}
 		<Alert variant="danger" title={t('engine.unshaped.title')}>{t('engine.unshaped.body')}</Alert>
 	{:else if status === 'damaged'}
 		<Alert variant="danger" title={t('engine.damaged.title')}>{t('engine.damaged.body')}</Alert>

@@ -86,6 +86,9 @@ func (unfounded) Recipe(context.Context) (Recipe, error) {
 type kept struct {
 	mu      sync.Mutex
 	minutes uint32
+	// How many days were written, and whether the next write fails.
+	writes int
+	fail   bool
 }
 
 func (k *kept) DayMinutes() uint32 {
@@ -97,8 +100,24 @@ func (k *kept) DayMinutes() uint32 {
 func (k *kept) KeepDay(minutes uint32) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.fail {
+		return errors.New("the disk is full")
+	}
+	k.writes++
 	k.minutes = minutes
 	return nil
+}
+
+func (k *kept) failing(fail bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.fail = fail
+}
+
+func (k *kept) written() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.writes
 }
 
 func connect(t *testing.T, hub *Hub, hello *pb.Hello) *client {
@@ -343,8 +362,8 @@ func TestWhatIsRefused(t *testing.T) {
 	hub := NewHub(founded(recipe(t)), &kept{}, nil, nil)
 
 	old := connect(t, hub, &pb.Hello{Protocol: Protocol + 1})
-	if old.hear().GetRefused() == nil {
-		t.Fatal("another protocol is refused")
+	if refused := old.hear().GetRefused(); refused.GetRefusal() != pb.Refusal_REFUSAL_PROTOCOL {
+		t.Fatalf("another protocol is refused, as a code a client of any protocol reads: %v", refused)
 	}
 	if err := <-old.done; !errors.Is(err, ErrRefused) {
 		t.Fatalf("a refusal says so: %v", err)
@@ -356,8 +375,8 @@ func TestWhatIsRefused(t *testing.T) {
 
 	empty := NewHub(unfounded{}, &kept{}, nil, nil)
 	early := connect(t, empty, hello())
-	if refused := early.hear().GetRefused(); refused == nil || refused.Reason != ErrUnfounded.Error() {
-		t.Fatalf("a world with no recipe yet is refused: %v", refused)
+	if refused := early.hear().GetRefused(); refused.GetRefusal() != pb.Refusal_REFUSAL_WORLD {
+		t.Fatalf("a world with no recipe yet is refused, for a later link to find: %v", refused)
 	}
 	<-early.done
 	if empty.Active() {
@@ -800,11 +819,75 @@ func TestADayIsOneOfTheListedLengthsAndAnAdminsAlone(t *testing.T) {
 		t.Fatalf("a day of another length, or asked by another level, is dropped unheard: %v, kept %d", said, days.DayMinutes())
 	}
 	for _, minutes := range []uint32{24, 48, 120, 240} {
-		if !listedDay(minutes) {
+		if !ListedDay(minutes) {
 			t.Fatalf("%d minutes is a day an admin may choose", minutes)
 		}
 	}
 	admin.leave()
 	builder.leave()
+	visitor.leave()
+}
+
+func TestADayIsWrittenOnceAndAnAskThatDoesNotLandIsAnswered(t *testing.T) {
+	days := &kept{minutes: 48}
+	hub := NewHub(founded(recipe(t)), days, nil, nil)
+	admin := connectAs(t, hub, Identity{UserID: "a", Level: LevelAdmin}, hello())
+	admin.hear()
+	other := connectAs(t, hub, Identity{UserID: "o", Level: LevelAdmin}, hello())
+	other.hear()
+	visitor := connect(t, hub, hello())
+	visitor.hear()
+	heard := func(c *client) *pb.Day {
+		return c.hearUntil(func(m *pb.ServerMessage) bool { return m.GetDay() != nil }).GetDay()
+	}
+	// Two lengths in turn, each another than the day in force.
+	next := func(minutes uint32) uint32 {
+		if minutes == 120 {
+			return 240
+		}
+		return 120
+	}
+
+	admin.say(day(48))
+	admin.say(day(120))
+	if said := heard(visitor); said.GetMinutes() != 120 || days.written() != 1 {
+		t.Fatalf("an ask for the day in force writes nothing and says nothing: %v, %d writes", said, days.written())
+	}
+
+	inForce := uint32(120)
+	for range DayBurst - 1 {
+		inForce = next(inForce)
+		admin.say(day(inForce))
+	}
+	admin.say(day(next(inForce)))
+	for range DayBurst {
+		heard(admin)
+	}
+	if said := heard(admin); said.GetRefusal() != pb.DayRefusal_DAY_REFUSAL_RATE || said.GetMinutes() != inForce {
+		t.Fatalf("one past the session's burst is answered to it with the day in force: %v", said)
+	}
+
+	days.failing(true)
+	other.say(day(next(inForce)))
+	for range DayBurst {
+		heard(other)
+	}
+	if said := heard(other); said.GetRefusal() != pb.DayRefusal_DAY_REFUSAL_FAULT || said.GetMinutes() != inForce {
+		t.Fatalf("a day the folder fails to keep is answered to its asker with the day in force: %v", said)
+	}
+
+	days.failing(false)
+	other.say(day(48))
+	for range DayBurst - 1 {
+		heard(visitor)
+	}
+	if said := heard(visitor); said.GetMinutes() != 48 || said.GetRefusal() != pb.DayRefusal_DAY_REFUSAL_NONE {
+		t.Fatalf("what did not land is the asker's alone, and another session's burst is its own: %v", said)
+	}
+	if days.written() != DayBurst+1 {
+		t.Fatalf("each day that landed was written once: %d", days.written())
+	}
+	admin.leave()
+	other.leave()
 	visitor.leave()
 }

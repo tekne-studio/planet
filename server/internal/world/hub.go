@@ -87,15 +87,15 @@ func (h *Hub) Join(ctx context.Context, identity Identity, conn Conn) error {
 
 	hello, err := readHello(ctx, conn)
 	if err != nil {
-		return refuse(ctx, conn, err.Error())
+		return refuse(ctx, conn, pb.Refusal_REFUSAL_HELLO, err.Error())
 	}
 	if hello.Protocol != Protocol {
-		return refuse(ctx, conn, fmt.Sprintf("protocol %d, this server speaks %d", hello.Protocol, Protocol))
+		return refuse(ctx, conn, pb.Refusal_REFUSAL_PROTOCOL, fmt.Sprintf("protocol %d, this server speaks %d", hello.Protocol, Protocol))
 	}
 
 	a, err := h.actorFor(ctx)
 	if err != nil {
-		return refuse(ctx, conn, err.Error())
+		return refuse(ctx, conn, pb.Refusal_REFUSAL_WORLD, err.Error())
 	}
 	s := newSession(identity, hello.Avatar, cleanName(hello.Name), conn)
 	a.inbox <- inbound{kind: joinKind, session: s}
@@ -120,9 +120,11 @@ func readHello(ctx context.Context, conn Conn) (*pb.Hello, error) {
 	return hello, nil
 }
 
-func refuse(ctx context.Context, conn Conn, reason string) error {
+// refuse tells the client why, as a code it acts on, and closes the link;
+// the reason, a sentence, is the log's and the socket's close.
+func refuse(ctx context.Context, conn Conn, refusal pb.Refusal, reason string) error {
 	frame, _ := proto.Marshal(&pb.ServerMessage{
-		Message: &pb.ServerMessage_Refused{Refused: &pb.Refused{Reason: reason}},
+		Message: &pb.ServerMessage_Refused{Refused: &pb.Refused{Refusal: refusal}},
 	})
 	_ = conn.Write(ctx, frame)
 	_ = conn.Close(reason)

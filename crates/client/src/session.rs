@@ -145,7 +145,10 @@ impl Session {
     /// Asks the world for a day `minutes` long: an admin's op.
     pub fn day(&mut self, minutes: u32) {
         if self.online() {
-            self.say(client_message::Message::Day(protocol::Day { minutes }));
+            self.say(client_message::Message::Day(protocol::Day {
+                minutes,
+                ..Default::default()
+            }));
         }
     }
 

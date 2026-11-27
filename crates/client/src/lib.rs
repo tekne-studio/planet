@@ -102,8 +102,8 @@ pub use plugin::{Eye, Feet, Host, InWay, PartHit, Plugin, RELAY_BYTES, Relayed, 
 use plugin::{Lent, Plugins};
 pub use scene::{Effects, Frame, ToneMap};
 pub use seam::{
-    Anchor, Animal, Command, Event, Label, Level, Mode, PeerInfo, PetOf, PluginOn, Pointed,
-    SessionStatus, Waiting,
+    Anchor, Animal, Command, DayRefused, Event, Label, Level, Mode, PeerInfo, PetOf, PluginOn,
+    Pointed, SessionStatus, Waiting,
 };
 pub use session::Outbound;
 use session::Session;
@@ -313,10 +313,14 @@ pub struct Client {
     /// so every client shares one sky; offline it counts from the world's
     /// making. The sun, the moon and the weather are functions of it.
     clock_s: f64,
-    /// How long the world's day is, minutes: as its admin chose it online,
-    /// [`day::DEFAULT_MINUTES`] while none did and offline. The sun is the
-    /// clock over it ([`day::sun_angle`]).
+    /// How long the world's day is, minutes: as its admin chose it, through
+    /// a dropped link too; [`day::DEFAULT_MINUTES`] while none did and in
+    /// the offline preview. The sun is the clock over it
+    /// ([`day::sun_angle`]).
     day_minutes: u32,
+    /// A world refused this build's protocol: no link of this client comes
+    /// up again, so each drop says so ([`SessionStatus::Outdated`]).
+    outdated: bool,
     stats_timer_s: f64,
     frames_since_stats: u32,
     /// Whether the last frame hung anchors, so the first empty frame after
@@ -426,6 +430,7 @@ impl Client {
             clear_px: None,
             clock_s: 0.0,
             day_minutes: day::DEFAULT_MINUTES,
+            outdated: false,
             stats_timer_s: 0.0,
             frames_since_stats: 0,
             had_anchors: false,
@@ -441,7 +446,7 @@ impl Client {
         client
             .requests
             .ask(MANIFEST_PATH.to_owned(), Purpose::Manifest);
-        client.events.push(client.day_event());
+        client.events.push(client.day_event(None));
         client.events.push(Event::RecipeChanged {
             recipe: client.generator.recipe().clone(),
         });
@@ -564,24 +569,34 @@ impl Client {
     /// [`day::DEFAULT_MINUTES`]. The sun jumps to where the clock over the
     /// new length puts it.
     pub fn set_day(&mut self, minutes: u32) {
+        self.day_is(minutes, None);
+    }
+
+    /// The day the world says, and why this client's own ask did not land
+    /// when it says that.
+    fn day_is(&mut self, minutes: u32, refused: Option<DayRefused>) {
         self.day_minutes = match minutes {
             0 => day::DEFAULT_MINUTES,
             minutes => minutes,
         };
-        self.events.push(self.day_event());
+        self.events.push(self.day_event(refused));
     }
 
-    /// How long the day is, and the lengths an admin chooses among.
-    fn day_event(&self) -> Event {
+    /// How long the day is, the lengths an admin chooses among, and why an
+    /// ask did not land.
+    fn day_event(&self, refused: Option<DayRefused>) -> Event {
         Event::Day {
             minutes: self.day_minutes,
             lengths: protocol::DAY_LENGTHS.map(|length| length as u32).to_vec(),
+            refused,
         }
     }
 
     /// Asks the world for a day `minutes` long: an admin's op, one of the
     /// lengths [`Event::Day`] lists. The world says the new day to everyone
-    /// here, this client too, and the sun moves when it does.
+    /// here, this client too, and the sun moves when it does; or says to
+    /// this client alone why it did not land. The day in force is answered
+    /// at once, with nothing asked.
     fn ask_day(&mut self, minutes: u32) -> Result<(), String> {
         if !self.session.online() {
             return Err("the day is a world's, and no world is here".into());
@@ -598,7 +613,11 @@ impl Client {
                 protocol::DAY_LENGTHS.map(|length| length as u32)
             ));
         }
-        self.session.day(minutes);
+        if minutes == self.day_minutes {
+            self.events.push(self.day_event(None));
+        } else {
+            self.session.day(minutes);
+        }
         Ok(())
     }
 
@@ -2061,10 +2080,19 @@ impl Client {
                 }
             }
             Some(Message::Plugins(plugins)) => self.spoken(&plugins.plugins),
-            Some(Message::Day(day)) => self.set_day(day.minutes),
+            Some(Message::Day(day)) => {
+                let refused = match day.refusal() {
+                    protocol::DayRefusal::None => None,
+                    protocol::DayRefusal::Rate => Some(DayRefused::Rate),
+                    protocol::DayRefusal::Fault => Some(DayRefused::Fault),
+                };
+                self.day_is(day.minutes, refused);
+            }
             Some(Message::Refused(refused)) => {
+                let refusal = refused.refusal();
+                self.outdated |= refusal == protocol::Refusal::Protocol;
                 self.events.push(Event::Rejected {
-                    message: format!("refused by the server: {}", refused.reason),
+                    message: format!("refused by the server: {}", refusal.as_str_name()),
                 });
                 self.session.closed();
                 self.went_offline();
@@ -2107,7 +2135,11 @@ impl Client {
         self.peers.clear();
         self.dress_all();
         self.events.push(Event::Session {
-            status: SessionStatus::Offline,
+            status: if self.outdated {
+                SessionStatus::Outdated
+            } else {
+                SessionStatus::Offline
+            },
             session: None,
             level: self.level,
         });

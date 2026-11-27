@@ -3,10 +3,10 @@
 
 	// Where the body is, in one line of small white text at the top right,
 	// under the bar: the place, the hour there, the way it faces, how high
-	// and how fast. It
-	// floats on the world as the prompt's card does, on a dark translucent
-	// strip that reads over snow at noon and over the night. The place is
-	// how people tell each other where they are: a click copies it.
+	// and how fast. It floats on the world as the prompt's card does, on a
+	// dark translucent strip that reads over snow at noon and over the
+	// night. The place is how people tell each other where they are: a click
+	// copies it.
 	interface Props {
 		place: string;
 		/** The hour here, minutes past midnight; null on the moon, which keeps no clock. */

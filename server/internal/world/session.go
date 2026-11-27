@@ -24,8 +24,9 @@ type session struct {
 	// visitor gave. Changed by Rename.
 	name   string
 	stance *pb.Stance
-	// When the session sounded its last SoundBurst voices, oldest first.
-	sounded []time.Time
+	// When the session sounded its last voices, and asked its last days.
+	sounded window
+	dayed   window
 	// What the session may relay at once, refilled at RelayPerSecond up to
 	// RelayBurst, and when it was last refilled.
 	relayable float64
@@ -53,17 +54,33 @@ func newSession(identity Identity, avatar, name string, conn Conn) *session {
 	}
 }
 
+// window is when a session did one thing lately, oldest first: at most a
+// burst of times.
+type window []time.Time
+
+// allows says whether one more at `now` is taken: past `burst` within
+// `span` it is not, and is not counted.
+func (w *window) allows(now time.Time, burst int, span time.Duration) bool {
+	if len(*w) == burst {
+		if now.Sub((*w)[0]) < span {
+			return false
+		}
+		*w = (*w)[1:]
+	}
+	*w = append(*w, now)
+	return true
+}
+
 // sounds says whether a voice sounded at `now` is heard: one more past
 // SoundBurst within SoundWindow is not, and is not counted.
 func (s *session) sounds(now time.Time) bool {
-	if len(s.sounded) == SoundBurst {
-		if now.Sub(s.sounded[0]) < SoundWindow {
-			return false
-		}
-		s.sounded = s.sounded[1:]
-	}
-	s.sounded = append(s.sounded, now)
-	return true
+	return s.sounded.allows(now, SoundBurst, SoundWindow)
+}
+
+// asksDay says whether an ask for a day at `now` is taken: one more past
+// DayBurst within DayWindow is not, and is not counted.
+func (s *session) asksDay(now time.Time) bool {
+	return s.dayed.allows(now, DayBurst, DayWindow)
 }
 
 // relays says whether a payload relayed at `now` passes: one past the

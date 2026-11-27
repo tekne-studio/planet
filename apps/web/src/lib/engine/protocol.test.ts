@@ -57,7 +57,18 @@ describe('parseEvent', () => {
 			anchors: [{ session: 2, x: 0.5, y: 0.4, distance_m: 3 }]
 		});
 		expect(parseEvent('{"type":"palette","colors":["#f2f0eb"]}')).toEqual({ type: 'palette', colors: ['#f2f0eb'] });
-		expect(parseEvent('{"type":"day","minutes":24,"lengths":[24,48,120,240]}')).toEqual({ type: 'day', minutes: 24, lengths: [24, 48, 120, 240] });
+		expect(parseEvent('{"type":"day","minutes":24,"lengths":[24,48,120,240],"refused":"rate"}')).toEqual({
+			type: 'day',
+			minutes: 24,
+			lengths: [24, 48, 120, 240],
+			refused: 'rate'
+		});
+		expect(parseEvent('{"type":"session","status":"outdated","session":null,"level":"admin"}')).toEqual({
+			type: 'session',
+			status: 'outdated',
+			session: null,
+			level: 'admin'
+		});
 		// What building says is its plugin's, and the core no longer knows it.
 		expect(parseEvent('{"type":"tool_changed","tool":"paint","paint":4,"platform":16}')).toBeNull();
 	});

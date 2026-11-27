@@ -85,6 +85,14 @@ const (
 	RelayBurst     = float64(pb.Limit_LIMIT_RELAY_BURST)
 )
 
+// How many days a session asks for at once, as the schema says it: each
+// one that lands is a write to the world folder inside the actor, so a
+// burst keeps one client from stalling everyone's relays.
+const (
+	DayBurst  = int(pb.Limit_LIMIT_DAY_BURST)
+	DayWindow = time.Duration(pb.Limit_LIMIT_DAY_WINDOW_MS) * time.Millisecond
+)
+
 type inboundKind uint8
 
 const (
@@ -237,7 +245,7 @@ func (a *actor) handle(s *session, message *pb.ClientMessage) {
 	case *pb.ClientMessage_Relay:
 		a.pass(s, m.Relay, time.Now())
 	case *pb.ClientMessage_Day:
-		a.day(s, m.Day.GetMinutes())
+		a.day(s, m.Day.GetMinutes(), time.Now())
 	case *pb.ClientMessage_Sound:
 		voice := m.Sound.GetVoice()
 		if voice == "" || len(voice) > VoiceBytes || !s.sounds(time.Now()) {
@@ -255,22 +263,36 @@ func (a *actor) handle(s *session, message *pb.ClientMessage) {
 // lengths the schema lists, kept in the world folder and said to everyone
 // here, the asker too. The sun is the clock over the day, so it jumps at
 // once in every eye to where the new length puts it. An ask of another
-// level or another length is dropped unheard, as one the folder cannot keep.
-func (a *actor) day(s *session, minutes uint32) {
-	if s.identity.Level < LevelAdmin || !listedDay(minutes) {
+// level or another length is dropped unheard, as one the folder cannot
+// keep, and so is the day in force, before anything is written. One past
+// the session's burst, or one the folder fails to keep, is answered to the
+// asker alone with the day still in force and why.
+func (a *actor) day(s *session, minutes uint32, now time.Time) {
+	if s.identity.Level < LevelAdmin || !ListedDay(minutes) || minutes == a.hub.days.DayMinutes() {
+		return
+	}
+	refuse := func(refusal pb.DayRefusal) {
+		s.send(&pb.ServerMessage{Message: &pb.ServerMessage_Day{Day: &pb.Day{
+			Minutes: a.hub.days.DayMinutes(),
+			Refusal: refusal,
+		}}})
+	}
+	if !s.asksDay(now) {
+		refuse(pb.DayRefusal_DAY_REFUSAL_RATE)
 		return
 	}
 	if err := a.hub.days.KeepDay(minutes); err != nil {
 		log.Printf("day: %v", err)
+		refuse(pb.DayRefusal_DAY_REFUSAL_FAULT)
 		return
 	}
 	log.Printf("the day is %d minutes long, by %q", minutes, s.identity.UserID)
 	a.broadcast(&pb.ServerMessage{Message: &pb.ServerMessage_Day{Day: &pb.Day{Minutes: minutes}}}, nil)
 }
 
-// listedDay says whether a day of so many minutes is one an admin may
+// ListedDay says whether a day of so many minutes is one an admin may
 // choose: one of the lengths the schema lists.
-func listedDay(minutes uint32) bool {
+func ListedDay(minutes uint32) bool {
 	for _, length := range pb.DayLength_value {
 		if length != int32(pb.DayLength_DAY_LENGTH_NONE) && uint32(length) == minutes {
 			return true

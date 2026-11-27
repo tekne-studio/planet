@@ -257,6 +257,7 @@
 			<div class="row">
 				<Segmented options={speeds} value={speed} label="Movement" onselect={(value) => (speed = value)} />
 				<span class="muted">Selected: {speed}</span>
+				<Segmented options={speeds} value={speed} label="Movement, unavailable" disabled />
 			</div>
 		</section>
 

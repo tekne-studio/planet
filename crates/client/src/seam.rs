@@ -304,9 +304,12 @@ pub enum Event {
     },
     /// How long the world's day is, minutes, whenever that changes, and
     /// once at the start: `lengths` are the ones its admin chooses among.
+    /// `refused` is why this client's own ask did not land, the day in
+    /// force said again; none otherwise.
     Day {
         minutes: u32,
         lengths: Vec<u32>,
+        refused: Option<DayRefused>,
     },
     /// Who else is here, whenever that changes. Empty when offline.
     Peers {
@@ -480,6 +483,20 @@ pub enum SessionStatus {
     /// The socket is open and Welcome is awaited.
     Connecting,
     Online,
+    /// Offline for good: the world refused this build's protocol, so no
+    /// link of this client comes up again. A page reloads, once, for the
+    /// world's own build.
+    Outdated,
+}
+
+/// Why an admin's ask for a day did not land.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DayRefused {
+    /// Past the session's burst: ask again in a moment.
+    Rate,
+    /// The world could not keep it.
+    Fault,
 }
 
 /// Someone else in the world, as a front end lists them. The name is the

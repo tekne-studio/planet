@@ -13,19 +13,22 @@
 		/** Accessible name of the group. */
 		label: string;
 		name?: string;
+		/** No option can be picked now: nothing to choose from, or a choice on its way. */
+		disabled?: boolean;
 		onselect?: (value: T, event: MouseEvent) => void;
 	}
 
-	let { options, value, label, name, onselect }: Props = $props();
+	let { options, value, label, name, disabled = false, onselect }: Props = $props();
 </script>
 
-<div class="segmented" role="group" aria-label={label}>
+<div class="segmented" class:segmented--off={disabled} role="group" aria-label={label}>
 	{#each options as opt (opt.value)}
 		<button
 			type={name ? 'submit' : 'button'}
 			{name}
 			value={opt.value}
 			aria-pressed={opt.value === value}
+			{disabled}
 			onclick={(e) => onselect?.(opt.value, e)}
 		>
 			{#if opt.hint}<kbd>{opt.hint}</kbd>{/if}{opt.label}
@@ -51,7 +54,7 @@
 		text-transform: uppercase;
 		cursor: pointer;
 	}
-	button:hover {
+	button:not(:disabled):hover {
 		color: var(--text);
 	}
 	button[aria-pressed='true'] {
@@ -62,5 +65,13 @@
 	kbd {
 		margin-right: var(--sp-2);
 		opacity: 0.55;
+	}
+	/* The group fades whole, its frame too, as a disabled button does. */
+	.segmented--off {
+		opacity: 0.4;
+	}
+	/* Last: must win over the pressed option's cursor. */
+	.segmented--off button {
+		cursor: not-allowed;
 	}
 </style>

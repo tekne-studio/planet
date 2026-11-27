@@ -328,9 +328,10 @@ mod tests {
     /// under it, and so do the edges it draws.
     #[test]
     fn a_point_on_the_ground_holds_its_place_in_a_texel_as_the_sun_moves() {
-        // A world of 2^16 and its day of twenty minutes, a frame at 60 Hz.
+        // A world of 2^16 and the shortest day a world has, 24 minutes, its
+        // sun the fastest; a frame at 60 Hz.
         let radius_m = 20_860.0;
-        let per_frame = core::f64::consts::TAU / 1200.0 / 60.0;
+        let per_frame = core::f64::consts::TAU / (24.0 * 60.0) / 60.0;
         let start = 40.05 * STEP;
         let up = DVec3::new(start.cos(), 1.0, start.sin()).normalize();
         let ground = up * radius_m;

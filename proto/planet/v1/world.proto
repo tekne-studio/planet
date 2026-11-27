@@ -94,6 +94,11 @@ enum Limit {
   // what a client spaced. One more is dropped, for every member alike.
   LIMIT_RELAY_PER_SECOND = 120;
   LIMIT_RELAY_BURST = 240;
+  // A session asks for at most this many days in a window of
+  // LIMIT_DAY_WINDOW_MS, each a write to the world folder. One more is
+  // answered DAY_REFUSAL_RATE.
+  LIMIT_DAY_BURST = 3;
+  LIMIT_DAY_WINDOW_MS = 10000;
 }
 
 // The lengths of a day a world's admin chooses among, in minutes: numbers of
@@ -110,6 +115,7 @@ enum DayLength {
 
 // What a client says first. Who it is was settled before: the key it was
 // given on entering rides the socket URL, and a visitor comes as a guest.
+// Its `protocol` stays as it is in every protocol, as Refused does.
 message Hello {
   // The protocol this client speaks. Refused when it is not the server's.
   uint32 protocol = 1;
@@ -139,11 +145,24 @@ message Sound {
 }
 
 // How long the world's day is, in minutes: the time the sun takes round.
-// Up, an admin's op: the day is to be this long, one of `DayLength`; any
-// other ask is dropped unheard. Down, to everyone here once it is: the sun
-// is where the new length puts it, at once.
+// Up, an admin's op: the day is to be this long, one of `DayLength`. Another
+// level's ask, another length or the day in force is dropped unheard. Down,
+// to everyone here once it is: the sun is where the new length puts it, at
+// once; or to the asker alone, the day still in force and why the ask did
+// not land.
 message Day {
   uint32 minutes = 1;
+  // Down to the asker alone; none up and to everyone.
+  DayRefusal refusal = 2;
+}
+
+// Why an admin's ask for a day did not land.
+enum DayRefusal {
+  DAY_REFUSAL_NONE = 0;
+  // Past LIMIT_DAY_BURST within LIMIT_DAY_WINDOW_MS: ask again later.
+  DAY_REFUSAL_RATE = 1;
+  // The world folder could not keep it.
+  DAY_REFUSAL_FAULT = 2;
 }
 
 // An owner's message, carried by the server and never read by it. The server
@@ -317,9 +336,25 @@ message Relayed {
   uint64 clock_ms = 5;
 }
 
-// Sent instead of Welcome, then the socket closes.
+// Sent instead of Welcome, then the socket closes. It stays as it is in
+// every protocol, as Hello's `protocol` does, with its tag in ServerMessage:
+// a client of any version reads why it was refused.
 message Refused {
-  string reason = 1;
+  reserved 1;
+  reserved "reason";
+  Refusal refusal = 2;
+}
+
+// Why a link was refused, a code a client acts on.
+enum Refusal {
+  REFUSAL_NONE = 0;
+  // The first frame was no Hello.
+  REFUSAL_HELLO = 1;
+  // Hello's protocol is not the server's: this build never links to this
+  // world, and a page reloads for the world's own.
+  REFUSAL_PROTOCOL = 2;
+  // The world could not start: a later link may find it.
+  REFUSAL_WORLD = 3;
 }
 
 message ServerMessage {

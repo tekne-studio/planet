@@ -2,7 +2,7 @@
 //! chose, so every client that hears one world draws one sun, and the admin
 //! changes the length by one command a person and an agent send alike.
 
-use client::{Client, Command, Event, Input, Outbound, Recipe, day};
+use client::{Client, Command, DayRefused, Event, Input, Outbound, Recipe, day};
 use protocol::{Message, client_message, server_message};
 
 fn server(message: server_message::Message) -> Vec<u8> {
@@ -40,7 +40,10 @@ fn welcomed(level: protocol::Level, clock_ms: u64, day_minutes: u32) -> Client {
 }
 
 fn day_said(minutes: u32) -> Vec<u8> {
-    server(server_message::Message::Day(protocol::Day { minutes }))
+    server(server_message::Message::Day(protocol::Day {
+        minutes,
+        ..Default::default()
+    }))
 }
 
 /// Where the sun is now, as the frame draws it.
@@ -90,6 +93,7 @@ fn offline_the_day_is_twenty_four_minutes() {
         events.contains(&Event::Day {
             minutes: day::DEFAULT_MINUTES,
             lengths: vec![24, 48, 120, 240],
+            refused: None,
         }),
         "the day is said first, with the lengths to choose among"
     );
@@ -186,6 +190,43 @@ fn the_day_is_the_world_admin_s_to_choose() {
         );
     }
     assert!(asked(&mut admin).is_empty(), "and nothing goes out for one");
+}
+
+/// The day in force is answered at once and asks the world nothing; an ask
+/// the world did not take comes back to the asker alone, the day still in
+/// force and why.
+#[test]
+fn an_ask_that_does_not_land_is_answered() {
+    let mut admin = welcomed(protocol::Level::Admin, 0, 48);
+    admin.drain_events();
+    admin.command(Command::SetDay { minutes: 48 });
+    assert_eq!(
+        days(&admin.drain_events()),
+        [48],
+        "the day in force is answered at once"
+    );
+    assert!(asked(&mut admin).is_empty(), "with nothing asked");
+
+    admin.command(Command::SetDay { minutes: 120 });
+    assert_eq!(asked(&mut admin), [120]);
+    for (refusal, refused) in [
+        (protocol::DayRefusal::Rate, DayRefused::Rate),
+        (protocol::DayRefusal::Fault, DayRefused::Fault),
+    ] {
+        admin.receive(&server(server_message::Message::Day(protocol::Day {
+            minutes: 48,
+            refusal: refusal.into(),
+        })));
+        assert!(admin.drain_events().contains(&Event::Day {
+            minutes: 48,
+            lengths: vec![24, 48, 120, 240],
+            refused: Some(refused),
+        }));
+    }
+    assert_eq!(
+        serde_json::to_string(&DayRefused::Rate).unwrap(),
+        r#""rate""#
+    );
 }
 
 /// A command reads as JSON the way a front end and an agent send it.

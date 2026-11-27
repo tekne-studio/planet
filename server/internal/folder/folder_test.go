@@ -1,10 +1,13 @@
 package folder
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tekne-studio/planet/server/internal/world"
@@ -100,6 +103,26 @@ func TestTheDayIsKeptAsTheAdminChoseIt(t *testing.T) {
 	}
 	if _, err := Open(dir); err == nil {
 		t.Fatal("a day that does not read stops the server, as the other files do")
+	}
+}
+
+func TestAKeptDayOutsideTheListIsNoneChosenAndSaidSo(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "day.json"), []byte(`{"minutes":37}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var said bytes.Buffer
+	log.SetOutput(&said)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	kept, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minutes := kept.DayMinutes(); minutes != 0 {
+		t.Fatalf("a length the schema does not list opens as none chosen, which a client reads as its own day: %d", minutes)
+	}
+	if !strings.Contains(said.String(), "day.json keeps 37 minutes") {
+		t.Fatalf("and the log says what was kept: %q", said.String())
 	}
 }
 

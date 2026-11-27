@@ -196,6 +196,52 @@ fn leaving_and_losing_the_link_take_the_bodies_away() {
     assert_eq!(client.settled_frame().boxes.len(), 6);
 }
 
+/// A world of another protocol leaves this build outdated for good: every
+/// drop after says so, so a page reloads for the world's own build instead
+/// of linking again. Any other refusal is a drop like any.
+#[test]
+fn a_world_of_another_protocol_leaves_this_build_outdated() {
+    for (refusal, dropped) in [
+        (protocol::Refusal::Protocol, SessionStatus::Outdated),
+        (protocol::Refusal::World, SessionStatus::Offline),
+    ] {
+        let mut client = Client::new(Recipe::new(1)).unwrap();
+        client.drain_events();
+        client.link_opened();
+        client.receive(&server(server_message::Message::Refused(
+            protocol::Refused {
+                refusal: refusal.into(),
+            },
+        )));
+        client.link_closed();
+        client.link_opened();
+        client.link_closed();
+        let said: Vec<SessionStatus> = client
+            .drain_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::Session { status, .. } => Some(status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                SessionStatus::Connecting,
+                dropped,
+                dropped,
+                SessionStatus::Connecting,
+                dropped
+            ],
+            "{refusal:?}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_string(&SessionStatus::Outdated).unwrap(),
+        r#""outdated""#
+    );
+}
+
 #[test]
 fn the_stance_goes_out_when_it_changes_and_as_a_heartbeat() {
     let mut client = Client::new(Recipe::new(1)).unwrap();

@@ -306,7 +306,10 @@ export interface PluginOn {
 	version: number;
 }
 
-export type SessionStatus = 'offline' | 'connecting' | 'online';
+/** `outdated`: offline for good, the world refused this build's protocol; a page reloads once for the world's own. */
+export type SessionStatus = 'offline' | 'connecting' | 'online' | 'outdated';
+/** Why an admin's ask for a day did not land: past the session's burst, or the world could not keep it. */
+export type DayRefused = 'rate' | 'fault';
 
 /** Someone else in the world. The name is their own, or empty. */
 export interface PeerInfo {
@@ -366,7 +369,7 @@ export type EngineEvent =
 	/** Who else is here, whenever that changes. Empty when offline. */
 	| { type: 'peers'; peers: PeerInfo[] }
 	/** How long the world's day is, minutes, whenever that changes and once at the start; `lengths` are the ones its admin chooses among. */
-	| { type: 'day'; minutes: number; lengths: number[] }
+	| { type: 'day'; minutes: number; lengths: number[]; refused: DayRefused | null }
 	/** The plugins that are on in this world, whenever that changes. Empty when offline. */
 	| { type: 'statement'; plugins: PluginOn[] }
 	/** Every head in view, yours included, every frame while there is one and once empty after. */

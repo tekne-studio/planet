@@ -211,20 +211,27 @@ const (
 	// what a client spaced. One more is dropped, for every member alike.
 	Limit_LIMIT_RELAY_PER_SECOND Limit = 120
 	Limit_LIMIT_RELAY_BURST      Limit = 240
+	// A session asks for at most this many days in a window of
+	// LIMIT_DAY_WINDOW_MS, each a write to the world folder. One more is
+	// answered DAY_REFUSAL_RATE.
+	Limit_LIMIT_DAY_BURST     Limit = 3
+	Limit_LIMIT_DAY_WINDOW_MS Limit = 10000
 )
 
 // Enum value maps for Limit.
 var (
 	Limit_name = map[int32]string{
-		0:    "LIMIT_NONE",
-		32:   "LIMIT_WAY_BYTES",
-		24:   "LIMIT_HAND_BYTES",
-		16:   "LIMIT_VOICE_BYTES",
-		4:    "LIMIT_SOUND_BURST",
-		2000: "LIMIT_SOUND_WINDOW_MS",
-		4096: "LIMIT_RELAY_BYTES",
-		120:  "LIMIT_RELAY_PER_SECOND",
-		240:  "LIMIT_RELAY_BURST",
+		0:     "LIMIT_NONE",
+		32:    "LIMIT_WAY_BYTES",
+		24:    "LIMIT_HAND_BYTES",
+		16:    "LIMIT_VOICE_BYTES",
+		4:     "LIMIT_SOUND_BURST",
+		2000:  "LIMIT_SOUND_WINDOW_MS",
+		4096:  "LIMIT_RELAY_BYTES",
+		120:   "LIMIT_RELAY_PER_SECOND",
+		240:   "LIMIT_RELAY_BURST",
+		3:     "LIMIT_DAY_BURST",
+		10000: "LIMIT_DAY_WINDOW_MS",
 	}
 	Limit_value = map[string]int32{
 		"LIMIT_NONE":             0,
@@ -236,6 +243,8 @@ var (
 		"LIMIT_RELAY_BYTES":      4096,
 		"LIMIT_RELAY_PER_SECOND": 120,
 		"LIMIT_RELAY_BURST":      240,
+		"LIMIT_DAY_BURST":        3,
+		"LIMIT_DAY_WINDOW_MS":    10000,
 	}
 )
 
@@ -325,6 +334,58 @@ func (DayLength) EnumDescriptor() ([]byte, []int) {
 	return file_planet_v1_world_proto_rawDescGZIP(), []int{4}
 }
 
+// Why an admin's ask for a day did not land.
+type DayRefusal int32
+
+const (
+	DayRefusal_DAY_REFUSAL_NONE DayRefusal = 0
+	// Past LIMIT_DAY_BURST within LIMIT_DAY_WINDOW_MS: ask again later.
+	DayRefusal_DAY_REFUSAL_RATE DayRefusal = 1
+	// The world folder could not keep it.
+	DayRefusal_DAY_REFUSAL_FAULT DayRefusal = 2
+)
+
+// Enum value maps for DayRefusal.
+var (
+	DayRefusal_name = map[int32]string{
+		0: "DAY_REFUSAL_NONE",
+		1: "DAY_REFUSAL_RATE",
+		2: "DAY_REFUSAL_FAULT",
+	}
+	DayRefusal_value = map[string]int32{
+		"DAY_REFUSAL_NONE":  0,
+		"DAY_REFUSAL_RATE":  1,
+		"DAY_REFUSAL_FAULT": 2,
+	}
+)
+
+func (x DayRefusal) Enum() *DayRefusal {
+	p := new(DayRefusal)
+	*p = x
+	return p
+}
+
+func (x DayRefusal) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DayRefusal) Descriptor() protoreflect.EnumDescriptor {
+	return file_planet_v1_world_proto_enumTypes[5].Descriptor()
+}
+
+func (DayRefusal) Type() protoreflect.EnumType {
+	return &file_planet_v1_world_proto_enumTypes[5]
+}
+
+func (x DayRefusal) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DayRefusal.Descriptor instead.
+func (DayRefusal) EnumDescriptor() ([]byte, []int) {
+	return file_planet_v1_world_proto_rawDescGZIP(), []int{5}
+}
+
 // What a session may do, as mundos says it for one entry. The order is the
 // order of trust: a builder builds, an admin builds and founds the world.
 type Level int32
@@ -363,11 +424,11 @@ func (x Level) String() string {
 }
 
 func (Level) Descriptor() protoreflect.EnumDescriptor {
-	return file_planet_v1_world_proto_enumTypes[5].Descriptor()
+	return file_planet_v1_world_proto_enumTypes[6].Descriptor()
 }
 
 func (Level) Type() protoreflect.EnumType {
-	return &file_planet_v1_world_proto_enumTypes[5]
+	return &file_planet_v1_world_proto_enumTypes[6]
 }
 
 func (x Level) Number() protoreflect.EnumNumber {
@@ -376,7 +437,64 @@ func (x Level) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Level.Descriptor instead.
 func (Level) EnumDescriptor() ([]byte, []int) {
-	return file_planet_v1_world_proto_rawDescGZIP(), []int{5}
+	return file_planet_v1_world_proto_rawDescGZIP(), []int{6}
+}
+
+// Why a link was refused, a code a client acts on.
+type Refusal int32
+
+const (
+	Refusal_REFUSAL_NONE Refusal = 0
+	// The first frame was no Hello.
+	Refusal_REFUSAL_HELLO Refusal = 1
+	// Hello's protocol is not the server's: this build never links to this
+	// world, and a page reloads for the world's own.
+	Refusal_REFUSAL_PROTOCOL Refusal = 2
+	// The world could not start: a later link may find it.
+	Refusal_REFUSAL_WORLD Refusal = 3
+)
+
+// Enum value maps for Refusal.
+var (
+	Refusal_name = map[int32]string{
+		0: "REFUSAL_NONE",
+		1: "REFUSAL_HELLO",
+		2: "REFUSAL_PROTOCOL",
+		3: "REFUSAL_WORLD",
+	}
+	Refusal_value = map[string]int32{
+		"REFUSAL_NONE":     0,
+		"REFUSAL_HELLO":    1,
+		"REFUSAL_PROTOCOL": 2,
+		"REFUSAL_WORLD":    3,
+	}
+)
+
+func (x Refusal) Enum() *Refusal {
+	p := new(Refusal)
+	*p = x
+	return p
+}
+
+func (x Refusal) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Refusal) Descriptor() protoreflect.EnumDescriptor {
+	return file_planet_v1_world_proto_enumTypes[7].Descriptor()
+}
+
+func (Refusal) Type() protoreflect.EnumType {
+	return &file_planet_v1_world_proto_enumTypes[7]
+}
+
+func (x Refusal) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Refusal.Descriptor instead.
+func (Refusal) EnumDescriptor() ([]byte, []int) {
+	return file_planet_v1_world_proto_rawDescGZIP(), []int{7}
 }
 
 // Where a body is and how it moves: what presence carries, many times a
@@ -548,6 +666,7 @@ func (x *Stance) GetHand() string {
 
 // What a client says first. Who it is was settled before: the key it was
 // given on entering rides the socket URL, and a visitor comes as a guest.
+// Its `protocol` stays as it is in every protocol, as Refused does.
 type Hello struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The protocol this client speaks. Refused when it is not the server's.
@@ -758,12 +877,16 @@ func (x *Sound) GetSeed() uint32 {
 }
 
 // How long the world's day is, in minutes: the time the sun takes round.
-// Up, an admin's op: the day is to be this long, one of `DayLength`; any
-// other ask is dropped unheard. Down, to everyone here once it is: the sun
-// is where the new length puts it, at once.
+// Up, an admin's op: the day is to be this long, one of `DayLength`. Another
+// level's ask, another length or the day in force is dropped unheard. Down,
+// to everyone here once it is: the sun is where the new length puts it, at
+// once; or to the asker alone, the day still in force and why the ask did
+// not land.
 type Day struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Minutes       uint32                 `protobuf:"varint,1,opt,name=minutes,proto3" json:"minutes,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Minutes uint32                 `protobuf:"varint,1,opt,name=minutes,proto3" json:"minutes,omitempty"`
+	// Down to the asker alone; none up and to everyone.
+	Refusal       DayRefusal `protobuf:"varint,2,opt,name=refusal,proto3,enum=planet.v1.DayRefusal" json:"refusal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -803,6 +926,13 @@ func (x *Day) GetMinutes() uint32 {
 		return x.Minutes
 	}
 	return 0
+}
+
+func (x *Day) GetRefusal() DayRefusal {
+	if x != nil {
+		return x.Refusal
+	}
+	return DayRefusal_DAY_REFUSAL_NONE
 }
 
 // An owner's message, carried by the server and never read by it. The server
@@ -1981,10 +2111,12 @@ func (x *Relayed) GetClockMs() uint64 {
 	return 0
 }
 
-// Sent instead of Welcome, then the socket closes.
+// Sent instead of Welcome, then the socket closes. It stays as it is in
+// every protocol, as Hello's `protocol` does, with its tag in ServerMessage:
+// a client of any version reads why it was refused.
 type Refused struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	Refusal       Refusal                `protobuf:"varint,2,opt,name=refusal,proto3,enum=planet.v1.Refusal" json:"refusal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2019,11 +2151,11 @@ func (*Refused) Descriptor() ([]byte, []int) {
 	return file_planet_v1_world_proto_rawDescGZIP(), []int{23}
 }
 
-func (x *Refused) GetReason() string {
+func (x *Refused) GetRefusal() Refusal {
 	if x != nil {
-		return x.Reason
+		return x.Refusal
 	}
-	return ""
+	return Refusal_REFUSAL_NONE
 }
 
 type ServerMessage struct {
@@ -2315,9 +2447,10 @@ const file_planet_v1_world_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"1\n" +
 	"\x05Sound\x12\x14\n" +
 	"\x05voice\x18\x01 \x01(\tR\x05voice\x12\x12\n" +
-	"\x04seed\x18\x02 \x01(\rR\x04seed\"\x1f\n" +
+	"\x04seed\x18\x02 \x01(\rR\x04seed\"P\n" +
 	"\x03Day\x12\x18\n" +
-	"\aminutes\x18\x01 \x01(\rR\aminutes\"`\n" +
+	"\aminutes\x18\x01 \x01(\rR\aminutes\x12/\n" +
+	"\arefusal\x18\x02 \x01(\x0e2\x15.planet.v1.DayRefusalR\arefusal\"`\n" +
 	"\bEnvelope\x12\x16\n" +
 	"\x06plugin\x18\x01 \x01(\tR\x06plugin\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x18\n" +
@@ -2391,9 +2524,9 @@ const file_planet_v1_world_proto_rawDesc = "" +
 	"\x05thing\x18\x02 \x01(\x04R\x05thing\x12\x18\n" +
 	"\asession\x18\x03 \x01(\rR\asession\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\x12\x19\n" +
-	"\bclock_ms\x18\x05 \x01(\x04R\aclockMs\"!\n" +
-	"\aRefused\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"\xf8\x04\n" +
+	"\bclock_ms\x18\x05 \x01(\x04R\aclockMs\"E\n" +
+	"\aRefused\x12,\n" +
+	"\arefusal\x18\x02 \x01(\x0e2\x12.planet.v1.RefusalR\arefusalJ\x04\b\x01\x10\x02R\x06reason\"\xf8\x04\n" +
 	"\rServerMessage\x12.\n" +
 	"\awelcome\x18\x01 \x01(\v2\x12.planet.v1.WelcomeH\x00R\awelcome\x12+\n" +
 	"\x06joined\x18\x02 \x01(\v2\x11.planet.v1.JoinedH\x00R\x06joined\x12%\n" +
@@ -2423,7 +2556,7 @@ const file_planet_v1_world_proto_rawDesc = "" +
 	"\tGAIT_JUMP\x10\x03\x12\r\n" +
 	"\tGAIT_FALL\x10\x04\x12\f\n" +
 	"\bGAIT_FLY\x10\x05\x12\r\n" +
-	"\tGAIT_SWIM\x10\x06*\xd8\x01\n" +
+	"\tGAIT_SWIM\x10\x06*\x87\x02\n" +
 	"\x05Limit\x12\x0e\n" +
 	"\n" +
 	"LIMIT_NONE\x10\x00\x12\x13\n" +
@@ -2434,18 +2567,30 @@ const file_planet_v1_world_proto_rawDesc = "" +
 	"\x15LIMIT_SOUND_WINDOW_MS\x10\xd0\x0f\x12\x16\n" +
 	"\x11LIMIT_RELAY_BYTES\x10\x80 \x12\x1a\n" +
 	"\x16LIMIT_RELAY_PER_SECOND\x10x\x12\x16\n" +
-	"\x11LIMIT_RELAY_BURST\x10\xf0\x01*{\n" +
+	"\x11LIMIT_RELAY_BURST\x10\xf0\x01\x12\x13\n" +
+	"\x0fLIMIT_DAY_BURST\x10\x03\x12\x18\n" +
+	"\x13LIMIT_DAY_WINDOW_MS\x10\x90N*{\n" +
 	"\tDayLength\x12\x13\n" +
 	"\x0fDAY_LENGTH_NONE\x10\x00\x12\x14\n" +
 	"\x10DAY_LENGTH_OF_24\x10\x18\x12\x14\n" +
 	"\x10DAY_LENGTH_OF_48\x100\x12\x15\n" +
 	"\x11DAY_LENGTH_OF_120\x10x\x12\x16\n" +
-	"\x11DAY_LENGTH_OF_240\x10\xf0\x01*U\n" +
+	"\x11DAY_LENGTH_OF_240\x10\xf0\x01*O\n" +
+	"\n" +
+	"DayRefusal\x12\x14\n" +
+	"\x10DAY_REFUSAL_NONE\x10\x00\x12\x14\n" +
+	"\x10DAY_REFUSAL_RATE\x10\x01\x12\x15\n" +
+	"\x11DAY_REFUSAL_FAULT\x10\x02*U\n" +
 	"\x05Level\x12\x13\n" +
 	"\x0fLEVEL_ANONYMOUS\x10\x00\x12\x13\n" +
 	"\x0fLEVEL_SIGNED_IN\x10\x01\x12\x11\n" +
 	"\rLEVEL_BUILDER\x10\x02\x12\x0f\n" +
-	"\vLEVEL_ADMIN\x10\x03BBZ@github.com/tekne-studio/planet/server/internal/protocol;protocolb\x06proto3"
+	"\vLEVEL_ADMIN\x10\x03*W\n" +
+	"\aRefusal\x12\x10\n" +
+	"\fREFUSAL_NONE\x10\x00\x12\x11\n" +
+	"\rREFUSAL_HELLO\x10\x01\x12\x14\n" +
+	"\x10REFUSAL_PROTOCOL\x10\x02\x12\x11\n" +
+	"\rREFUSAL_WORLD\x10\x03BBZ@github.com/tekne-studio/planet/server/internal/protocol;protocolb\x06proto3"
 
 var (
 	file_planet_v1_world_proto_rawDescOnce sync.Once
@@ -2459,7 +2604,7 @@ func file_planet_v1_world_proto_rawDescGZIP() []byte {
 	return file_planet_v1_world_proto_rawDescData
 }
 
-var file_planet_v1_world_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_planet_v1_world_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
 var file_planet_v1_world_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_planet_v1_world_proto_goTypes = []any{
 	(Protocol)(0),         // 0: planet.v1.Protocol
@@ -2467,71 +2612,75 @@ var file_planet_v1_world_proto_goTypes = []any{
 	(Gait)(0),             // 2: planet.v1.Gait
 	(Limit)(0),            // 3: planet.v1.Limit
 	(DayLength)(0),        // 4: planet.v1.DayLength
-	(Level)(0),            // 5: planet.v1.Level
-	(*Stance)(nil),        // 6: planet.v1.Stance
-	(*Hello)(nil),         // 7: planet.v1.Hello
-	(*Wear)(nil),          // 8: planet.v1.Wear
-	(*Rename)(nil),        // 9: planet.v1.Rename
-	(*Sound)(nil),         // 10: planet.v1.Sound
-	(*Day)(nil),           // 11: planet.v1.Day
-	(*Envelope)(nil),      // 12: planet.v1.Envelope
-	(*Relay)(nil),         // 13: planet.v1.Relay
-	(*Answer)(nil),        // 14: planet.v1.Answer
-	(*ClientMessage)(nil), // 15: planet.v1.ClientMessage
-	(*Recipe)(nil),        // 16: planet.v1.Recipe
-	(*Peer)(nil),          // 17: planet.v1.Peer
-	(*Plugin)(nil),        // 18: planet.v1.Plugin
-	(*Welcome)(nil),       // 19: planet.v1.Welcome
-	(*Plugins)(nil),       // 20: planet.v1.Plugins
-	(*Joined)(nil),        // 21: planet.v1.Joined
-	(*Left)(nil),          // 22: planet.v1.Left
-	(*Wearing)(nil),       // 23: planet.v1.Wearing
-	(*Renamed)(nil),       // 24: planet.v1.Renamed
-	(*Sounded)(nil),       // 25: planet.v1.Sounded
-	(*Moved)(nil),         // 26: planet.v1.Moved
-	(*Stances)(nil),       // 27: planet.v1.Stances
-	(*Relayed)(nil),       // 28: planet.v1.Relayed
-	(*Refused)(nil),       // 29: planet.v1.Refused
-	(*ServerMessage)(nil), // 30: planet.v1.ServerMessage
+	(DayRefusal)(0),       // 5: planet.v1.DayRefusal
+	(Level)(0),            // 6: planet.v1.Level
+	(Refusal)(0),          // 7: planet.v1.Refusal
+	(*Stance)(nil),        // 8: planet.v1.Stance
+	(*Hello)(nil),         // 9: planet.v1.Hello
+	(*Wear)(nil),          // 10: planet.v1.Wear
+	(*Rename)(nil),        // 11: planet.v1.Rename
+	(*Sound)(nil),         // 12: planet.v1.Sound
+	(*Day)(nil),           // 13: planet.v1.Day
+	(*Envelope)(nil),      // 14: planet.v1.Envelope
+	(*Relay)(nil),         // 15: planet.v1.Relay
+	(*Answer)(nil),        // 16: planet.v1.Answer
+	(*ClientMessage)(nil), // 17: planet.v1.ClientMessage
+	(*Recipe)(nil),        // 18: planet.v1.Recipe
+	(*Peer)(nil),          // 19: planet.v1.Peer
+	(*Plugin)(nil),        // 20: planet.v1.Plugin
+	(*Welcome)(nil),       // 21: planet.v1.Welcome
+	(*Plugins)(nil),       // 22: planet.v1.Plugins
+	(*Joined)(nil),        // 23: planet.v1.Joined
+	(*Left)(nil),          // 24: planet.v1.Left
+	(*Wearing)(nil),       // 25: planet.v1.Wearing
+	(*Renamed)(nil),       // 26: planet.v1.Renamed
+	(*Sounded)(nil),       // 27: planet.v1.Sounded
+	(*Moved)(nil),         // 28: planet.v1.Moved
+	(*Stances)(nil),       // 29: planet.v1.Stances
+	(*Relayed)(nil),       // 30: planet.v1.Relayed
+	(*Refused)(nil),       // 31: planet.v1.Refused
+	(*ServerMessage)(nil), // 32: planet.v1.ServerMessage
 }
 var file_planet_v1_world_proto_depIdxs = []int32{
 	1,  // 0: planet.v1.Stance.body:type_name -> planet.v1.Body
 	2,  // 1: planet.v1.Stance.gait:type_name -> planet.v1.Gait
-	7,  // 2: planet.v1.ClientMessage.hello:type_name -> planet.v1.Hello
-	6,  // 3: planet.v1.ClientMessage.stance:type_name -> planet.v1.Stance
-	8,  // 4: planet.v1.ClientMessage.wear:type_name -> planet.v1.Wear
-	9,  // 5: planet.v1.ClientMessage.rename:type_name -> planet.v1.Rename
-	12, // 6: planet.v1.ClientMessage.envelope:type_name -> planet.v1.Envelope
-	10, // 7: planet.v1.ClientMessage.sound:type_name -> planet.v1.Sound
-	13, // 8: planet.v1.ClientMessage.relay:type_name -> planet.v1.Relay
-	11, // 9: planet.v1.ClientMessage.day:type_name -> planet.v1.Day
-	6,  // 10: planet.v1.Peer.stance:type_name -> planet.v1.Stance
-	16, // 11: planet.v1.Welcome.recipe:type_name -> planet.v1.Recipe
-	17, // 12: planet.v1.Welcome.peers:type_name -> planet.v1.Peer
-	5,  // 13: planet.v1.Welcome.level:type_name -> planet.v1.Level
-	18, // 14: planet.v1.Welcome.plugins:type_name -> planet.v1.Plugin
-	18, // 15: planet.v1.Plugins.plugins:type_name -> planet.v1.Plugin
-	17, // 16: planet.v1.Joined.peer:type_name -> planet.v1.Peer
-	6,  // 17: planet.v1.Moved.stance:type_name -> planet.v1.Stance
-	26, // 18: planet.v1.Stances.moved:type_name -> planet.v1.Moved
-	19, // 19: planet.v1.ServerMessage.welcome:type_name -> planet.v1.Welcome
-	21, // 20: planet.v1.ServerMessage.joined:type_name -> planet.v1.Joined
-	22, // 21: planet.v1.ServerMessage.left:type_name -> planet.v1.Left
-	27, // 22: planet.v1.ServerMessage.stances:type_name -> planet.v1.Stances
-	23, // 23: planet.v1.ServerMessage.wearing:type_name -> planet.v1.Wearing
-	29, // 24: planet.v1.ServerMessage.refused:type_name -> planet.v1.Refused
-	24, // 25: planet.v1.ServerMessage.renamed:type_name -> planet.v1.Renamed
-	12, // 26: planet.v1.ServerMessage.envelope:type_name -> planet.v1.Envelope
-	20, // 27: planet.v1.ServerMessage.plugins:type_name -> planet.v1.Plugins
-	14, // 28: planet.v1.ServerMessage.answer:type_name -> planet.v1.Answer
-	25, // 29: planet.v1.ServerMessage.sounded:type_name -> planet.v1.Sounded
-	28, // 30: planet.v1.ServerMessage.relayed:type_name -> planet.v1.Relayed
-	11, // 31: planet.v1.ServerMessage.day:type_name -> planet.v1.Day
-	32, // [32:32] is the sub-list for method output_type
-	32, // [32:32] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	5,  // 2: planet.v1.Day.refusal:type_name -> planet.v1.DayRefusal
+	9,  // 3: planet.v1.ClientMessage.hello:type_name -> planet.v1.Hello
+	8,  // 4: planet.v1.ClientMessage.stance:type_name -> planet.v1.Stance
+	10, // 5: planet.v1.ClientMessage.wear:type_name -> planet.v1.Wear
+	11, // 6: planet.v1.ClientMessage.rename:type_name -> planet.v1.Rename
+	14, // 7: planet.v1.ClientMessage.envelope:type_name -> planet.v1.Envelope
+	12, // 8: planet.v1.ClientMessage.sound:type_name -> planet.v1.Sound
+	15, // 9: planet.v1.ClientMessage.relay:type_name -> planet.v1.Relay
+	13, // 10: planet.v1.ClientMessage.day:type_name -> planet.v1.Day
+	8,  // 11: planet.v1.Peer.stance:type_name -> planet.v1.Stance
+	18, // 12: planet.v1.Welcome.recipe:type_name -> planet.v1.Recipe
+	19, // 13: planet.v1.Welcome.peers:type_name -> planet.v1.Peer
+	6,  // 14: planet.v1.Welcome.level:type_name -> planet.v1.Level
+	20, // 15: planet.v1.Welcome.plugins:type_name -> planet.v1.Plugin
+	20, // 16: planet.v1.Plugins.plugins:type_name -> planet.v1.Plugin
+	19, // 17: planet.v1.Joined.peer:type_name -> planet.v1.Peer
+	8,  // 18: planet.v1.Moved.stance:type_name -> planet.v1.Stance
+	28, // 19: planet.v1.Stances.moved:type_name -> planet.v1.Moved
+	7,  // 20: planet.v1.Refused.refusal:type_name -> planet.v1.Refusal
+	21, // 21: planet.v1.ServerMessage.welcome:type_name -> planet.v1.Welcome
+	23, // 22: planet.v1.ServerMessage.joined:type_name -> planet.v1.Joined
+	24, // 23: planet.v1.ServerMessage.left:type_name -> planet.v1.Left
+	29, // 24: planet.v1.ServerMessage.stances:type_name -> planet.v1.Stances
+	25, // 25: planet.v1.ServerMessage.wearing:type_name -> planet.v1.Wearing
+	31, // 26: planet.v1.ServerMessage.refused:type_name -> planet.v1.Refused
+	26, // 27: planet.v1.ServerMessage.renamed:type_name -> planet.v1.Renamed
+	14, // 28: planet.v1.ServerMessage.envelope:type_name -> planet.v1.Envelope
+	22, // 29: planet.v1.ServerMessage.plugins:type_name -> planet.v1.Plugins
+	16, // 30: planet.v1.ServerMessage.answer:type_name -> planet.v1.Answer
+	27, // 31: planet.v1.ServerMessage.sounded:type_name -> planet.v1.Sounded
+	30, // 32: planet.v1.ServerMessage.relayed:type_name -> planet.v1.Relayed
+	13, // 33: planet.v1.ServerMessage.day:type_name -> planet.v1.Day
+	34, // [34:34] is the sub-list for method output_type
+	34, // [34:34] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_planet_v1_world_proto_init() }
@@ -2569,7 +2718,7 @@ func file_planet_v1_world_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_planet_v1_world_proto_rawDesc), len(file_planet_v1_world_proto_rawDesc)),
-			NumEnums:      6,
+			NumEnums:      8,
 			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   0,

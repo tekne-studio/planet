@@ -13,8 +13,8 @@ use core::f64::consts::TAU;
 
 use glam::DVec3;
 
-/// The day of a world whose admin never chose one, and of every world
-/// offline: minutes the sun takes round.
+/// The day of a world whose admin never chose one, and of the offline
+/// preview: minutes the sun takes round. A dropped link keeps the world's.
 pub const DEFAULT_MINUTES: u32 = 24;
 
 /// How far round its day the sun is when the world's clock reads zero,

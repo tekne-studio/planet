@@ -2,6 +2,7 @@
 	import { Checkbox, Knob, Knobs, LangSwitch, Panel, Segmented, Select, Slider, Tabs, panelId } from '$lib/ds';
 	import { t } from '$lib/i18n';
 	import { toneMaps, type Effects, type Loudness, type Presets, type ToneMap } from './index';
+	import type { DayRefused } from './protocol';
 	import { loudnessDefaults, markerKinds, matching, presetNames, type Game, type Picture, type PresetName } from './settings';
 
 	// Settings: one large panel in the middle of the screen, which the gear in the
@@ -10,11 +11,11 @@
 	// moment a knob leaves it, every knob in sight with the way back to its
 	// value in the preset last picked. Sound is how loud each group of what
 	// is heard is, under everything and a mute. Game is what floats over the
-	// world: the place line and the markers, by kind.
-	// Plugins, for who may switch them, with the length of the world's day,
-	// and the language. A front end only:
-	// it shows what the engine said is in force and asks for changes, which
-	// the engine clamps and answers; the stage keeps the choices.
+	// world: the place line and the markers, by kind. Plugins, for who may
+	// switch them, with the length of the world's day; and the language. A
+	// front end only: it shows what the engine said is in force and asks for
+	// changes, which the engine clamps and answers; the stage keeps the
+	// choices.
 	interface Switches {
 		list: readonly { name: string; label: () => string }[];
 		on: (name: string) => boolean;
@@ -27,8 +28,10 @@
 		minutes: number;
 		/** The lengths to choose among, minutes. */
 		lengths: readonly number[];
-		/** Offline: no length can be chosen. */
+		/** Offline, or a length on its way: none can be chosen. */
 		busy: boolean;
+		/** Why the last length asked did not land; null otherwise. */
+		refused: DayRefused | null;
 		onchoose: (minutes: number) => void;
 	}
 	interface Props {
@@ -326,9 +329,13 @@
 							options={day.lengths.map((minutes) => ({ value: String(minutes), label: length(minutes) }))}
 							value={String(day.minutes)}
 							label={t('engine.day')}
-							onselect={(value) => !day.busy && Number(value) !== day.minutes && day.onchoose(Number(value))}
+							disabled={day.busy}
+							onselect={(value) => Number(value) !== day.minutes && day.onchoose(Number(value))}
 						/>
 						<p class="note">{t('engine.day.note')}</p>
+						{#if day.refused}
+							<p class="refused" role="status">{t(`engine.day.refused.${day.refused}`)}</p>
+						{/if}
 					</section>
 				{/if}
 			{:else if section === 'language'}
@@ -415,6 +422,9 @@
 	}
 	.note {
 		color: var(--text-muted);
+	}
+	.refused {
+		color: var(--danger);
 	}
 	@media (max-width: 640px) {
 		.body {

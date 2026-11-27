@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -77,6 +78,12 @@ func Open(dir string) (*Folder, error) {
 	}
 	if err := readChoice(dir, dayName, &f.day); err != nil {
 		return nil, err
+	}
+	// A length the schema no longer lists, or a hand's edit, is no day an
+	// admin chose: the world opens with none chosen, and says why.
+	if f.day.Minutes != 0 && !world.ListedDay(f.day.Minutes) {
+		log.Printf("world folder: %s keeps %d minutes, not a listed length: the day is none chosen", dayName, f.day.Minutes)
+		f.day = day{}
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, fileName))
 	if errors.Is(err, fs.ErrNotExist) {
