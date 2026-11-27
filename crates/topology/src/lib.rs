@@ -26,7 +26,9 @@ pub mod vec3;
 
 pub use address::{Address, Column, Step};
 pub use grid::{Grid, MAX_BITS};
-pub use place::{CODE_MAX, Place, PlaceError, bearing_deg, code, place};
+pub use place::{
+    CODE_MAX, Place, PlaceError, at_lat_lon, bearing_deg, code, latitude_deg, longitude_deg, place,
+};
 pub use project::Tangents;
 pub use quad_sphere::{MIN_BITS, QuadSphere};
 pub use sector::{Dir, Sector};

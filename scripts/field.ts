@@ -57,8 +57,9 @@ const RUGGED_STEP = 16;
  * draws it, and that frame is a mirror of the body's: baked straight in, a map
  * comes out east for west, and the Italian boot points the wrong way. One sign,
  * in one place, used by everything here that turns a latitude and a longitude
- * into a direction. `crates/worldgen/tests/earth.rs` carries the same sign,
- * and says why a test cannot be what checks it.
+ * into a direction. The engine reads places by the same sign
+ * (`topology::at_lat_lon`), and `crates/worldgen/tests/earth.rs` holds the bake
+ * to that reading, and says why a test cannot be what checks the sign.
  */
 const EAST = -1;
 const SECTOR_SIDE = 65536;

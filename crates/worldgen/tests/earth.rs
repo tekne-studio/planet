@@ -17,18 +17,16 @@ fn earth() -> Generator {
     Generator::with_field(recipe, field).expect("the field the recipe names")
 }
 
-/// The unit vector our world puts a latitude and longitude at. North is `+y`
-/// and the prime meridian is `+x`; east turns toward `-z`, because the frame
-/// the engine draws in is a mirror of the body's and a map baked straight in
-/// comes out east for west. The sign lives in `scripts/field.ts` as `EAST`.
+/// The unit vector our world puts a latitude and longitude at: topology's,
+/// the one the engine reads places by.
 ///
-/// It is the same sign the bake uses, so this file cannot be what checks it:
-/// sharing a convention with the bake is exactly what makes it agree. What it
-/// does catch is the bake and the reading drifting apart, which is what put
-/// the first bake upside down. Only looking at the planet catches the sign.
+/// It is the same sign the bake uses (`scripts/field.ts`, `EAST`), so this
+/// file cannot be what checks it: sharing a convention with the bake is
+/// exactly what makes it agree. What it does catch is the bake and the
+/// reading drifting apart, which is what put the first bake upside down. Only
+/// looking at the planet catches the sign.
 fn at(lat_deg: f64, lon_deg: f64) -> [f64; 3] {
-    let (lat, lon) = (lat_deg.to_radians(), lon_deg.to_radians());
-    [lat.cos() * lon.cos(), lat.sin(), -lat.cos() * lon.sin()]
+    topology::at_lat_lon(lat_deg, lon_deg)
 }
 
 #[test]

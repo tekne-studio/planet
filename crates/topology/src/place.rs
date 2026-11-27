@@ -244,6 +244,38 @@ pub fn bearing_deg(up: Vec3, facing: Vec3) -> Option<f64> {
     })
 }
 
+/// The direction from a body's centre of a latitude and a longitude, degrees.
+///
+/// North is `+Y` and the prime meridian `+X`; east turns toward `-Z`, the way
+/// [`bearing_deg`] reads east, because the frame the engine draws in is a
+/// mirror of the body's and a map laid straight in comes out east for west.
+/// A field's bake lays its source body by this same frame, so on a world
+/// shaped by the Earth a latitude and a longitude are the Earth's, and a
+/// generated world reads its own by the same convention.
+pub fn at_lat_lon(lat_deg: f64, lon_deg: f64) -> Vec3 {
+    let (lat, lon) = (lat_deg.to_radians(), lon_deg.to_radians());
+    [
+        libm::cos(lat) * libm::cos(lon),
+        libm::sin(lat),
+        -libm::cos(lat) * libm::sin(lon),
+    ]
+}
+
+/// Degrees north of the equator, `-90..=90`, of the point whose local up is
+/// `up`: the inverse of [`at_lat_lon`]. It need not be unit.
+pub fn latitude_deg(up: Vec3) -> f64 {
+    let up = vec3::normalize(up);
+    libm::asin(up[1].clamp(-1.0, 1.0)).to_degrees()
+}
+
+/// Degrees east of the prime meridian, `-180..=180`, of the point whose local
+/// up is `up`: the inverse of [`at_lat_lon`]. `None` at a pole, where every
+/// meridian meets.
+pub fn longitude_deg(up: Vec3) -> Option<f64> {
+    let up = vec3::normalize(up);
+    (libm::hypot(up[0], up[2]) >= POLE_EPSILON).then(|| libm::atan2(-up[2], up[0]).to_degrees())
+}
+
 fn value_of(c: char) -> Option<u32> {
     ALPHABET
         .iter()
@@ -278,6 +310,36 @@ mod tests {
 
     fn grid(bits: u32) -> Grid {
         Grid::new(bits).expect("a grid")
+    }
+
+    #[test]
+    fn a_latitude_and_a_longitude_read_back() {
+        for lat in [-89.0, -45.0, -10.0, 0.0, 30.0, 60.0, 89.0] {
+            for lon in [-179.0, -90.0, -7.5, 0.0, 7.5, 45.0, 135.0, 180.0] {
+                let up = at_lat_lon(lat, lon);
+                assert!((vec3::length(up) - 1.0).abs() < 1e-12);
+                assert!((latitude_deg(up) - lat).abs() < 1e-9, "{lat} {lon}");
+                let back = longitude_deg(up).expect("off the poles");
+                let off = (back - lon).rem_euclid(360.0);
+                assert!(off.min(360.0 - off) < 1e-9, "{lat} {lon}: {back}");
+            }
+        }
+        assert_eq!(
+            longitude_deg([0.0, 3.0, 0.0]),
+            None,
+            "every meridian meets at a pole"
+        );
+    }
+
+    /// East on the map is east on the ground: a step of longitude bears 90°.
+    #[test]
+    fn east_on_the_map_is_east_underfoot() {
+        for (lat, lon) in [(0.0, 0.0), (40.0, 12.0), (-33.0, -70.0)] {
+            let up = at_lat_lon(lat, lon);
+            let ahead = vec3::sub(at_lat_lon(lat, lon + 0.01), up);
+            let bearing = bearing_deg(up, ahead).expect("off the poles");
+            assert!((bearing - 90.0).abs() < 0.01, "{lat} {lon}: {bearing}");
+        }
     }
 
     #[test]
