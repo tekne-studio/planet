@@ -62,6 +62,14 @@ const SWAY: f32 = 0.0385;
 const GUST_PEAK: f32 = 1.1;
 // How wide the leaves of a mass's rim read, metres.
 const LEAF_M: f32 = 0.45;
+// Where a card's rim stands, a share of its half side, and how far its wave,
+// its leaves and its twigs move it; never out to the card's square, whose
+// side would cut it straight.
+const RIM: f32 = 0.82;
+const RIM_WAVE: f32 = 0.04;
+const RIM_LEAVES: f32 = 0.2;
+const RIM_TWIGS: f32 = 0.12;
+const RIM_MOST: f32 = 0.97;
 // How much of a leaf's normal is its crown's, the rest its mass's: the crown
 // shades as one body, and its masses still round.
 const CROWN: f32 = 0.35;
@@ -218,14 +226,24 @@ fn drawn(relative: vec3<f32>, placed: vec4<f32>) -> bool {
 // mass, seen only far, is rounder.
 fn inside(uv: vec2<f32>, seed: f32, what: f32, half_m: f32) -> bool {
     let d = length(uv);
+    let ragged = select(1.0, 0.45, what > MASS - 0.5);
+    // The rim's noise is looked up only where the rim can fall, most of a
+    // card being in or out whatever it says: a noise in 0..1 moves the rim
+    // by at most half its weight, a sine by all of its own, and a hair
+    // more covers the rounding.
+    let reach = (RIM_WAVE + 0.5 * (RIM_LEAVES + RIM_TWIGS)) * ragged + 1e-3;
+    if d < RIM - reach {
+        return true;
+    }
+    if d >= min(RIM + reach, RIM_MOST) {
+        return false;
+    }
     let a = atan2(uv.y, uv.x);
     let at = uv * half_m / LEAF_M;
     let leaves = value_noise(vec3<f32>(at, seed * 31.0), 1024) - 0.5;
     let twigs = value_noise(vec3<f32>(at * 2.7, seed * 17.0 + 5.0), 1024) - 0.5;
-    let leafy = 0.04 * sin(a * 5.0 + seed * 40.0) + 0.2 * leaves + 0.12 * twigs;
-    let ragged = select(1.0, 0.45, what > MASS - 0.5);
-    // Never out to the card's square, whose side would cut it straight.
-    return d < min(0.82 + leafy * ragged, 0.97);
+    let leafy = RIM_WAVE * sin(a * 5.0 + seed * 40.0) + RIM_LEAVES * leaves + RIM_TWIGS * twigs;
+    return d < min(RIM + leafy * ragged, RIM_MOST);
 }
 
 // Light on foliage, painted: the grass's light, on a tone that leans a step
