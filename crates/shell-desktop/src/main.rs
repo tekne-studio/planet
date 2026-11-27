@@ -8,7 +8,8 @@
 //!             [--altitude M] [--pitch DEG] [--boom M] [--walk S] [--at U,V] [--moon M]
 //!             [--command JSON]... [--drag X0,Y0,X1,Y1]... [--ride] [--fly S [--against-sun]]
 //!             [--yaw DEG] [--animals DIR | --wings DIR [--against-sun] [--look SEED]
-//!             | --saddle DIR | --herd DIR | --takeoff DIR | --leap DIR | --clouds DIR]
+//!             | --saddle DIR | --herd DIR | --takeoff DIR | --leap DIR | --deck DIR
+//!             | --clouds DIR]
 //! planet cart FILE.wasm [--seed N] [--scale N]
 //! planet cabinet-template FILE.png
 //! ```
@@ -19,6 +20,7 @@ mod assets;
 mod cart;
 mod carts;
 mod clouds;
+mod deck;
 mod herd;
 mod leap;
 mod moving;
