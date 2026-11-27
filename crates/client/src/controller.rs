@@ -15,7 +15,7 @@ use worldgen::Generator;
 use crate::animals::Near;
 use crate::boom::{self, Boom};
 use crate::cells::{Cells, Seat};
-use crate::collision::{self, BODY_M, Footing, Held, STEP_M};
+use crate::collision::{self, BODY_M, Footing, Held, STEP_M, Spine};
 use crate::hover::{self, Glide, Hover, Step};
 use crate::paces::{Ahead, Arc, Flight, Paces, Pacing, Reins};
 use crate::parts::Parts;
@@ -69,6 +69,47 @@ impl<'a> Built<'a> {
     fn stands_on(&self, body: Body) -> bool {
         self.cells.stands_on(body) || self.parts.stands_on(body) || self.trunks.stands_on(body)
     }
+}
+
+/// What holds a body with its feet `feet_m` over the datum at a column of
+/// a seat: the ground, and what is built under or over it, apart; with no
+/// `built`, the ground alone. The one read of what a body on its feet
+/// stands on and is stopped by: a walker, a body in a way and the animal
+/// it rode, left.
+pub(crate) fn held(
+    seat: Seat,
+    point: SurfacePoint,
+    feet_m: f64,
+    generator: &Generator,
+    built: Option<Built<'_>>,
+) -> Held {
+    let direction = seat.sphere(generator).blocks().direction(point);
+    Held {
+        ground: Footing::solid(seat::ground_m(generator, seat.body(), direction)),
+        built: built.and_then(|built| built.footing(generator, seat, point, feet_m)),
+    }
+}
+
+/// A displacement on the planet, world space, as blocks along each
+/// address axis of a column of `grid`, `radius_m` from its centre.
+pub(crate) fn address_step(
+    grid: Grid,
+    point: SurfacePoint,
+    radius_m: f64,
+    delta: DVec3,
+) -> (f64, f64) {
+    let tangents = grid.tangents(point);
+    // Metres per block along each address axis, at this height.
+    let (tu, tv) = (
+        DVec3::from(tangents.du) * radius_m,
+        DVec3::from(tangents.dv) * radius_m,
+    );
+    // Solve `du * tu + dv * tv = delta` on the tangent plane. The axes are
+    // not orthogonal, so this is a 2x2 system, not two dot products.
+    let (a, b, c) = (tu.dot(tu), tu.dot(tv), tv.dot(tv));
+    let (p, q) = (tu.dot(delta), tv.dot(delta));
+    let det = a * c - b * b;
+    ((c * p - b * q) / det, (a * q - b * p) / det)
 }
 use crate::seam::Mode;
 
@@ -149,13 +190,6 @@ const SEA_OVER_M: f64 = 1.5;
 /// Metres between the looks a jump takes along its arc for a roof.
 const ARC_LOOK_M: f64 = BLOCK_M / 2.0;
 
-/// The most points on a body's spine, ahead and behind together.
-const SPINE_POINTS: usize = 8;
-
-/// How far apart the points of a body's spine are, at most, metres: under
-/// the width a point stands on plus a column, so no column between two is
-/// missed.
-const SPINE_APART_M: f64 = 1.0;
 /// A rise under this in one frame is ground, and what is drawn follows it at
 /// once: a slope climbed at a walk rises a few centimetres a frame, and a body
 /// eased over it sinks into the hill on the way up and floats on the way down.
@@ -1159,11 +1193,7 @@ impl Controller {
         generator: &Generator,
         built: Option<Built<'_>>,
     ) -> Held {
-        let direction = seat.sphere(generator).blocks().direction(point);
-        Held {
-            ground: Footing::solid(seat::ground_m(generator, seat.body(), direction)),
-            built: built.and_then(|built| built.footing(generator, seat, point, self.height_m)),
-        }
+        held(seat, point, self.height_m, generator, built)
     }
 
     /// Whether the body is under the ground as the heightfield draws it: in a
@@ -2201,7 +2231,7 @@ impl Controller {
             Some(floor_m) if self.on_feet() && self.grounded => {
                 // Walking downhill: stay glued to the ground over a step
                 // (auto step), fall off anything deeper.
-                if self.height_m - floor_m < STEP_M {
+                if collision::steps_down(self.height_m, floor_m) {
                     self.stand_on(floor_m);
                 } else {
                     self.grounded = false;
@@ -2263,20 +2293,8 @@ impl Controller {
     /// A displacement on the planet, world space, as blocks along each
     /// address axis of the column the body is in, at its height.
     fn address_step(&self, delta: DVec3) -> (f64, f64) {
-        let tangents = self.sphere.blocks().tangents(self.point);
-        let radius = self.sphere.radius_m() + self.height_m;
-        // Metres per block along each address axis, at this height.
-        let (tu, tv) = (
-            DVec3::from(tangents.du) * radius,
-            DVec3::from(tangents.dv) * radius,
-        );
-
-        // Solve `du * tu + dv * tv = delta` on the tangent plane. The axes are
-        // not orthogonal, so this is a 2x2 system, not two dot products.
-        let (a, b, c) = (tu.dot(tu), tu.dot(tv), tv.dot(tv));
-        let (p, q) = (tu.dot(delta), tv.dot(delta));
-        let det = a * c - b * b;
-        ((c * p - b * q) / det, (a * q - b * p) / det)
+        let radius_m = self.sphere.radius_m() + self.height_m;
+        address_step(self.sphere.blocks(), self.point, radius_m, delta)
     }
 
     /// The up a step measures height along, `height_m` changed by a move's
@@ -2355,25 +2373,9 @@ impl Controller {
         }
     }
 
-    /// Where a step of `du, dv` from a column of a grid ends, in address
-    /// space: where it asked, or short of whatever stopped it.
-    ///
-    /// A rise of one block is taken in stride and more is a wall, so a cave
-    /// wall stops a body exactly the way a cliff does and the only way past
-    /// either is to jump or to fly. Blocked, the step is tried one address
-    /// axis at a time, which is what slides a body along a wall instead of
-    /// sticking it to one.
-    ///
-    /// The step goes a cell at a time along either axis, so no column it
-    /// crosses is jumped over and no wall is thinner than a step. A flyer's
-    /// goes in one: at its speeds, a cell at a time is a look at every cell
-    /// it crosses, and a wall thinner than its step is passed.
-    ///
-    /// Each point of the body's `spine` goes the same piece and is admitted
-    /// as the body is, its feet as high as the body's or on a floor of its
-    /// own that is higher: so a long body stops with its nose at a wall,
-    /// backs with its rump to one, slides along one whole, and flies one
-    /// only when all of it clears.
+    /// Where a step of `du, dv` from a column of a grid ends, as
+    /// [`collision::walk`] walks it: a cell at a time, or a flyer's in one,
+    /// each point of the body's `spine` admitted as the body is.
     fn walk_to(
         &self,
         grid: Grid,
@@ -2383,54 +2385,12 @@ impl Controller {
         spine: &Spine,
         footing: impl Fn(SurfacePoint) -> Held,
     ) -> SurfacePoint {
-        let pieces = if self.flying() {
-            1
-        } else {
-            du.abs().max(dv.abs()).ceil().max(1.0) as u32
+        let pieces = match self.flying() {
+            true => 1,
+            false => collision::cell_by_cell(du, dv),
         };
-        // Where a point of the body is with the pieces taken along each
-        // axis: a share of the step past its offset, in the frame of the
-        // column it started from, so the whole step ends where it asked.
-        let at = |[along_u, along_v]: [u32; 2], [off_u, off_v]: [f64; 2]| {
-            let share = |taken: u32| f64::from(taken) / f64::from(pieces);
-            let (u, v) = (from.u + du * share(along_u), from.v + dv * share(along_v));
-            grid.wrapped(SurfacePoint::new(from.sector, u + off_u, v + off_v))
-        };
-        let (mut taken, mut here) = ([0, 0], footing(from));
-        let mut reached = [Held::OPEN; SPINE_POINTS];
-        for (point, (offset, _)) in reached.iter_mut().zip(spine.points()) {
-            *point = footing(at(taken, offset));
-        }
-        for _ in 0..pieces {
-            let piece = [[1, 1], [1, 0], [0, 1]].into_iter().find_map(|[u, v]| {
-                if du * f64::from(u) == 0.0 && dv * f64::from(v) == 0.0 {
-                    return None;
-                }
-                let tried = [taken[0] + u, taken[1] + v];
-                let there = footing(at(tried, [0.0, 0.0]));
-                if !self.admits(here, here, there, 0.0) {
-                    return None;
-                }
-                let mut reaches = reached;
-                for (point, (offset, along_m)) in reaches.iter_mut().zip(spine.points()) {
-                    let will = footing(at(tried, offset));
-                    if !self.admits(here, *point, will, along_m) {
-                        return None;
-                    }
-                    *point = will;
-                }
-                Some((tried, there, reaches))
-            });
-            match piece {
-                Some((tried, there, reaches)) => (taken, here, reached) = (tried, there, reaches),
-                None => break,
-            }
-        }
-        if taken == [0, 0] {
-            from
-        } else {
-            at(taken, [0.0, 0.0])
-        }
+        let admits = |seat, was, will, along_m| self.admits(seat, was, will, along_m);
+        collision::walk(grid, from, [du, dv], pieces, spine, footing, admits)
     }
 
     /// The body's spine, facing `facing`: a body in paces on its feet as
@@ -2465,11 +2425,8 @@ impl Controller {
         };
         let seat = footing([0.0, 0.0]);
         let (was, will) = (self.spine(from), self.spine(to));
-        was.points()
-            .zip(will.points())
-            .all(|((was, along_m), (will, _))| {
-                self.admits(seat, footing(was), footing(will), along_m)
-            })
+        let admits = |seat, was, will, along_m| self.admits(seat, was, will, along_m);
+        collision::turns(seat, &was, &will, footing, admits)
     }
 
     /// Whether a point of the body `along_m` ahead of its middle goes from
@@ -2479,12 +2436,9 @@ impl Controller {
     fn admits(&self, seat: Held, was: Held, will: Held, along_m: f64) -> bool {
         let body_m = self.body_m();
         match self.arc_feet_m(along_m) {
-            None => {
-                let (seat, was) = (seat.footing(), was.footing());
-                collision::admits(was, will.footing(), self.feet_m(seat, was), body_m)
-            }
+            None => collision::afoot(seat, was, will, self.height_m, body_m),
             Some(arc_m) => {
-                let feet_m = self.feet_m(seat.ground, was.ground);
+                let feet_m = collision::feet_m(self.height_m, seat.ground, was.ground);
                 collision::aloft(was, will, feet_m, arc_m, body_m)
             }
         }
@@ -2507,17 +2461,6 @@ impl Controller {
         let s = along_m / pacing.speed_mps.max(f64::EPSILON);
         (pacing.leaping() && !self.grounded)
             .then(|| self.height_m + self.vertical_mps * s - 0.5 * self.gravity_mps2() * s * s)
-    }
-
-    /// Where the feet are at a point of the body's spine standing on
-    /// `point`, metres, the body on `seat`: as high as the body's, or more
-    /// by as far as the point's floor is over the body's. It follows a rise
-    /// and keeps the body's height down a fall.
-    fn feet_m(&self, seat: Footing, point: Footing) -> f64 {
-        match (seat.floor_m, point.floor_m) {
-            (Some(seat_m), Some(point_m)) => self.height_m + (point_m - seat_m).max(0.0),
-            _ => self.height_m,
-        }
     }
 
     /// Keeps the tangent vectors tangent to the frame: projected back on the
@@ -2614,51 +2557,6 @@ fn turn_toward(from: DVec3, to: DVec3, fraction: f64, fallback_axis: DVec3) -> D
 /// `from` turned a `fraction` of the way to `to`.
 fn rotate_toward(from: DVec3, to: DVec3, fraction: f64, fallback_axis: DVec3) -> DVec3 {
     (turn_toward(from, to, fraction, fallback_axis) * from).normalize()
-}
-
-/// A body's length along the way it faces: points ahead of where it
-/// stands to its nose and behind it to its rump, each kept off what stops
-/// the body. A body on foot is where it stands, and has none.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Spine {
-    /// Each point's offset from where the body stands, blocks along `u`
-    /// and `v`, and how far ahead of it, metres, behind it less than none.
-    points: [[f64; 2]; SPINE_POINTS],
-    along_m: [f64; SPINE_POINTS],
-    len: usize,
-}
-
-impl Spine {
-    const NONE: Spine = Spine {
-        points: [[0.0; 2]; SPINE_POINTS],
-        along_m: [0.0; SPINE_POINTS],
-        len: 0,
-    };
-
-    /// Points `ahead_m` along `per_m`, blocks a metre, and `behind_m`
-    /// against it, each end one and the rest even between it and the
-    /// middle, at most [`SPINE_APART_M`] apart while there are points
-    /// enough.
-    fn along(per_m: [f64; 2], ahead_m: f64, behind_m: f64) -> Spine {
-        let mut spine = Spine::NONE;
-        for (reach_m, sign) in [(ahead_m, 1.0), (behind_m, -1.0)] {
-            let count = ((reach_m / SPINE_APART_M).ceil() as usize).min(SPINE_POINTS / 2);
-            for point in 1..=count {
-                let m = sign * reach_m * point as f64 / count as f64;
-                spine.points[spine.len] = per_m.map(|blocks| blocks * m);
-                spine.along_m[spine.len] = m;
-                spine.len += 1;
-            }
-        }
-        spine
-    }
-
-    fn points(&self) -> impl Iterator<Item = ([f64; 2], f64)> + '_ {
-        self.points[..self.len]
-            .iter()
-            .copied()
-            .zip(self.along_m[..self.len].iter().copied())
-    }
 }
 
 #[cfg(test)]
