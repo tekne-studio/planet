@@ -311,6 +311,11 @@ const STRIDE_M: f64 = 12.0;
 /// The flattest ground near `at`, so a stride is seen against the
 /// horizon and not a hillside.
 pub(crate) fn flattest(land: &Land, at: DVec3) -> Footing {
+    flattest_where(land, at, |_| true)
+}
+
+/// The same, of the ground above the sea that `kept` keeps.
+pub(crate) fn flattest_where(land: &Land, at: DVec3, kept: impl Fn(&Footing) -> bool) -> Footing {
     let centre = land.under(at);
     let up = centre.up;
     let east = up.any_orthonormal_vector();
@@ -329,7 +334,7 @@ pub(crate) fn flattest(land: &Land, at: DVec3) -> Footing {
         .map(|(i, j)| {
             land.under(centre.point + (east * f64::from(i) + north * f64::from(j)) * step)
         })
-        .filter(above_sea)
+        .filter(|footing| above_sea(footing) && kept(footing))
         .min_by(|a, b| rise(a).total_cmp(&rise(b)))
         .inspect(|f| {
             log::info!(

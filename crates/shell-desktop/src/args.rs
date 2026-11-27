@@ -83,6 +83,8 @@ pub struct Shot {
     pub clouds: Option<PathBuf>,
     /// Where the measure of what plants cost a frame goes: `crate::flora`.
     pub flora: Option<PathBuf>,
+    /// Where the strips of the sun's shadows go: `crate::shadows`.
+    pub shadows: Option<PathBuf>,
     pub view: crate::animals::View,
     /// A cabinet placed before the body, its game running, played or not.
     pub cabinet: Option<crate::play::Cabinet>,
@@ -147,6 +149,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
         deck: None,
         clouds: None,
         flora: None,
+        shadows: None,
         view: crate::animals::View::default(),
         cabinet: None,
         clear: None,
@@ -223,6 +226,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
             "--deck" if is_shot => shot.deck = Some(PathBuf::from(value()?)),
             "--clouds" if is_shot => shot.clouds = Some(PathBuf::from(value()?)),
             "--flora" if is_shot => shot.flora = Some(PathBuf::from(value()?)),
+            "--shadows" if is_shot => shot.shadows = Some(PathBuf::from(value()?)),
             "--yaw" if is_shot => shot.view.yaw_deg = number(&value()?, "--yaw")?,
             "--against-sun" if is_shot => shot.view.against_sun = true,
             "--cabinet" if is_shot => {

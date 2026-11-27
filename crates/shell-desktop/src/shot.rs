@@ -200,6 +200,9 @@ pub fn run(shot: Shot) -> Result<(), String> {
     if let Some(dir) = &shot.clouds {
         return crate::clouds::run(&mut client, shot.size, shot.boom_m, dir);
     }
+    if let Some(dir) = &shot.shadows {
+        return crate::shadows::run(&mut client, shot.size, dir);
+    }
     let mut headless = Headless::new(width, height)?;
     if let Some(dir) = &shot.flora {
         return crate::flora::run(&mut client, &mut headless, dir);
