@@ -605,11 +605,15 @@ impl Renderer {
 
         let casting = shadows.then(|| {
             let matrices = shadow::matrices(frame, camera);
+            let seen = shadow::Seen::new(camera, width as f32 / height as f32, frame.sun_direction);
             let wanted: Vec<_> = frame
                 .shadow_patches
                 .iter()
                 .copied()
-                .filter(|draw| self.terrain.casts_into(draw, camera.position, &matrices))
+                .filter(|draw| {
+                    self.terrain
+                        .casts_into(draw, camera.position, &matrices, &seen)
+                })
                 .collect();
             let casters = resources.casters.write(
                 &self.device,
@@ -618,10 +622,10 @@ impl Renderer {
                 &wanted,
                 camera.position,
             );
-            (matrices, casters)
+            (matrices, casters, seen)
         });
-        // What grows is the ground's, every sight's; what casts is the
-        // whole world's.
+        // What grows is the ground's, every sight's; what casts, what can
+        // shade what this sight sees.
         let foliage = self.foliage.place(
             &self.device,
             &self.queue,
@@ -629,17 +633,18 @@ impl Renderer {
             &frame.effects,
             self.terrain
                 .foliage(&resources.patches, &drawn, frame.effects.foliage_reach_m),
-            casting.as_ref().map(|(matrices, casters)| {
+            casting.as_ref().map(|(matrices, casters, seen)| {
                 let reach_m = frame.effects.foliage_reach_m;
                 (
                     self.terrain.foliage(&resources.casters, casters, reach_m),
                     matrices,
+                    seen,
                 )
             }),
             measure.as_ref().and_then(|measure| measure.clock),
         );
 
-        if let Some((matrices, casters)) = &casting {
+        if let Some((matrices, casters, _)) = &casting {
             let (boxes, skinned, models) = placed.as_ref().expect("whole");
             for (cascade, matrix) in matrices.iter().enumerate() {
                 let mut light = uniform;

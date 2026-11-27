@@ -63,6 +63,60 @@ pub fn matrices(frame: &Frame, camera: &Camera) -> [Mat4; CASCADES] {
     })
 }
 
+/// How far from where a receiver stands the map is read, texels: the
+/// normal's offset in `shadow_sample`, at most 1.3, and the lookups of
+/// `shadow_tent`, at most 3 from where it reads; rounded up.
+const READ_TEXELS: f32 = 5.0;
+
+/// Where a sight reads the sun's shadows: inside its frustum, four planes
+/// through the eye. A caster shades it only if its shadow can fall there;
+/// one past a side the shadows run away from never does, and casts
+/// nothing. The picture is the same, for a third of the casters.
+pub struct Seen {
+    /// The inward normals of the sides the shadows run away from,
+    /// camera-relative; the rest stay zero.
+    sides: [Vec3; 4],
+    /// How far each cascade reads past a receiver, metres.
+    margins_m: [f32; CASCADES],
+}
+
+impl Seen {
+    pub fn new(camera: &Camera, aspect: f32, sun: Vec3) -> Seen {
+        let half_y = camera.fov_y / 2.0;
+        let half_x = (half_y.tan() * aspect).atan();
+        let rotation = camera.rotation.as_quat();
+        // The camera looks down its -Z: each side leans out from it.
+        let inward = [
+            Vec3::new(half_x.cos(), 0.0, -half_x.sin()),
+            Vec3::new(-half_x.cos(), 0.0, -half_x.sin()),
+            Vec3::new(0.0, half_y.cos(), -half_y.sin()),
+            Vec3::new(0.0, -half_y.cos(), -half_y.sin()),
+        ]
+        .map(|normal| rotation * normal);
+        let fall = -sun.normalize();
+        let texels = texels_m();
+        Seen {
+            sides: inward.map(|normal| {
+                if normal.dot(fall) <= 0.0 {
+                    normal
+                } else {
+                    Vec3::ZERO
+                }
+            }),
+            margins_m: core::array::from_fn(|cascade| texels[cascade] * READ_TEXELS),
+        }
+    }
+
+    /// Whether the shadow of a sphere, camera-relative, can be read in view
+    /// from `cascade`'s map.
+    pub fn reaches(&self, cascade: usize, center: Vec3, radius: f32) -> bool {
+        let reach = radius + self.margins_m[cascade];
+        self.sides
+            .iter()
+            .all(|side| side.dot(center) + reach >= 0.0)
+    }
+}
+
 /// Conservative sphere test, including casters outside the camera frustum.
 pub fn intersects(matrix: Mat4, center: Vec3, radius: f32) -> bool {
     let p = matrix.transform_point3(center);
@@ -156,5 +210,86 @@ mod tests {
         assert!(intersects(m, Vec3::new(33.0, 0.0, -1000.0), 2.0));
         assert!(!intersects(m, Vec3::new(40.0, 0.0, -1000.0), 1.0));
         assert!(!intersects(m, Vec3::new(0.0, 0.0, 10.0), 1.0));
+    }
+
+    fn camera(rotation: glam::DQuat) -> Camera {
+        Camera {
+            position: DVec3::ZERO,
+            rotation,
+            fov_y: 1.0,
+            near: 0.1,
+        }
+    }
+
+    #[test]
+    fn a_shadow_falling_away_from_the_view_is_not_cast() {
+        let looking = camera(glam::DQuat::IDENTITY);
+        let behind = Vec3::new(0.0, 0.0, 200.0);
+        let above_behind = Vec3::new(0.0, 150.0, 100.0);
+        // The sun ahead throws shadows back, away from the view.
+        let ahead = Seen::new(&looking, 16.0 / 9.0, Vec3::new(0.0, 1.0, -1.0));
+        assert!(!ahead.reaches(1, behind, 2.0));
+        assert!(!ahead.reaches(1, above_behind, 2.0));
+        assert!(ahead.reaches(1, Vec3::new(0.0, -2.0, -50.0), 2.0));
+        // The sun behind throws them forward, into it from above.
+        let behind_sun = Seen::new(&looking, 16.0 / 9.0, Vec3::new(0.0, 1.0, 1.0));
+        assert!(behind_sun.reaches(1, above_behind, 2.0));
+    }
+
+    /// Whatever the camera's turn and the sun, a caster whose shadow is
+    /// not cast never had it fall in view: marched along the sun's rays,
+    /// it never comes within the map's reading of the frustum.
+    #[test]
+    fn a_shadow_not_cast_never_enters_the_view() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut roll = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f32 / (1u64 << 53) as f32 * 2.0 - 1.0
+        };
+        let aspect = 16.0 / 9.0;
+        let (mut culled, mut cases) = (0, 0);
+        for _ in 0..200 {
+            let turn = glam::DQuat::from_euler(
+                glam::EulerRot::YXZ,
+                f64::from(roll()) * 3.2,
+                f64::from(roll()) * 1.5,
+                f64::from(roll()) * 0.3,
+            );
+            let looking = camera(turn);
+            let sun = Vec3::new(roll(), roll().abs() + 0.05, roll()).normalize();
+            let seen = Seen::new(&looking, aspect, sun);
+            let half_y = looking.fov_y / 2.0;
+            let half_x = (half_y.tan() * aspect).atan();
+            let sides = [
+                Vec3::new(half_x.cos(), 0.0, -half_x.sin()),
+                Vec3::new(-half_x.cos(), 0.0, -half_x.sin()),
+                Vec3::new(0.0, half_y.cos(), -half_y.sin()),
+                Vec3::new(0.0, -half_y.cos(), -half_y.sin()),
+            ];
+            let to_camera = turn.inverse().as_quat();
+            for _ in 0..50 {
+                let center = Vec3::new(roll(), roll(), roll()) * 400.0;
+                let radius = (roll() + 1.0) * 5.0;
+                for cascade in 0..CASCADES {
+                    cases += 1;
+                    if seen.reaches(cascade, center, radius) {
+                        continue;
+                    }
+                    culled += 1;
+                    let reach = radius + seen.margins_m[cascade];
+                    for step in 0..4000 {
+                        let at = to_camera * (center - sun * step as f32);
+                        let inside = sides.iter().all(|side| side.dot(at) + reach >= 0.0);
+                        assert!(
+                            !inside,
+                            "{center} cast nothing into {cascade}, and falls in view"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(culled * 4 > cases, "{culled} of {cases} not cast");
     }
 }

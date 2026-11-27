@@ -333,18 +333,21 @@ impl Terrain {
         }
     }
 
+    /// Whether a patch casts into any cascade a shadow `seen` reads.
     pub fn casts_into(
         &self,
         draw: &PatchDraw,
         camera: DVec3,
         matrices: &[glam::Mat4; crate::shadow::CASCADES],
+        seen: &crate::shadow::Seen,
     ) -> bool {
         self.patches.get(&draw.id).is_some_and(|p| {
             let center = relative(draw.body_center + p.origin, camera);
             let radius_m = p.radius_m.max(p.plants_m);
-            matrices
-                .iter()
-                .any(|&m| crate::shadow::intersects(m, center, radius_m))
+            matrices.iter().enumerate().any(|(cascade, &m)| {
+                crate::shadow::intersects(m, center, radius_m)
+                    && seen.reaches(cascade, center, radius_m)
+            })
         })
     }
 

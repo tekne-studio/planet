@@ -209,6 +209,7 @@ impl Foliage {
         casting: Option<(
             impl Iterator<Item = (Vec3, &'a [FoliageInstance])>,
             &[Mat4; CASCADES],
+            &shadow::Seen,
         )>,
         clock: Option<fn() -> f64>,
     ) -> Placed {
@@ -231,7 +232,7 @@ impl Foliage {
                 }
             }
         }
-        if let Some((casters, matrices)) = casting {
+        if let Some((casters, matrices, seen)) = casting {
             for (center, foliage) in casters {
                 for placed in foliage {
                     let Some((shape, mut instance)) = self.instance(center, placed, &reach) else {
@@ -247,7 +248,9 @@ impl Foliage {
                     instance.drawn = [1.0, grown];
                     let radius_m = placed.reach_m(mesh.reach, grown);
                     for (cascade, matrix) in matrices.iter().enumerate() {
-                        if shadow::intersects(*matrix, origin, radius_m) {
+                        if shadow::intersects(*matrix, origin, radius_m)
+                            && seen.reaches(cascade, origin, radius_m)
+                        {
                             sets[1 + cascade].push((key(placed.shape, form), instance));
                         }
                     }
