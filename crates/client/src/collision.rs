@@ -180,10 +180,10 @@ pub fn feet_m(height_m: f64, seat: Footing, point: Footing) -> f64 {
 }
 
 /// Whether a body on its feet that stood on a floor stays on one under
-/// its feet `height_m`: within a step down it walks onto it, as down a
-/// stair; from deeper it falls.
+/// its feet `height_m`: a step down it walks onto, as [`admits`] takes one
+/// up, so a stair is walked down as it is walked up; from deeper it falls.
 pub fn steps_down(height_m: f64, floor_m: f64) -> bool {
-    height_m - floor_m < STEP_M
+    height_m - floor_m <= STEP_M
 }
 
 /// Whether a body turns where it stands from its spine `was` to its spine

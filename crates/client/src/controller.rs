@@ -2160,6 +2160,9 @@ impl Controller {
     /// over a plain sphere on the moon, where the cells of a volume in the
     /// way stop it all the same.
     fn step(&mut self, delta: DVec3, generator: &Generator, built: Built<'_>) {
+        // Where the feet stood: a step along the curve lifts them a hair
+        // off the floor they stood on, and a step down is measured from it.
+        let stood_m = self.height_m;
         match self.site {
             Site::Planet => self.step_on_planet(delta, generator, built),
             Site::Moon { direction } => {
@@ -2232,7 +2235,7 @@ impl Controller {
             Some(floor_m) if self.on_feet() && self.grounded => {
                 // Walking downhill: stay glued to the ground over a step
                 // (auto step), fall off anything deeper.
-                if collision::steps_down(self.height_m, floor_m) {
+                if collision::steps_down(stood_m, floor_m) {
                     self.stand_on(floor_m);
                 } else {
                     self.grounded = false;
@@ -3141,6 +3144,51 @@ mod tests {
         assert!((controller.height_m - floor_m - BLOCK_M).abs() < 1e-6);
         let off_m = radius(&controller) - controller.height_m - rigid_m;
         (feet_m, figure_m, eye_m, off_m)
+    }
+
+    /// A walker over a stair one cell high, up onto it and down off its
+    /// far side: a step down is taken in stride as a step up is, the feet
+    /// on the ground at every tick.
+    #[test]
+    fn a_walker_steps_down_a_step_as_it_steps_up_one() {
+        let generator = Generator::new(Recipe::new(1)).unwrap();
+        let side = f64::from(generator.sphere().blocks().side());
+        let sector = Sector::new(4).unwrap();
+        let mut build = Cells::default();
+        let point = SurfacePoint::new(sector, side * 0.41, side * 0.37);
+        let [x, y, top] = build.floor(&generator, point);
+        let floor_m = f64::from(top) * BLOCK_M;
+        let stair = Gesture::Create {
+            span: Span::between([x + 20, y, top], [x + 28, y + 63, top]),
+            paint: 0,
+        };
+        build.apply(&generator, sector, &[stair]);
+        let from = SurfacePoint::new(sector, f64::from(x) + 15.5, f64::from(y) + 32.5);
+        let mut controller = Controller::spawn(from, &generator);
+        controller.lift_onto(floor_m);
+        let wish = Wish {
+            movement: [0.0, 1.0],
+            ..Wish::default()
+        };
+        let built = Built {
+            cells: &build,
+            parts: &Parts::default(),
+            trunks: &Trunks::default(),
+        };
+        for tick in 0..120 {
+            controller.update(1.0 / 60.0, wish, &generator, built);
+            let over_m = controller.height_m - floor_m;
+            assert!(
+                controller.grounded(),
+                "tick {tick}: off the ground, {over_m:.3} m up"
+            );
+        }
+        let past = controller.point().u - f64::from(x + 29);
+        assert!(past > 0.0, "{past} cells short of the stair's far side");
+        assert!(
+            (controller.height_m - floor_m).abs() < 1e-6,
+            "not down on the floor"
+        );
     }
 
     #[test]
