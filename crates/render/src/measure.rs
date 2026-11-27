@@ -53,7 +53,7 @@ impl Measured {
                 .iter()
                 .map(|counted| {
                     format!(
-                        "{{\"forms\": {:?}, \"draws\": {}, \"triangles\": {}}}",
+                        "{{\"forms\": {:?}, \"draws\": {}, \"triangles\": {:?}}}",
                         counted.forms, counted.draws, counted.triangles
                     )
                 })
@@ -80,10 +80,15 @@ impl Measured {
             write_ms,
         } = self.spent;
         format!(
-            "{{\"timed\": {}, \"drawn\": {}, \"read\": {}, \"without\": {{\"view\": {}, \"cascades\": {:?}}}, \
+            "{{\"timed\": {}, \"drawn\": {}, \"read\": {}, \"without\": {{\"view\": {}, \"cascades\": {:?}, \"forms\": {:?}}}, \
              \"passes_ms\": {{{passes}}}, \"spent_ms\": {{\"gather\": {gather_ms:.4}, \"sort\": {sort_ms:.4}, \"write\": {write_ms:.4}}}, \
              \"counted\": [{counted}], \"fragments\": {fragments}}}",
-            self.timed, self.drawn, self.read, self.without.view, self.without.cascades,
+            self.timed,
+            self.drawn,
+            self.read,
+            self.without.view,
+            self.without.cascades,
+            self.without.forms,
         )
     }
 }
@@ -94,6 +99,8 @@ impl Measured {
 pub struct Without {
     pub view: bool,
     pub cascades: [bool; CASCADES],
+    /// The forms of the view's foliage left out, near to far.
+    pub forms: [bool; FOLIAGE_FORMS],
 }
 
 /// The fragments of the foliage in one pass: what a weak GPU pays for, in

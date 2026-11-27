@@ -3,11 +3,12 @@
 //! clock, inside it and over it, and at each preset and size draws the
 //! frame many times. A GPU runs one pass while the last finishes, so a
 //! pass's time is no share of the frame's: each of the foliage's draws, in
-//! view and in each cascade, is priced by what the frame saves without it,
-//! the frames with and without taken in turn so a drift of the clock falls
-//! on all alike. It says the CPU's time placing the foliage, and counts no
-//! GPU changes: the instances, draws and triangles of each pass, and the
-//! fragments its leaves rasterize, keep and cover. A picture of each,
+//! view, each form of it there, and in each cascade, is priced by what the
+//! frame saves without it, the frames with and without taken in turn so a
+//! drift of the clock falls on all alike. It says the CPU's time placing
+//! the foliage, and counts what no GPU changes: the instances and triangles
+//! of each pass by form, its draws, and the fragments its leaves
+//! rasterize, keep and cover. A picture of each,
 //! `<view>-<preset>-<W>x<H>.png`, and every number in `flora.json`; the
 //! tables are printed.
 
@@ -50,19 +51,26 @@ fn now_ms() -> f64 {
 }
 
 /// The draws of foliage a row leaves out, one at a time, and all at once.
-fn priced() -> [(&'static str, Without); 5] {
+fn priced() -> [(&'static str, Without); 8] {
     let cascade = |at: usize| Without {
-        view: false,
         cascades: core::array::from_fn(|k| k == at),
+        ..Without::default()
+    };
+    let form = |at: usize| Without {
+        forms: core::array::from_fn(|k| k == at),
+        ..Without::default()
     };
     [
         (
             "view",
             Without {
                 view: true,
-                cascades: [false; 3],
+                ..Without::default()
             },
         ),
+        ("near", form(0)),
+        ("mid", form(1)),
+        ("far", form(2)),
         ("cascade 0", cascade(0)),
         ("cascade 1", cascade(1)),
         ("cascade 2", cascade(2)),
@@ -71,6 +79,7 @@ fn priced() -> [(&'static str, Without); 5] {
             Without {
                 view: true,
                 cascades: [true; 3],
+                ..Without::default()
             },
         ),
     ]
@@ -215,18 +224,21 @@ fn tables(rows: &[Row]) -> String {
     let _ = writeln!(
         out,
         "\nGPU, ms (median of {TIMED}): the frame, first pass to last, and what it saves \
-         without each draw of foliage\n\n\
-         | view | frame | view foliage | cascade 0 | cascade 1 | cascade 2 | all foliage | share |\n\
-         |---|---|---|---|---|---|---|---|"
+         without each draw of foliage: in view all of it, then each form\n\n\
+         | view | frame | view foliage | near | mid | far | cascade 0 | cascade 1 | cascade 2 | all foliage | share |\n\
+         |---|---|---|---|---|---|---|---|---|---|---|"
     );
     for row in rows {
         let all = row.saved("all");
         let _ = writeln!(
             out,
-            "| {} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.0}% |",
+            "| {} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.0}% |",
             row.name(),
             row.frame_ms,
             row.saved("view"),
+            row.saved("near"),
+            row.saved("mid"),
+            row.saved("far"),
             row.saved("cascade 0"),
             row.saved("cascade 1"),
             row.saved("cascade 2"),
@@ -253,10 +265,10 @@ fn tables(rows: &[Row]) -> String {
     }
     let _ = writeln!(
         out,
-        "\nCounts, the same at every size: instances by form (near, mid, far), draws, \
-         triangles; fragments per pixel of the pass, rasterized (in view, by form), kept \
+        "\nCounts, the same at every size: instances and triangles by form (near, mid, \
+         far), draws; fragments per pixel of the pass, rasterized (in view, by form), kept \
          past the cut, before the ground and covered, and rasterized per pixel covered\n\n\
-         | view | pass | instances | draws | triangles | rasterized | by form | kept | before | covered | per covered |\n\
+         | view | pass | instances | triangles | draws | rasterized | by form | kept | before | covered | per covered |\n\
          |---|---|---|---|---|---|---|---|---|---|---|"
     );
     for row in rows.iter().filter(|row| row.size == SIZES[0]) {
@@ -283,8 +295,8 @@ fn tables(rows: &[Row]) -> String {
             let [rasterized, forms, kept, before, covered, per] = cells.unwrap_or_default();
             let _ = writeln!(
                 out,
-                "| {} {} | {pass} | {:?} | {} | {} | {rasterized} | {forms} | {kept} | {before} | {covered} | {per} |",
-                row.view, row.preset, counted.forms, counted.draws, counted.triangles,
+                "| {} {} | {pass} | {:?} | {:?} | {} | {rasterized} | {forms} | {kept} | {before} | {covered} | {per} |",
+                row.view, row.preset, counted.forms, counted.triangles, counted.draws,
             );
         }
     }

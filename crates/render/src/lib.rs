@@ -735,12 +735,14 @@ impl Renderer {
             if !without.view {
                 let mut leaves = world_pass(encoder, targets, false, None);
                 leaves.set_bind_group(0, group, &[]);
-                self.foliage.draw(&mut leaves, &resources.foliage, &foliage);
+                self.foliage
+                    .draw_without(&mut leaves, &resources.foliage, &foliage, without.forms);
             }
             pass = world_pass(encoder, targets, false, None);
             pass.set_bind_group(0, group, &[]);
         } else if !without.view {
-            self.foliage.draw(&mut pass, &resources.foliage, &foliage);
+            self.foliage
+                .draw_without(&mut pass, &resources.foliage, &foliage, without.forms);
         }
         if let Some((boxes, skinned, models)) = &placed {
             if frame.effects.grass {

@@ -13,6 +13,7 @@
 //   bun run webshot --webgl   (a browser without WebGPU: the engine on its WebGL2 floor)
 //   bun run webshot --touch   (a phone held sideways: fingers, no mouse, its size)
 //   bun run webshot --flora out/flora   (what plants cost the browser's frame, where `bun run shot --flora` stood: scripts/flora.ts)
+//   bun run webshot --flora out/flora --software   (the same on SwiftShader, the CPU standing in for a GPU)
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -38,6 +39,7 @@ const filmMs = Number(option('film', '0')) * 1000;
 const PORT = Number(option('port', '9333'));
 const lang = option('lang', '');
 const webgl = args.includes('--webgl');
+const software = args.includes('--software');
 const touch = args.includes('--touch');
 // A fresh browser each run, unless one is named to keep.
 const profile = args.includes('--profile') ? resolve(ROOT, option('profile', '')) : mkdtempSync(join(tmpdir(), 'planet-webshot-'));
@@ -57,6 +59,8 @@ const chrome = Bun.spawn(
 		// The GPU's timestamps whole: Chrome rounds them to a tenth of a
 		// millisecond otherwise.
 		...(floraDir ? ['--enable-webgpu-developer-features'] : []),
+		// WebGPU on SwiftShader: a GPU the CPU stands in for.
+		...(software ? ['--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--enable-features=Vulkan'] : []),
 		`--user-data-dir=${profile}`,
 		'--window-size=1280,720',
 		...(lang ? [`--lang=${lang}`, `--accept-lang=${lang}`] : []),
@@ -100,7 +104,8 @@ const send = (method: string, params = {}) =>
 	});
 socket.onmessage = (event) => {
 	const message = JSON.parse(event.data as string);
-	if (message.id) return waiting.get(message.id)?.(message.result);
+	// A command that fails answers its error in place of a result.
+	if (message.id) return waiting.get(message.id)?.(message.result ?? { error: message.error });
 	const { method, params } = message;
 	if (method === 'Page.screencastFrame') return film(params);
 	if (method === 'Runtime.consoleAPICalled') {
@@ -132,7 +137,7 @@ if (touch) {
 await send('Page.navigate', { url });
 await Bun.sleep(waitMs);
 if (floraDir) {
-	await flora(send, floraDir);
+	await flora(send, floraDir, software);
 	socket.close();
 	chrome.kill();
 	process.exit(0);

@@ -282,11 +282,13 @@ impl Engine {
     }
 
     /// Leaves the foliage out of the view and of each cascade a measure
-    /// times, where `cascades` holds that cascade's index.
-    pub fn measure_without(&self, view: bool, cascades: &[u8]) {
+    /// times, where `cascades` holds that cascade's index, and each form of
+    /// the view's `forms` holds, near to far.
+    pub fn measure_without(&self, view: bool, cascades: &[u8], forms: &[u8]) {
         let without = render::Without {
             view,
             cascades: core::array::from_fn(|k| cascades.contains(&(k as u8))),
+            forms: core::array::from_fn(|k| forms.contains(&(k as u8))),
         };
         self.state.borrow_mut().renderer.measure_without(without);
     }

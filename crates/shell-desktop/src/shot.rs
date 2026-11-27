@@ -262,7 +262,7 @@ pub fn run(shot: Shot) -> Result<(), String> {
     write_png(&shot.out, width, height, &pixels)?;
     let foliage = headless.renderer.foliage_counted();
     log::info!(
-        "{} patches, foliage {:?} by form in {} draws of {} triangles -> {}",
+        "{} patches, foliage {:?} by form in {} draws of {:?} triangles -> {}",
         frame.patches.len(),
         foliage.forms,
         foliage.draws,

@@ -74,12 +74,13 @@ pub struct Foliage {
 }
 
 /// What one gathering of foliage drew, in view or in a cascade of the sun's
-/// shadows: how many in each form, and the draws and triangles it took.
+/// shadows: how many in each form, the draws it took, and the triangles
+/// of each form.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Counted {
     pub forms: [u32; FOLIAGE_FORMS],
     pub draws: u32,
-    pub triangles: u64,
+    pub triangles: [u64; FOLIAGE_FORMS],
 }
 
 /// What the CPU spent placing one sight's foliage, milliseconds by the
@@ -310,9 +311,10 @@ impl Foliage {
             if indices == 0 {
                 continue;
             }
-            counted.forms[*key as usize % FOLIAGE_FORMS] += placed.len() as u32;
+            let form = *key as usize % FOLIAGE_FORMS;
+            counted.forms[form] += placed.len() as u32;
             counted.draws += 1;
-            counted.triangles += indices / 3 * placed.len() as u64;
+            counted.triangles[form] += indices / 3 * placed.len() as u64;
         }
         counted
     }
@@ -327,6 +329,34 @@ impl Foliage {
         self.draw_with(pass, &self.pipeline, instances, &placed.view, |mesh| {
             mesh.drawn.clone()
         });
+    }
+
+    /// As [`Foliage::draw`], leaving out the forms `left` says, the rest
+    /// in the order drawn whole: a measure's.
+    pub(crate) fn draw_without(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        instances: &Instances,
+        placed: &Placed,
+        left: [bool; FOLIAGE_FORMS],
+    ) {
+        if !left.contains(&true) {
+            return self.draw(pass, instances, placed);
+        }
+        let runs = placed
+            .view
+            .runs
+            .iter()
+            .filter(|(key, _)| !left[*key as usize % FOLIAGE_FORMS])
+            .cloned()
+            .collect();
+        self.draw_with(
+            pass,
+            &self.pipeline,
+            instances,
+            &Gathered { runs },
+            |mesh| mesh.drawn.clone(),
+        );
     }
 
     pub fn draw_shadow(
