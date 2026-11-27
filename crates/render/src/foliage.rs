@@ -6,8 +6,8 @@
 //! of its pixels at a time, so it never changes at once. At the edge of its
 //! reach it rises from its root as the eye comes nearer, out of a ground
 //! that already wears its wood's colour, so none ever pops into being. That
-//! of the patches that cast is gathered again for each cascade of the sun's
-//! shadows it falls in, in one form, and draws only its wood and a round
+//! of the patches that cast is gathered again for each layer of the sun's
+//! shadow maps it falls in, in one form, and draws only its wood and a round
 //! card a mass of leaves. foliage.wgsl paints it.
 
 use std::ops::Range;
@@ -20,7 +20,7 @@ use scene::{
 };
 use wgpu::util::DeviceExt;
 
-use crate::shadow::{self, CASCADES};
+use crate::shadow::{self, CASCADES, LAYERS};
 use crate::{PipelineSpec, Surface, pipeline};
 
 /// The last share of the way to where a form ends that an instance crosses to
@@ -192,10 +192,11 @@ impl Foliage {
 
     /// Gathers into a sight's instances the foliage it draws, each patch by
     /// the centre of its space relative to the camera, and of the patches
-    /// that cast, the foliage each cascade of the sun's shadows holds, each
-    /// in the forms `effects` calls for at its distance. An instance naming
-    /// a shape the renderer does not hold is skipped. With a `clock`, a
-    /// measure's, milliseconds, what each step spent is kept in `instances`.
+    /// that cast, the foliage each layer of the sun's shadow maps drawn, one
+    /// a matrix, holds where `seen` reads its cascade, each in the forms
+    /// `effects` calls for at its distance. An instance naming a shape the
+    /// renderer does not hold is skipped. With a `clock`, a measure's,
+    /// milliseconds, what each step spent is kept in `instances`.
     #[expect(
         clippy::too_many_arguments,
         reason = "a sight's foliage and the clock that times it"
@@ -209,7 +210,7 @@ impl Foliage {
         seen: impl Iterator<Item = (Vec3, &'a [FoliageInstance])>,
         casting: Option<(
             impl Iterator<Item = (Vec3, &'a [FoliageInstance])>,
-            &[Mat4; CASCADES],
+            &[Mat4],
             &shadow::Seen,
         )>,
         clock: Option<fn() -> f64>,
@@ -248,11 +249,11 @@ impl Foliage {
                     };
                     instance.drawn = [1.0, grown];
                     let radius_m = placed.reach_m(mesh.reach, grown);
-                    for (cascade, matrix) in matrices.iter().enumerate() {
+                    for (layer, matrix) in matrices.iter().enumerate() {
                         if shadow::intersects(*matrix, origin, radius_m)
-                            && seen.reaches(cascade, origin, radius_m)
+                            && seen.reaches(shadow::cascade_of(layer), origin, radius_m)
                         {
-                            sets[1 + cascade].push((key(placed.shape, form), instance));
+                            sets[1 + layer].push((key(placed.shape, form), instance));
                         }
                     }
                 }
@@ -265,7 +266,7 @@ impl Foliage {
             set.sort_unstable_by_key(|(key, _)| *key);
         }
         let sorted = now();
-        let [view, cascades @ ..] = instances.write(device, queue, &sets);
+        let [view, layers @ ..] = instances.write(device, queue, &sets);
         instances.spent = Spent {
             gather_ms: gathered - start,
             sort_ms: sorted - gathered,
@@ -273,10 +274,13 @@ impl Foliage {
         };
         instances.sets = sets;
         instances.counted[0] = self.count(&view, |mesh| &mesh.drawn);
-        for (counted, cascade) in instances.counted[1..].iter_mut().zip(&cascades) {
-            *counted = self.count(cascade, |mesh| &mesh.casts);
+        // A cascade faded between two steps of the sun draws a second
+        // picture of the same casters a quarter degree apart: what it draws
+        // is counted in its first.
+        for (counted, layer) in instances.counted[1..].iter_mut().zip(&layers) {
+            *counted = self.count(layer, |mesh| &mesh.casts);
         }
-        Placed { view, cascades }
+        Placed { view, layers }
     }
 
     /// An instance of a patch around the camera, whole, and its shape; none
@@ -364,27 +368,27 @@ impl Foliage {
         pass: &mut wgpu::RenderPass<'_>,
         instances: &Instances,
         placed: &Placed,
-        cascade: usize,
+        layer: usize,
     ) {
-        let gathered = &placed.cascades[cascade];
+        let gathered = &placed.layers[layer];
         self.draw_with(pass, &self.shadow_pipeline, instances, gathered, |mesh| {
             mesh.casts.clone()
         });
     }
 
-    /// Draws the view's gathering, or with `cascade` that cascade's, all of
-    /// it or one `form`, with a pipeline of the foliage's layouts and
-    /// source: a measure's.
+    /// Draws the view's gathering, or with `layer` that layer's of the sun's
+    /// shadow maps, all of it or one `form`, with a pipeline of the
+    /// foliage's layouts and source: a measure's.
     pub(crate) fn draw_by(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         pipeline: &wgpu::RenderPipeline,
         instances: &Instances,
         placed: &Placed,
-        cascade: Option<usize>,
+        layer: Option<usize>,
         form: Option<usize>,
     ) {
-        let gathered = cascade.map_or(&placed.view, |cascade| &placed.cascades[cascade]);
+        let gathered = layer.map_or(&placed.view, |layer| &placed.layers[layer]);
         let runs = gathered
             .runs
             .iter()
@@ -392,7 +396,7 @@ impl Foliage {
             .cloned()
             .collect();
         let gathered = Gathered { runs };
-        let run = |mesh: &Mesh| match cascade {
+        let run = |mesh: &Mesh| match layer {
             None => mesh.drawn.clone(),
             Some(_) => mesh.casts.clone(),
         };
@@ -549,10 +553,10 @@ struct Gathered {
 }
 
 /// What one sight draws of the foliage this frame: those in view, and those
-/// each cascade of the sun's shadows holds.
+/// each layer of the sun's shadow maps holds.
 pub struct Placed {
     view: Gathered,
-    cascades: [Gathered; CASCADES],
+    layers: [Gathered; LAYERS],
 }
 
 /// One sight's foliage this frame, every gathering one after another. Grows,
@@ -560,9 +564,9 @@ pub struct Placed {
 pub struct Instances {
     buffer: wgpu::Buffer,
     capacity: usize,
-    /// The gatherings of the last frame, the view's then each cascade's,
+    /// The gatherings of the last frame, the view's then each layer's,
     /// kept to be filled again.
-    sets: [Vec<(u32, Instance)>; 1 + CASCADES],
+    sets: [Vec<(u32, Instance)>; 1 + LAYERS],
     /// The last frame's instances as written, kept likewise.
     data: Vec<Instance>,
     /// What the sight drew the last frame, in view then in each cascade.

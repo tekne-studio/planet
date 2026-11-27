@@ -141,6 +141,51 @@ fn the_sun_moves_west_wherever_you_stand() {
     );
 }
 
+/// The shadows are drawn from the sun in steps: through a step the two
+/// directions hold, the fade between them runs from 0 to 1, and the next
+/// step begins where the last was going, so nothing cuts.
+#[test]
+fn the_sun_the_shadows_are_drawn_from_holds_through_a_step() {
+    let mut client = Client::new(Recipe::new(1)).expect("a world");
+    let mut input = Input::default();
+    let mut steps_at = |client: &mut Client, seconds: f64| {
+        client.set_clock(seconds);
+        let frame = client.update(1.0 / 60.0, &mut input);
+        client.drain_events();
+        (frame.sun_steps, frame.sun_direction)
+    };
+    let (first, _) = steps_at(&mut client, 100.0);
+    let mut seconds = 100.0;
+    let mut stepped = None;
+    for _ in 0..120 {
+        seconds += 1.0 / 60.0;
+        let (now, sun) = steps_at(&mut client, seconds);
+        assert!((0.0..1.0).contains(&now.blend), "blend {}", now.blend);
+        // Angles this small read true by their sine, never by `acos`.
+        let gone = now.from.cross(sun).length();
+        let step = now.from.cross(now.to).length();
+        assert!(
+            (gone + sun.cross(now.to).length() - step).abs() < 1e-5,
+            "the sun {sun} lies off its steps {} and {}",
+            now.from,
+            now.to
+        );
+        assert!(
+            (gone / step - now.blend).abs() < 0.01,
+            "the sun is {} of its step, the blend {}",
+            gone / step,
+            now.blend
+        );
+        if now.from == first.from {
+            assert_eq!(now.to, first.to, "a step's next moved within it");
+        } else if stepped.is_none() {
+            assert_eq!(now.from, first.to, "the next step began elsewhere");
+            stepped = Some(now);
+        }
+    }
+    assert!(stepped.is_some(), "two seconds took no step");
+}
+
 /// Going to the moon and reloading used to drop you in the ocean: the code
 /// named a column and every body shares the planet's sector grid, so the moon
 /// read back as a place on the planet.

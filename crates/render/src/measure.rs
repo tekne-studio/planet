@@ -26,8 +26,9 @@ pub struct Measured {
     /// What that frame left out.
     pub without: Without,
     /// The GPU's milliseconds of each pass of the frame read back, in the
-    /// order drawn; `"frame"` first, from the start of its first pass to
-    /// the end of its last.
+    /// order drawn, the passes of one name summed: a cascade faded between
+    /// two steps of the sun is drawn twice. `"frame"` first, from the start
+    /// of its first pass to the end of its last.
     pub passes: Vec<(&'static str, f64)>,
     /// What the CPU spent placing the foliage, the last frame.
     pub spent: Spent,
@@ -282,14 +283,14 @@ impl Timer {
                     let ms = |ticks: u64| ticks as f64 * period_ns / 1e6;
                     let first = ticks.iter().step_by(2).min().copied().unwrap_or(0);
                     let last = ticks.iter().skip(1).step_by(2).max().copied().unwrap_or(0);
-                    let passes = core::iter::once((FRAME, ms(last.saturating_sub(first))))
-                        .chain(
-                            labels
-                                .iter()
-                                .zip(ticks.chunks_exact(2))
-                                .map(|(label, pair)| (*label, ms(pair[1].saturating_sub(pair[0])))),
-                        )
-                        .collect();
+                    let mut passes = vec![(FRAME, ms(last.saturating_sub(first)))];
+                    for (label, pair) in labels.iter().zip(ticks.chunks_exact(2)) {
+                        let spent = ms(pair[1].saturating_sub(pair[0]));
+                        match passes.iter_mut().find(|(named, _)| named == label) {
+                            Some((_, sum)) => *sum += spent,
+                            None => passes.push((label, spent)),
+                        }
+                    }
                     drop(mapped);
                     readback.unmap();
                     let mut measured = measured.lock().expect("unpoisoned");

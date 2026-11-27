@@ -29,9 +29,12 @@ struct View {
     // x: 1 when the target is not sRGB and the shader must encode.
     // y: world clock, seconds, wrapped. z: camera height over the sea, metres.
     flags: vec4<f32>,
-    shadow_clip: array<mat4x4<f32>, SHADOW_CASCADES>,
-    // Side of a texel of each cascade on the ground, metres.
-    shadow_texel_m: vec4<f32>,
+    // Each layer of the shadow maps: the cascades, then the faded ones from
+    // the sun's next step.
+    shadow_clip: array<mat4x4<f32>, SHADOW_LAYERS>,
+    // xyz: side of a texel of each cascade on the ground, metres. w: how far
+    // the faded cascades have gone from the sun's step begun to the next.
+    shadow_maps: vec4<f32>,
     interaction_start: vec4<f32>,
     interaction_end: vec4<f32>,
     // x: exposure. y, z: how far the noise has risen through the cloud layer
@@ -83,25 +86,27 @@ fn charged(color: vec3<f32>, shine: f32) -> vec3<f32> {
     return mix(color, CHARGE, clamp(shine, 0.0, 1.0));
 }
 
-fn shadow_sample(relative: vec3<f32>, normal: vec3<f32>, cascade: u32) -> vec2<f32> {
-    let texel_m = view.shadow_texel_m[cascade];
+// How much of the sun `layer`'s map leaves at a point of `cascade`, and how
+// far the cascade covers it.
+fn shadow_sample(relative: vec3<f32>, normal: vec3<f32>, cascade: u32, layer: u32) -> vec2<f32> {
+    let texel_m = view.shadow_maps[cascade];
     let facing = clamp(dot(normal, view.sun.xyz), 0.0, 1.0);
     let offset = normal * texel_m * (0.3 + 1.0 - facing);
-    let p = (view.shadow_clip[cascade] * vec4<f32>(relative + offset, 1.0)).xyz;
+    let p = (view.shadow_clip[layer] * vec4<f32>(relative + offset, 1.0)).xyz;
     let coverage = 1.0 - smoothstep(0.78, 0.97, max(abs(p.x), abs(p.y)));
     if coverage <= 0.0 || p.z <= 0.0 || p.z >= 1.0 {
         return vec2<f32>(1.0, 0.0);
     }
     let uv = p.xy * vec2<f32>(0.5, -0.5) + 0.5;
     let valid = select(0.0, coverage, p.z > 0.0 && p.z < 1.0);
-    return vec2<f32>(shadow_tent(uv, p.z + 0.000008, cascade), valid);
+    return vec2<f32>(shadow_tent(uv, p.z + 0.000008, layer), valid);
 }
 
 // How much of a tent five texels wide the map leaves lit, in nine lookups.
 // A bilinear comparison weighs two texels by where it stands between them,
 // so each lookup is placed where the pair it covers has the weights the tent
 // gives them, and carries their sum.
-fn shadow_tent(uv: vec2<f32>, depth: f32, cascade: u32) -> f32 {
+fn shadow_tent(uv: vec2<f32>, depth: f32, layer: u32) -> f32 {
     let at = uv * SHADOW_SIZE;
     let nearest = floor(at + 0.5);
     let f = at + 0.5 - nearest;
@@ -116,24 +121,34 @@ fn shadow_tent(uv: vec2<f32>, depth: f32, cascade: u32) -> f32 {
         for (var x = 0; x < 3; x++) {
             let tap = (nearest - 0.5 + vec2<f32>(place[x].x, place[y].y)) / SHADOW_SIZE;
             sum += weight[x].x * weight[y].y
-                * textureSampleCompareLevel(shadow_map, shadow_sampler, tap, i32(cascade), depth);
+                * textureSampleCompareLevel(shadow_map, shadow_sampler, tap, i32(layer), depth);
         }
     }
     return sum / 144.0;
 }
 
+// Two pictures of the sun's shadows, each from a step of the sun and each
+// still on the ground, and the fade from the first to the second: never
+// one picture from a sun between them, whose grid would slide.
 fn terrain_shadow(relative: vec3<f32>, normal: vec3<f32>) -> f32 {
     if view.flags.w < 0.5 { return 1.0; }
-    // Finest cascade first; each hands what its rim does not cover to the next.
-    var lit = 0.0;
-    var left = 1.0;
+    let fade = view.shadow_maps.w;
+    // Finest cascade first; each hands what its rim does not cover to the
+    // next. x the picture from the step begun, y from the next.
+    var lit = vec2<f32>(0.0);
+    var left = vec2<f32>(1.0);
     for (var cascade = 0u; cascade < SHADOW_CASCADES; cascade++) {
-        let sample = shadow_sample(relative, normal, cascade);
-        lit += left * sample.y * sample.x;
-        left *= 1.0 - sample.y;
-        if left <= 0.0 { break; }
+        let begun = shadow_sample(relative, normal, cascade, cascade);
+        var next = begun;
+        if cascade < SHADOW_FADED && fade > 0.0 {
+            next = shadow_sample(relative, normal, cascade, SHADOW_CASCADES + cascade);
+        }
+        lit += left * vec2<f32>(begun.y * begun.x, next.y * next.x);
+        left *= 1.0 - vec2<f32>(begun.y, next.y);
+        if max(left.x, left.y) <= 0.0 { break; }
     }
-    return lit + left;
+    let seen = lit + left;
+    return mix(seen.x, seen.y, fade);
 }
 
 const SKY: vec3<f32> = vec3<f32>(0.30, 0.55, 1.00);

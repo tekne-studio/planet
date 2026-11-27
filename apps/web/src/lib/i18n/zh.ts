@@ -96,6 +96,7 @@ export const zh: Messages = {
 	'engine.settings': '设置',
 	'engine.help': '帮助',
 	'engine.settings.shadows': '阴影',
+	'engine.settings.shadowsFade': '阴影平滑移动',
 	'engine.settings.grass': '草地',
 	'engine.settings.clouds': '云',
 	'engine.settings.cloudCover': '云量',

@@ -8,6 +8,7 @@ use glam::{DAffine3, DQuat, DVec3, Vec3};
 use render::{Headless, PictureFrame, write_png};
 use scene::{
     Camera, Effects, Frame, Image, InteractionCapsule, Moon, PictureChange, PictureDraw, PictureId,
+    SunSteps,
 };
 
 /// A checkerboard with a red top left corner and a see-through band across
@@ -49,6 +50,7 @@ fn standing(eye: DVec3, radius_m: f64) -> Frame {
             near: 0.1,
         },
         sun_direction: Vec3::new(0.3, 0.8, 0.5).normalize(),
+        sun_steps: SunSteps::held(Vec3::new(0.3, 0.8, 0.5).normalize()),
         moon: Moon {
             position: DVec3::new(0.0, 0.0, -50_000.0),
             radius_m: 100.0,
@@ -218,6 +220,7 @@ fn a_pane_is_a_window_on_the_world_past_the_portal() {
     let mut frame = Frame {
         camera,
         sun_direction: Vec3::new(0.0, 0.3, 1.0).normalize(),
+        sun_steps: SunSteps::held(Vec3::new(0.0, 0.3, 1.0).normalize()),
         effects: Effects {
             clouds: false,
             bloom: 0.0,

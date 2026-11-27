@@ -96,6 +96,7 @@
 			knobs: [
 				{ kind: 'range', key: 'resolution', label: t('engine.settings.resolution'), min: 0.25, max: 1, step: 0.25, format: percent },
 				{ kind: 'check', key: 'shadows', label: t('engine.settings.shadows') },
+				{ kind: 'check', key: 'shadows_fade', label: t('engine.settings.shadowsFade'), off: (e) => !e.shadows },
 				{ kind: 'check', key: 'grass', label: t('engine.settings.grass') },
 				{ kind: 'range', key: 'exposure', label: t('engine.settings.exposure'), min: 0.1, max: 4 },
 				{ kind: 'range', key: 'bloom', label: t('engine.settings.bloom'), min: 0, max: 3 },

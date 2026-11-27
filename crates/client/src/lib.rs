@@ -120,6 +120,11 @@ pub use way::{Held, Profile, Steering, Step, Straddle, Way};
 
 /// Seconds for the sun to go around once.
 const DAY_S: f64 = 1200.0;
+/// How far the sun goes between the directions its shadows are drawn from,
+/// radians: a step every 0.83 s of this day. Between two, a shadow ten
+/// metres long moves a few centimetres, under the width the maps soften
+/// an edge across.
+const SHADOW_STEP: f64 = 0.25 * core::f64::consts::PI / 180.0;
 
 /// How wide a body is for how tall it stands, roughly: what the prompt
 /// keeps clear of on the screen.
@@ -2977,12 +2982,16 @@ impl Client {
         }
     }
 
+    /// How far round its day the sun is, radians: a function of the clock.
+    fn day_angle(&self) -> f64 {
+        self.noon_offset + self.clock_s / DAY_S * core::f64::consts::TAU
+    }
+
     /// Where the moon is now: an orbit on rails, a function of the clock. It
     /// laps the sky a little slower than the sun on a tilted path, so its
     /// phase changes from night to night.
     fn moon_position(&self) -> DVec3 {
-        let angle = self.noon_offset + self.clock_s / DAY_S * core::f64::consts::TAU;
-        let lunar = angle * MOON_PACE + 2.4;
+        let lunar = self.day_angle() * MOON_PACE + 2.4;
         let tilt = -0.25 + 0.3 * (lunar * 0.37).sin();
         DVec3::new(lunar.cos(), tilt, lunar.sin()).normalize() * MOON_ORBIT_M
     }
@@ -3138,8 +3147,8 @@ impl Client {
         played: Option<(PartId, [Pad; arcade::PADS])>,
     ) -> Frame {
         let overlay = self.overlay(&camera, &pictures);
-        let angle = self.noon_offset + self.clock_s / DAY_S * core::f64::consts::TAU;
-        let sun = DVec3::new(angle.cos(), 0.35, angle.sin()).normalize();
+        let angle = self.day_angle();
+        let sun = sun_toward(angle);
 
         // Every body, the player's first: an avatar when its file has
         // landed, the box figure until then. With the camera in its head, or
@@ -3213,6 +3222,7 @@ impl Client {
         Frame {
             camera,
             sun_direction: sun.as_vec3(),
+            sun_steps: sun_steps(angle),
             moon: scene::Moon {
                 position: self.moon_position(),
                 radius_m: MOON_RADIUS_M,
@@ -3563,6 +3573,24 @@ fn dry(sample: Sample, scale: f64) -> bool {
 /// so a search that gave up after sector 0 spawned people hundreds of metres
 /// under water. Sector 0 is still walked first, so a world that had an answer
 /// there opens where it always did.
+/// Toward the sun `angle` radians round its day.
+fn sun_toward(angle: f64) -> DVec3 {
+    DVec3::new(angle.cos(), 0.35, angle.sin()).normalize()
+}
+
+/// The sun the shadows are drawn from at `angle`: the step of its path it
+/// has begun, the next, and how far between. A function of the clock
+/// alone, so every client and every shot of one clock draw the same maps.
+fn sun_steps(angle: f64) -> scene::SunSteps {
+    let steps = angle / SHADOW_STEP;
+    let begun = steps.floor();
+    scene::SunSteps {
+        from: sun_toward(begun * SHADOW_STEP).as_vec3(),
+        to: sun_toward((begun + 1.0) * SHADOW_STEP).as_vec3(),
+        blend: (steps - begun) as f32,
+    }
+}
+
 pub(crate) fn spawn_point(generator: &Generator) -> SurfacePoint {
     let grid = generator.sphere().blocks();
     let side = f64::from(grid.side());

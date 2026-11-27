@@ -214,6 +214,9 @@ fn layout(root: &mut egui::Ui, open: &mut bool, effects: &mut Effects, fps: f32)
             ui.label(format!("{fps:.0} fps"));
             ui.separator();
             ui.checkbox(&mut effects.shadows, "Shadows");
+            ui.add_enabled_ui(effects.shadows, |ui| {
+                ui.checkbox(&mut effects.shadows_fade, "Shadows move smoothly");
+            });
             ui.checkbox(&mut effects.grass, "Grass");
             ui.checkbox(&mut effects.clouds, "Clouds");
             ui.add(egui::Slider::new(&mut effects.resolution, 0.25..=1.0).text("Resolution"));

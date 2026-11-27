@@ -38,6 +38,8 @@ export interface Loudness {
 /** How the picture is made. Mirrors `scene::Effects`; the engine clamps it. */
 export interface Effects {
 	shadows: boolean;
+	/** Whether the shadows fade from one step of the sun to the next; off, they move a step at a time, for fewer passes. */
+	shadows_fade: boolean;
 	grass: boolean;
 	clouds: boolean;
 	/** The share of the view's pixels the world is drawn at, each way, 0.25 to 1. */

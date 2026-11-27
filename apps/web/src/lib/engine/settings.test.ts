@@ -4,6 +4,7 @@ import { gameDefaults, hiddenMarkers, loudnessDefaults, matching, presetName, re
 
 const high: Effects = {
 	shadows: true,
+	shadows_fade: true,
 	grass: true,
 	clouds: true,
 	resolution: 1,

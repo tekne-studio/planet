@@ -79,8 +79,10 @@ struct ViewUniform {
     moon: [f32; 4],
     moon_light: [f32; 4],
     flags: [f32; 4],
-    shadow_clip: [[[f32; 4]; 4]; shadow::CASCADES],
-    shadow_texel_m: [f32; 4],
+    shadow_clip: [[[f32; 4]; 4]; shadow::LAYERS],
+    /// `xyz`: the side of a texel of each cascade on the ground, metres.
+    /// `w`: how far the faded cascades have gone to the sun's next step.
+    shadow_maps: [f32; 4],
     interaction_start: [f32; 4],
     interaction_end: [f32; 4],
     post: [f32; 4],
@@ -603,17 +605,17 @@ impl Renderer {
             (boxes, skinned, models)
         });
 
+        let layers = shadow::drawn(frame);
         let casting = shadows.then(|| {
             let matrices = shadow::matrices(frame, camera);
-            let seen = shadow::Seen::new(camera, width as f32 / height as f32, frame.sun_direction);
+            let drawn = &matrices[..layers];
+            let steps = [frame.sun_steps.from, frame.sun_steps.to];
+            let seen = shadow::Seen::new(camera, width as f32 / height as f32, &steps);
             let wanted: Vec<_> = frame
                 .shadow_patches
                 .iter()
                 .copied()
-                .filter(|draw| {
-                    self.terrain
-                        .casts_into(draw, camera.position, &matrices, &seen)
-                })
+                .filter(|draw| self.terrain.casts_into(draw, camera.position, drawn, &seen))
                 .collect();
             let casters = resources.casters.write(
                 &self.device,
@@ -637,7 +639,7 @@ impl Renderer {
                 let reach_m = frame.effects.foliage_reach_m;
                 (
                     self.terrain.foliage(&resources.casters, casters, reach_m),
-                    matrices,
+                    &matrices[..layers],
                     seen,
                 )
             }),
@@ -646,27 +648,30 @@ impl Renderer {
 
         if let Some((matrices, casters, _)) = &casting {
             let (boxes, skinned, models) = placed.as_ref().expect("whole");
-            for (cascade, matrix) in matrices.iter().enumerate() {
+            for (layer, matrix) in matrices[..layers].iter().enumerate() {
                 let mut light = uniform;
                 light.clip_from_relative = matrix.to_cols_array_2d();
                 self.queue.write_buffer(
-                    &resources.shadows.uniforms[cascade],
+                    &resources.shadows.uniforms[layer],
                     0,
                     bytemuck::bytes_of(&light),
                 );
-                let layer = &resources.shadows.layers[cascade];
-                let group = &resources.shadows.groups[cascade];
+                let cascade = shadow::cascade_of(layer);
+                let map = &resources.shadows.layers[layer];
+                let group = &resources.shadows.groups[layer];
+                // A cascade faded between two steps of the sun is two
+                // passes, timed as one.
                 let writes = measure
                     .as_deref_mut()
                     .and_then(|measure| measure.writes(measure::CASCADE[cascade]));
-                let mut pass = depth_pass(encoder, layer, wgpu::LoadOp::Clear(0.0), writes);
+                let mut pass = depth_pass(encoder, map, wgpu::LoadOp::Clear(0.0), writes);
                 pass.set_bind_group(0, group, &[]);
                 self.terrain
                     .draw_shadow(&mut pass, &resources.casters, casters, *matrix);
                 let drawn = !without.cascades[cascade];
                 if drawn && !apart {
                     self.foliage
-                        .draw_shadow(&mut pass, &resources.foliage, &foliage, cascade);
+                        .draw_shadow(&mut pass, &resources.foliage, &foliage, layer);
                 }
                 self.volumes
                     .draw_shadow(&mut pass, &resources.volumes, &volumes, *matrix);
@@ -684,16 +689,19 @@ impl Renderer {
                 );
                 drop(pass);
                 if drawn && apart {
-                    let mut pass = depth_pass(encoder, layer, wgpu::LoadOp::Load, None);
+                    let mut pass = depth_pass(encoder, map, wgpu::LoadOp::Load, None);
                     pass.set_bind_group(0, group, &[]);
                     self.foliage
-                        .draw_shadow(&mut pass, &resources.foliage, &foliage, cascade);
+                        .draw_shadow(&mut pass, &resources.foliage, &foliage, layer);
                 }
-                if let Some(counter) = counting(measure.as_deref()) {
-                    counter.cascade(encoder, cascade, layer, &|pass, pipeline| {
+                // A cascade's fragments are counted in its first picture, as
+                // what it draws is.
+                let first = layer < shadow::CASCADES;
+                if let Some(counter) = counting(measure.as_deref()).filter(|_| first) {
+                    counter.cascade(encoder, cascade, map, &|pass, pipeline| {
                         pass.set_bind_group(0, group, &[]);
                         let instances = &resources.foliage;
-                        let gathering = Some(cascade);
+                        let gathering = Some(layer);
                         self.foliage
                             .draw_by(pass, pipeline, instances, &foliage, gathering, None);
                     });
@@ -927,7 +935,7 @@ impl Renderer {
                 .extend(0.0)
                 .to_array(),
             shadow_clip: shadow::matrices(frame, camera).map(|m| m.to_cols_array_2d()),
-            shadow_texel_m: shadow::texels_m(),
+            shadow_maps: shadow::reading(frame),
             interaction_start: relative(frame.interaction.start, camera.position)
                 .extend(frame.interaction.radius_m)
                 .to_array(),

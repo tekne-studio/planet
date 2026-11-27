@@ -412,6 +412,11 @@ fn one_welcome_sets_one_sky() {
         fa.sun_direction,
         fb.sun_direction
     );
+    let (sa, sb) = (fa.sun_steps, fb.sun_steps);
+    assert!(
+        (sa.from - sb.from).length() < 1e-5 && (sa.to - sb.to).length() < 1e-5,
+        "the sun their shadows are drawn from: {sa:?} and {sb:?}"
+    );
     assert!(
         (fa.moon.position - fb.moon.position).length() < 1e-3,
         "the moon: {} and {}",

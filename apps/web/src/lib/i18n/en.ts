@@ -101,6 +101,7 @@ export const en = {
 	'engine.settings': 'Settings',
 	'engine.help': 'Help',
 	'engine.settings.shadows': 'Shadows',
+	'engine.settings.shadowsFade': 'Shadows move smoothly',
 	'engine.settings.grass': 'Grass',
 	'engine.settings.clouds': 'Clouds',
 	'engine.settings.cloudCover': 'Cloud cover',

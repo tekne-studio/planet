@@ -102,6 +102,7 @@ export const pt: Messages = {
 	'engine.settings': 'Ajustes',
 	'engine.help': 'Ajuda',
 	'engine.settings.shadows': 'Sombras',
+	'engine.settings.shadowsFade': 'Sombras se movem suaves',
 	'engine.settings.grass': 'Grama',
 	'engine.settings.clouds': 'Nuvens',
 	'engine.settings.cloudCover': 'Cobertura de nuvens',

@@ -108,7 +108,9 @@ pub fn run(client: &mut Client, size: [u32; 2], dir: &Path) -> Result<(), String
                         frame.camera.position += across * picture as f64;
                         if moving == Moving::Sun {
                             client.set_clock(clock_s + picture as f64 / 60.0);
-                            frame.sun_direction = client.settled_frame().sun_direction;
+                            let now = client.settled_frame();
+                            frame.sun_direction = now.sun_direction;
+                            frame.sun_steps = now.sun_steps;
                         }
                         headless.render(&frame)
                     })

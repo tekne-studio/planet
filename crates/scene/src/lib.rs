@@ -284,6 +284,10 @@ impl ToneMap {
 #[serde(default)]
 pub struct Effects {
     pub shadows: bool,
+    /// Whether the sun's shadows fade from one step of the sun to the next,
+    /// the two near cascades drawn from both ([`SunSteps`]); off, every
+    /// cascade is drawn once and the shadows move a step at a time.
+    pub shadows_fade: bool,
     pub grass: bool,
     pub clouds: bool,
     /// What share of the view's pixels the world is drawn at, each way: 1
@@ -338,6 +342,7 @@ impl Default for Effects {
     fn default() -> Self {
         Self {
             shadows: true,
+            shadows_fade: true,
             grass: true,
             clouds: true,
             resolution: 1.0,
@@ -388,11 +393,13 @@ impl Effects {
         }
     }
 
-    /// Between the two: every effect on, foliage drawn whole half as far and
-    /// half the undergrowth.
+    /// Between the two: every effect on, foliage drawn whole half as far,
+    /// half the undergrowth, and the shadows moving a step of the sun at a
+    /// time: three passes of the casters a frame for five.
     pub fn medium() -> Self {
         let high = Self::default();
         Self {
+            shadows_fade: false,
             foliage_near_m: 50.0,
             foliage_mid_m: 160.0,
             foliage_reach_m: 400.0,
@@ -790,13 +797,41 @@ pub struct Moon {
     pub radius_m: f64,
 }
 
+/// The sun the shadow maps are drawn from: never the true one, which moves
+/// every frame and slides a map's grid under the ground with it, but the
+/// sun in steps of its own path. A map drawn from one step holds still on
+/// the ground for the step's life; the picture fades from the step begun
+/// to the next as the sun goes from one to the other.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SunSteps {
+    /// Unit vector toward the sun at the step begun.
+    pub from: Vec3,
+    /// The same at the next step.
+    pub to: Vec3,
+    /// How far the sun has gone from `from` to `to`, 0 to 1.
+    pub blend: f32,
+}
+
+impl SunSteps {
+    /// A sun that stands still toward `sun`: both steps on it.
+    pub fn held(sun: Vec3) -> Self {
+        Self {
+            from: sun,
+            to: sun,
+            blend: 0.0,
+        }
+    }
+}
+
 /// Everything a renderer needs for one frame, besides the patch meshes it
 /// already holds.
 #[derive(Clone, Debug)]
 pub struct Frame {
     pub camera: Camera,
-    /// Unit vector toward the sun.
+    /// Unit vector toward the sun: what lights the world and draws the sky.
     pub sun_direction: Vec3,
+    /// The sun its shadows are drawn from.
+    pub sun_steps: SunSteps,
     pub moon: Moon,
     /// Radius of the sea level sphere, metres. The atmosphere sits on it.
     pub planet_radius_m: f64,

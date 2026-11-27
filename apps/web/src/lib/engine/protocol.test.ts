@@ -15,6 +15,7 @@ describe('parseEvent', () => {
 		expect(parseEvent('{"type":"choices","home":7,"favourites":[5]}')).toEqual({ type: 'choices', home: 7, favourites: [5] });
 		const effects: Effects = {
 			shadows: true,
+			shadows_fade: true,
 			grass: true,
 			clouds: false,
 			resolution: 1,
