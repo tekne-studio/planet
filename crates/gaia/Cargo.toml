@@ -16,8 +16,9 @@ scene.workspace = true
 topology.workspace = true
 worldgen.workspace = true
 
-# The goldens run on wasm32 under node too (`.cargo/config.toml` names the
-# runner): what lives is the same bits on every platform.
+# The goldens and the legs run on wasm32 under node too (`.cargo/config.toml`
+# names the runner): what lives is the same bits on every platform, and its
+# legs hold where a browser draws them.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 

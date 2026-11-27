@@ -1,7 +1,12 @@
 //! An animal's legs over a long life: every frame, every leg stands under
 //! its body, bends the way its joint bends and reaches the ground it is
 //! on, through slopes, steps, turns, every pace and ground that changes
-//! under it.
+//! under it. They run natively and on wasm32 under node, where the world
+//! draws them in a browser: `cargo test -p gaia --target
+//! wasm32-unknown-unknown --test legs`.
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_test::wasm_bindgen_test as test;
 
 use gaia::fauna::horse::HORSE;
 use gaia::fauna::{Animal, Footing, Going, Ground, Kind, LEGS, Leap, Look};

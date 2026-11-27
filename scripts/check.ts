@@ -8,8 +8,9 @@ await $`cargo clippy --workspace --all-targets -- -D warnings`;
 await $`cargo test --workspace`;
 // The synth's samples are the same bits on wasm32, under node.
 await $`cargo test -p synth --target wasm32-unknown-unknown`;
-// So is what lives: gaia's goldens, the same hashes on wasm32.
-await $`cargo test -p gaia --target wasm32-unknown-unknown --test golden`;
+// So is what lives: gaia's goldens, the same hashes on wasm32; and its
+// legs hold there, where the world draws them in a browser.
+await $`cargo test -p gaia --target wasm32-unknown-unknown --test golden --test legs`;
 await $`cargo build --release --target wasm32-unknown-unknown -p shell-web`;
 // The server embeds the module: built before Go is.
 await $`bun scripts/module.ts`;
