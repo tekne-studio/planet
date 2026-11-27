@@ -87,6 +87,15 @@ pub struct Sound {
     #[prost(uint32, tag="2")]
     pub seed: u32,
 }
+/// How long the world's day is, in minutes: the time the sun takes round.
+/// Up, an admin's op: the day is to be this long, one of `DayLength`; any
+/// other ask is dropped unheard. Down, to everyone here once it is: the sun
+/// is where the new length puts it, at once.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Day {
+    #[prost(uint32, tag="1")]
+    pub minutes: u32,
+}
 /// An owner's message, carried by the server and never read by it. The server
 /// routes it by the owner's name and checks who may ask for `kind`; the
 /// payload is the owner's own, encoded by its own schema: a plugin's under
@@ -137,7 +146,7 @@ pub struct Answer {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ClientMessage {
-    #[prost(oneof="client_message::Message", tags="1, 2, 3, 5, 6, 7, 8")]
+    #[prost(oneof="client_message::Message", tags="1, 2, 3, 5, 6, 7, 8, 9")]
     pub message: ::core::option::Option<client_message::Message>,
 }
 /// Nested message and enum types in `ClientMessage`.
@@ -158,6 +167,8 @@ pub mod client_message {
         Sound(super::Sound),
         #[prost(message, tag="8")]
         Relay(super::Relay),
+        #[prost(message, tag="9")]
+        Day(super::Day),
     }
 }
 /// Seed + params + generator version, as the world folder holds it. The
@@ -228,6 +239,10 @@ pub struct Welcome {
     /// so its client keeps its home and favourites.
     #[prost(bool, tag="8")]
     pub visitor: bool,
+    /// How long the world's day is, in minutes, as its admin chose it; zero
+    /// while none was. The sun is the clock over it.
+    #[prost(uint32, tag="9")]
+    pub day_minutes: u32,
 }
 /// The plugins that are on, said again whenever the admin switches one.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -310,7 +325,7 @@ pub struct Refused {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServerMessage {
-    #[prost(oneof="server_message::Message", tags="1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13")]
+    #[prost(oneof="server_message::Message", tags="1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14")]
     pub message: ::core::option::Option<server_message::Message>,
 }
 /// Nested message and enum types in `ServerMessage`.
@@ -341,6 +356,36 @@ pub mod server_message {
         Sounded(super::Sounded),
         #[prost(message, tag="13")]
         Relayed(super::Relayed),
+        #[prost(message, tag="14")]
+        Day(super::Day),
+    }
+}
+/// The protocol this schema is, as Hello says it: a number of the schema, read
+/// by both sides from here. The server refuses every other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum Protocol {
+    None = 0,
+    Current = 6,
+}
+impl Protocol {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::None => "PROTOCOL_NONE",
+            Self::Current => "PROTOCOL_CURRENT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PROTOCOL_NONE" => Some(Self::None),
+            "PROTOCOL_CURRENT" => Some(Self::Current),
+            _ => None,
+        }
     }
 }
 /// The body a stance is measured from. Every body is parametrised on the
@@ -468,6 +513,45 @@ impl Limit {
             "LIMIT_RELAY_BYTES" => Some(Self::RelayBytes),
             "LIMIT_RELAY_PER_SECOND" => Some(Self::RelayPerSecond),
             "LIMIT_RELAY_BURST" => Some(Self::RelayBurst),
+            _ => None,
+        }
+    }
+}
+/// The lengths of a day a world's admin chooses among, in minutes: numbers of
+/// the schema, never sent. A day travels as its minutes, so a length outside
+/// this list later changes no field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DayLength {
+    /// None chosen: the client's own day, 24 minutes.
+    None = 0,
+    Of24 = 24,
+    Of48 = 48,
+    Of120 = 120,
+    Of240 = 240,
+}
+impl DayLength {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::None => "DAY_LENGTH_NONE",
+            Self::Of24 => "DAY_LENGTH_OF_24",
+            Self::Of48 => "DAY_LENGTH_OF_48",
+            Self::Of120 => "DAY_LENGTH_OF_120",
+            Self::Of240 => "DAY_LENGTH_OF_240",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DAY_LENGTH_NONE" => Some(Self::None),
+            "DAY_LENGTH_OF_24" => Some(Self::Of24),
+            "DAY_LENGTH_OF_48" => Some(Self::Of48),
+            "DAY_LENGTH_OF_120" => Some(Self::Of120),
+            "DAY_LENGTH_OF_240" => Some(Self::Of240),
             _ => None,
         }
     }

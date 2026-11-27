@@ -36,6 +36,7 @@ fn welcome(client: &Client, level: protocol::Level) -> Vec<u8> {
         clock_ms: 0,
         avatar: String::new(),
         visitor: level == protocol::Level::Anonymous,
+        day_minutes: 0,
     }))
 }
 

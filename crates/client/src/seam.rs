@@ -209,6 +209,12 @@ pub enum Command {
         #[serde(default)]
         pet: Option<Pet>,
     },
+    /// Makes the world's day `minutes` long, one of the lengths
+    /// [`Event::Day`] lists: the world admin's to choose. The sun jumps, in
+    /// every eye at once, to where the clock over the new length puts it.
+    SetDay {
+        minutes: u32,
+    },
     /// Names the body's pet: trimmed, no control character, at most
     /// [`gaia::fauna::NAME_BYTES`].
     NamePet {
@@ -272,6 +278,10 @@ pub enum Event {
         /// end's: N and S are English, and a user visible string belongs to
         /// whoever holds the locale.
         bearing_deg: Option<f64>,
+        /// The hour of the day here, minutes past midnight, `0..1440`: the
+        /// sun's at the middle meridian of the place's time zone, the same
+        /// for everyone in it. `None` on the moon, which keeps no clock.
+        hour_min: Option<u32>,
         /// The pace the body goes at in a way that goes in paces, by the
         /// name its plugin gave it: a word of that plugin's.
         pace: Option<&'static str>,
@@ -291,6 +301,12 @@ pub enum Event {
         /// What the world said this session may do. `None` until a world
         /// has spoken, and then the last word stands through a dropped link.
         level: Option<Level>,
+    },
+    /// How long the world's day is, minutes, whenever that changes, and
+    /// once at the start: `lengths` are the ones its admin chooses among.
+    Day {
+        minutes: u32,
+        lengths: Vec<u32>,
     },
     /// Who else is here, whenever that changes. Empty when offline.
     Peers {

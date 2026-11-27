@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,6 +80,25 @@ type unfounded struct{}
 
 func (unfounded) Recipe(context.Context) (Recipe, error) {
 	return Recipe{}, ErrUnfounded
+}
+
+// kept is Days in memory: the day as the admin last chose it.
+type kept struct {
+	mu      sync.Mutex
+	minutes uint32
+}
+
+func (k *kept) DayMinutes() uint32 {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.minutes
+}
+
+func (k *kept) KeepDay(minutes uint32) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.minutes = minutes
+	return nil
 }
 
 func connect(t *testing.T, hub *Hub, hello *pb.Hello) *client {
@@ -156,7 +176,7 @@ func stance(u float32) *pb.Stance {
 }
 
 func TestTwoPeopleSeeEachOther(t *testing.T) {
-	hub := NewHub(founded(recipe(t)), nil, nil)
+	hub := NewHub(founded(recipe(t)), &kept{}, nil, nil)
 
 	a := connect(t, hub, hello())
 	welcome := a.hear().GetWelcome()
@@ -286,7 +306,7 @@ func TestAKeyNamesAPerson(t *testing.T) {
 		t.Fatal("a key past its life names nobody")
 	}
 
-	hub := NewHub(founded(recipe(t)), nil, nil)
+	hub := NewHub(founded(recipe(t)), &kept{}, nil, nil)
 	a := connectAs(t, hub, who, hello())
 	if welcome := a.hear().GetWelcome(); welcome == nil || welcome.Level != pb.Level_LEVEL_BUILDER || welcome.Avatar != vrm || welcome.Visitor {
 		t.Fatalf("a person is welcome, and told their level, their avatar and that they are no visitor: %v", welcome)
@@ -320,7 +340,7 @@ func TestTheWireCountsLevelsAsTheCoreDoes(t *testing.T) {
 }
 
 func TestWhatIsRefused(t *testing.T) {
-	hub := NewHub(founded(recipe(t)), nil, nil)
+	hub := NewHub(founded(recipe(t)), &kept{}, nil, nil)
 
 	old := connect(t, hub, &pb.Hello{Protocol: Protocol + 1})
 	if old.hear().GetRefused() == nil {
@@ -334,7 +354,7 @@ func TestWhatIsRefused(t *testing.T) {
 		t.Fatal("nothing refused leaves an actor behind")
 	}
 
-	empty := NewHub(unfounded{}, nil, nil)
+	empty := NewHub(unfounded{}, &kept{}, nil, nil)
 	early := connect(t, empty, hello())
 	if refused := early.hear().GetRefused(); refused == nil || refused.Reason != ErrUnfounded.Error() {
 		t.Fatalf("a world with no recipe yet is refused: %v", refused)
@@ -346,7 +366,7 @@ func TestWhatIsRefused(t *testing.T) {
 }
 
 func TestANameIsGivenAndChanged(t *testing.T) {
-	hub := NewHub(founded(recipe(t)), nil, nil)
+	hub := NewHub(founded(recipe(t)), &kept{}, nil, nil)
 	a := connect(t, hub, &pb.Hello{Protocol: Protocol, Name: "  Zed   the  " + strings.Repeat("z", NameChars)})
 	a.hear()
 	b := connect(t, hub, hello())
@@ -381,7 +401,7 @@ func TestANameIsGivenAndChanged(t *testing.T) {
 }
 
 func TestASoundIsHeardByEveryoneElseWithinItsBurst(t *testing.T) {
-	hub := NewHub(founded(recipe(t)), nil, nil)
+	hub := NewHub(founded(recipe(t)), &kept{}, nil, nil)
 	a := connect(t, hub, hello())
 	session := a.hear().GetWelcome().Session
 	b := connect(t, hub, hello())
@@ -470,7 +490,7 @@ func (c *client) envelope() string {
 
 func TestAnOpPassesTheHostOnItsWayToItsPlugin(t *testing.T) {
 	plugin := &echo{}
-	hub := NewHub(founded(recipe(t)), []Installed{{Plugin: plugin, On: true}}, nil)
+	hub := NewHub(founded(recipe(t)), &kept{}, []Installed{{Plugin: plugin, On: true}}, nil)
 	visitor := connect(t, hub, hello())
 	welcome := visitor.hear().GetWelcome()
 	if len(welcome.Plugins) != 1 || welcome.Plugins[0].Name != "echo" || welcome.Plugins[0].Version != 7 {
@@ -518,7 +538,7 @@ func TestAnOpPassesTheHostOnItsWayToItsPlugin(t *testing.T) {
 
 func TestAFixedOwnerIsOnInEveryWorldAndUnsaid(t *testing.T) {
 	// A folder that says off does not reach a fixed owner.
-	hub := NewHub(founded(recipe(t)), []Installed{{Plugin: &echo{}, On: true, Fixed: true}}, map[string]bool{"echo": false})
+	hub := NewHub(founded(recipe(t)), &kept{}, []Installed{{Plugin: &echo{}, On: true, Fixed: true}}, map[string]bool{"echo": false})
 	if hub.Carries("echo") || len(hub.Speaks()) != 0 {
 		t.Fatalf("nobody switches a fixed owner, and the statement leaves it out: %v", hub.Speaks())
 	}
@@ -537,7 +557,7 @@ func TestAFixedOwnerIsOnInEveryWorldAndUnsaid(t *testing.T) {
 func TestAPluginIsOnOrOffForAWorld(t *testing.T) {
 	plugin := &echo{}
 	// The config says on, and the world's own choice says off.
-	hub := NewHub(founded(recipe(t)), []Installed{{Plugin: plugin, On: true}}, map[string]bool{"echo": false})
+	hub := NewHub(founded(recipe(t)), &kept{}, []Installed{{Plugin: plugin, On: true}}, map[string]bool{"echo": false})
 	if !hub.Carries("echo") || hub.Carries("nobody") || len(hub.Speaks()) != 0 {
 		t.Fatalf("the version carries it and the world has it off: %v", hub.Speaks())
 	}
@@ -621,7 +641,7 @@ func (c *client) relayed() string {
 
 func TestARelayReachesEveryHolderInOneOrder(t *testing.T) {
 	plugin := &table{sat: map[uint64][]uint32{}}
-	hub := NewHub(founded(recipe(t)), []Installed{{Plugin: plugin, On: true}}, nil)
+	hub := NewHub(founded(recipe(t)), &kept{}, []Installed{{Plugin: plugin, On: true}}, nil)
 	a := connect(t, hub, hello())
 	idA := a.hear().GetWelcome().Session
 	b := connect(t, hub, hello())
@@ -715,4 +735,76 @@ func TestARelayPastTheRateIsDropped(t *testing.T) {
 	if s.relays(quiet) {
 		t.Fatal("a quiet while refills to the burst at most")
 	}
+}
+
+// day asks the world for a day this many minutes long.
+func day(minutes uint32) *pb.ClientMessage {
+	return &pb.ClientMessage{Message: &pb.ClientMessage_Day{Day: &pb.Day{Minutes: minutes}}}
+}
+
+func TestTheAdminSetsTheDayForEveryoneHere(t *testing.T) {
+	days := &kept{}
+	hub := NewHub(founded(recipe(t)), days, nil, nil)
+	admin := connectAs(t, hub, Identity{UserID: "a", Level: LevelAdmin}, hello())
+	if minutes := admin.hear().GetWelcome().GetDayMinutes(); minutes != 0 {
+		t.Fatalf("a world whose admin never chose says none: %d", minutes)
+	}
+	visitor := connect(t, hub, hello())
+	visitor.hear()
+
+	admin.say(day(120))
+	for _, c := range []*client{admin, visitor} {
+		said := c.hearUntil(func(m *pb.ServerMessage) bool { return m.GetDay() != nil }).GetDay()
+		if said.GetMinutes() != 120 {
+			t.Fatalf("everyone here hears the new day, the admin too: %v", said)
+		}
+	}
+	if days.DayMinutes() != 120 {
+		t.Fatalf("and the world keeps it: %d", days.DayMinutes())
+	}
+	late := connect(t, hub, hello())
+	if minutes := late.hearUntil(func(m *pb.ServerMessage) bool { return m.GetWelcome() != nil }).GetWelcome().GetDayMinutes(); minutes != 120 {
+		t.Fatalf("whoever arrives after is welcomed into it: %d", minutes)
+	}
+	admin.leave()
+	visitor.leave()
+	late.leave()
+}
+
+func TestADayIsOneOfTheListedLengthsAndAnAdminsAlone(t *testing.T) {
+	days := &kept{minutes: 48}
+	hub := NewHub(founded(recipe(t)), days, nil, nil)
+	admin := connectAs(t, hub, Identity{UserID: "a", Level: LevelAdmin}, hello())
+	admin.hear()
+	builder := connectAs(t, hub, Identity{UserID: "b", Level: LevelBuilder}, hello())
+	builder.hear()
+	visitor := connect(t, hub, hello())
+	visitor.hear()
+
+	// The world takes each session's messages in order: once the admin hears
+	// the others' wear, their asks before it were handled.
+	visitor.say(day(120))
+	builder.say(day(240))
+	for _, c := range []*client{visitor, builder} {
+		c.say(&pb.ClientMessage{Message: &pb.ClientMessage_Wear{Wear: &pb.Wear{Avatar: "avatars/Ada.vrm"}}})
+	}
+	for range 2 {
+		admin.hearUntil(func(m *pb.ServerMessage) bool { return m.GetWearing() != nil })
+	}
+	for _, minutes := range []uint32{0, 20, 30, 1440, math.MaxUint32} {
+		admin.say(day(minutes))
+	}
+	admin.say(day(24))
+	said := visitor.hearUntil(func(m *pb.ServerMessage) bool { return m.GetDay() != nil }).GetDay()
+	if said.GetMinutes() != 24 || days.DayMinutes() != 24 {
+		t.Fatalf("a day of another length, or asked by another level, is dropped unheard: %v, kept %d", said, days.DayMinutes())
+	}
+	for _, minutes := range []uint32{24, 48, 120, 240} {
+		if !listedDay(minutes) {
+			t.Fatalf("%d minutes is a day an admin may choose", minutes)
+		}
+	}
+	admin.leave()
+	builder.leave()
+	visitor.leave()
 }

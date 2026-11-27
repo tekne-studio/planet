@@ -31,6 +31,7 @@ fn welcome(client: &Client) -> Vec<u8> {
         clock_ms: 0,
         avatar: String::new(),
         visitor: true,
+        day_minutes: 0,
     }))
 }
 

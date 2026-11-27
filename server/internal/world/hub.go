@@ -15,9 +15,9 @@ import (
 	pb "github.com/tekne-studio/planet/server/internal/protocol"
 )
 
-// Protocol is the wire version this server speaks. Hello says the client's;
-// any other number is refused. Kept equal to `protocol::PROTOCOL` in Rust.
-const Protocol = 5
+// Protocol is the wire version this server speaks, as the schema numbers it
+// for both sides. Hello says the client's; any other number is refused.
+const Protocol = uint32(pb.Protocol_PROTOCOL_CURRENT)
 
 // A client says Hello within this long of connecting, and then something at
 // least every few seconds; a silent link is a dead one.
@@ -38,10 +38,20 @@ type Catalog interface {
 	Recipe(ctx context.Context) (Recipe, error)
 }
 
+// Days is where the length of the world's day is kept as its admin chose it:
+// the world folder, behind two methods.
+type Days interface {
+	// DayMinutes is the length chosen, in minutes; zero while none was.
+	DayMinutes() uint32
+	// KeepDay keeps a new length, or says why it could not.
+	KeepDay(minutes uint32) error
+}
+
 // Hub holds the world's actor: started on the first join and retired after
 // the last leave.
 type Hub struct {
 	catalog   Catalog
+	days      Days
 	installed []Installed
 
 	mu    sync.Mutex
@@ -51,9 +61,10 @@ type Hub struct {
 	on map[string]bool
 }
 
-// NewHub holds a world and the plugins its version carries, each on as the
-// config says until `set` says otherwise: the world's own choice, by name.
-func NewHub(catalog Catalog, installed []Installed, set map[string]bool) *Hub {
+// NewHub holds a world, where its day is kept, and the plugins its version
+// carries, each on as the config says until `set` says otherwise: the
+// world's own choice, by name.
+func NewHub(catalog Catalog, days Days, installed []Installed, set map[string]bool) *Hub {
 	on := map[string]bool{}
 	for _, in := range installed {
 		on[in.Plugin.Name()] = in.On
@@ -65,7 +76,7 @@ func NewHub(catalog Catalog, installed []Installed, set map[string]bool) *Hub {
 			on[in.Plugin.Name()] = true
 		}
 	}
-	return &Hub{catalog: catalog, installed: installed, on: on}
+	return &Hub{catalog: catalog, days: days, installed: installed, on: on}
 }
 
 // Join runs one connection as a session of the world and returns when it

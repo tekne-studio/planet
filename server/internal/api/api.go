@@ -81,7 +81,7 @@ func New(cfg Config, f *folder.Folder, installed []world.Installed, carried Fiel
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: cfg, folder: f, fields: carried, files: kept, hub: world.NewHub(f, installed, f.Switches()), keys: world.NewKeys(), judge: judge, now: time.Now}, nil
+	return &Server{cfg: cfg, folder: f, fields: carried, files: kept, hub: world.NewHub(f, f, installed, f.Switches()), keys: world.NewKeys(), judge: judge, now: time.Now}, nil
 }
 
 // Handler is every route of the instance. A path under /api that is no route
@@ -137,7 +137,7 @@ type recipe struct {
 }
 
 func (s *Server) describe(w http.ResponseWriter, r *http.Request) {
-	about := description{Name: s.cfg.Name, Protocol: world.Protocol, Version: s.cfg.Version, Plugins: s.hub.Speaks(), Files: filesRoute}
+	about := description{Name: s.cfg.Name, Protocol: int(world.Protocol), Version: s.cfg.Version, Plugins: s.hub.Speaks(), Files: filesRoute}
 	if s.cfg.MundosURL != "" {
 		about.Door = s.cfg.MundosURL + "/enter"
 	}

@@ -76,6 +76,33 @@ func TestAFileThatDoesNotReadIsNoUnfoundedWorld(t *testing.T) {
 	}
 }
 
+func TestTheDayIsKeptAsTheAdminChoseIt(t *testing.T) {
+	dir := t.TempDir()
+	kept, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minutes := kept.DayMinutes(); minutes != 0 {
+		t.Fatalf("a world whose admin never chose says none: %d", minutes)
+	}
+	if err := kept.KeepDay(240); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minutes := again.DayMinutes(); minutes != 240 {
+		t.Fatalf("the choice outlives the run: %d", minutes)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "day.json"), []byte(`{"minutes":"long"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("a day that does not read stops the server, as the other files do")
+	}
+}
+
 func TestAWorldIsCopiedIntoItsNextGeneration(t *testing.T) {
 	from := t.TempDir()
 	source, _ := Open(from)
@@ -87,6 +114,9 @@ func TestAWorldIsCopiedIntoItsNextGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(from, "plugin", "kept"), []byte("a trace"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.KeepDay(120); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,6 +133,9 @@ func TestAWorldIsCopiedIntoItsNextGeneration(t *testing.T) {
 	}
 	if trace, _ := os.ReadFile(filepath.Join(to, "plugin", "kept")); string(trace) != "a trace" {
 		t.Fatalf("with everything its folder held: %q", trace)
+	}
+	if minutes := clone.DayMinutes(); minutes != 120 {
+		t.Fatalf("its day among it: %d minutes", minutes)
 	}
 
 	if err := Copy(from, to); err == nil {

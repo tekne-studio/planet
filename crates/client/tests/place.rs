@@ -129,7 +129,7 @@ fn the_sun_moves_west_wherever_you_stand() {
         let s = frame.sun_direction;
         [f64::from(s.x), f64::from(s.y), f64::from(s.z)]
     };
-    // Two moments of one day, which is 1200 seconds.
+    // Two moments of one day, a minute apart.
     let before = sun_at(&mut client, 0.0);
     let after = sun_at(&mut client, 60.0);
     let motion = [0, 1, 2].map(|i| after[i] - before[i]);

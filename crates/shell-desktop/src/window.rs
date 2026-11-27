@@ -208,9 +208,10 @@ impl Stage {
                 // A game waiting for its player is marked by a front end over
                 // the picture; the desktop holds it, unmarked.
                 Event::Waiting { .. } => {}
-                // The desktop has no socket: the link stays offline and nobody
-                // else is ever here.
+                // The desktop has no socket: the link stays offline, nobody
+                // else is ever here, and the day is the client's own.
                 Event::RecipeChanged { .. }
+                | Event::Day { .. }
                 | Event::Ready { .. }
                 | Event::ModeChanged { .. }
                 | Event::EffectsChanged { .. }

@@ -8,9 +8,18 @@
 
 pub use prost::Message;
 
-/// The protocol a client speaks, said in `Hello`. Bumped with any change an
-/// older client cannot read; the server refuses every other number.
-pub const PROTOCOL: u32 = 5;
+/// The protocol a client speaks, said in `Hello`, as the schema numbers it;
+/// the server refuses every other number.
+pub const PROTOCOL: u32 = v1::Protocol::Current as u32;
+
+/// The lengths of a day a world's admin chooses among, as the schema's
+/// [`DayLength`] lists them, shortest first.
+pub const DAY_LENGTHS: [DayLength; 4] = [
+    DayLength::Of24,
+    DayLength::Of48,
+    DayLength::Of120,
+    DayLength::Of240,
+];
 
 pub mod v1 {
     #![allow(clippy::all, clippy::pedantic)]
@@ -152,6 +161,16 @@ mod tests {
         };
         let frame = encode(&sent);
         assert_eq!(decode::<ClientMessage>(&frame).unwrap(), sent);
+    }
+
+    /// The list is the schema's, every length of it and nothing else: a
+    /// length the schema gains and the list lacks is named here.
+    #[test]
+    fn the_day_lengths_are_the_schema_s() {
+        let schema: Vec<DayLength> = (1..=24 * 60)
+            .filter_map(|minutes| DayLength::try_from(minutes).ok())
+            .collect();
+        assert_eq!(schema, DAY_LENGTHS);
     }
 
     #[test]

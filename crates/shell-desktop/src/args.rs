@@ -35,8 +35,11 @@ pub struct Shot {
     pub avatar: Option<String>,
     pub out: PathBuf,
     pub size: [u32; 2],
-    /// Seconds on the world clock: fixes the sun.
+    /// Seconds on the world clock: with the day, fixes the sun.
     pub clock_s: f64,
+    /// Minutes of the world's day, one an admin may choose: with the clock,
+    /// fixes the sun. `None` is the client's own day.
+    pub day_minutes: Option<u32>,
     pub altitude_m: f64,
     pub pitch_deg: f64,
     pub boom_m: f64,
@@ -127,6 +130,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
         out: PathBuf::new(),
         size: [1280, 720],
         clock_s: 0.0,
+        day_minutes: None,
         altitude_m: 0.0,
         pitch_deg: -14.0,
         boom_m: 6.0,
@@ -201,6 +205,14 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
                 shot.steps.push(Step::Drag(points));
             }
             "--clock" if is_shot => shot.clock_s = number(&value()?, "--clock")?,
+            "--day" if is_shot => {
+                let minutes = number(&value()?, "--day")?;
+                let lengths = protocol::DAY_LENGTHS.map(|length| length as u32);
+                if !lengths.contains(&minutes) {
+                    return Err(format!("--day is one of {lengths:?} minutes"));
+                }
+                shot.day_minutes = Some(minutes);
+            }
             "--altitude" if is_shot => shot.altitude_m = number(&value()?, "--altitude")?,
             "--pitch" if is_shot => shot.pitch_deg = number(&value()?, "--pitch")?,
             // The one place flag both invocations take: a picture and a walk

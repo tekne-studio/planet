@@ -1,6 +1,7 @@
 // Package folder is the world folder: where a world keeps itself between
-// runs. It holds the recipe the founding froze and which plugins its admin
-// switched; each plugin that keeps things has a file of its own beside them.
+// runs. It holds the recipe the founding froze, which plugins its admin
+// switched and how long its admin made its day; each plugin that keeps
+// things has a file of its own beside them.
 package folder
 
 import (
@@ -29,6 +30,10 @@ const fileName = "world.json"
 // as the version's config says.
 const switchesName = "plugins.json"
 
+// dayName is the file of how long the admin made the world's day. A world
+// whose admin never chose has none.
+const dayName = "day.json"
+
 // Folder is one world's folder. It is the world core's Catalog.
 type Folder struct {
 	dir string
@@ -38,6 +43,13 @@ type Folder struct {
 	recipe *world.Recipe
 	// What the admin set about plugins, by name.
 	switches map[string]bool
+	// How long the admin made the day, in minutes; zero while none chose.
+	day day
+}
+
+// day is day.json.
+type day struct {
+	Minutes uint32 `json:"minutes"`
 }
 
 // file is world.json. The recipe has the wire's shape, so it travels unmapped.
@@ -60,14 +72,11 @@ func Open(dir string) (*Folder, error) {
 		return nil, fmt.Errorf("world folder: %w", err)
 	}
 	f := &Folder{dir: dir, switches: map[string]bool{}}
-	set, err := os.ReadFile(filepath.Join(dir, switchesName))
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(set, &f.switches); err != nil {
-			return nil, fmt.Errorf("world folder: %s: %w", switchesName, err)
-		}
-	case !errors.Is(err, fs.ErrNotExist):
-		return nil, fmt.Errorf("world folder: %w", err)
+	if err := readChoice(dir, switchesName, &f.switches); err != nil {
+		return nil, err
+	}
+	if err := readChoice(dir, dayName, &f.day); err != nil {
+		return nil, err
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, fileName))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -88,12 +97,28 @@ func Open(dir string) (*Folder, error) {
 	return f, nil
 }
 
-// Recipe is the world's recipe, or world.ErrUnfounded while it awaits one.
+// readChoice reads a file of the admin's choices into `into`, which stays as
+// it is when the admin never chose.
+func readChoice(dir, name string, into any) error {
+	raw, err := os.ReadFile(filepath.Join(dir, name))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("world folder: %w", err)
+	}
+	if err := json.Unmarshal(raw, into); err != nil {
+		return fmt.Errorf("world folder: %s: %w", name, err)
+	}
+	return nil
+}
+
 // Dir is where the folder is: what keeps a file beside the recipe asks it.
 func (f *Folder) Dir() string {
 	return f.dir
 }
 
+// Recipe is the world's recipe, or world.ErrUnfounded while it awaits one.
 func (f *Folder) Recipe(context.Context) (world.Recipe, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -166,9 +191,7 @@ func (f *Folder) Switches() map[string]bool {
 	return set
 }
 
-// Switch keeps the admin's word on one plugin. The file is written whole
-// beside its name and moved into place, so a crash leaves the old choice or
-// the new one.
+// Switch keeps the admin's word on one plugin.
 func (f *Folder) Switch(name string, on bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -177,33 +200,59 @@ func (f *Folder) Switch(name string, on bool) error {
 		next[name] = on
 	}
 	next[name] = on
-
-	raw, err := json.MarshalIndent(next, "", "\t")
-	if err != nil {
-		return err
-	}
-	draft, err := os.CreateTemp(f.dir, switchesName+".*")
-	if err != nil {
-		return fmt.Errorf("switch: %w", err)
-	}
-	defer os.Remove(draft.Name())
-	if _, err := draft.Write(append(raw, '\n')); err != nil {
-		draft.Close()
-		return fmt.Errorf("switch: %w", err)
-	}
-	if err := draft.Sync(); err != nil {
-		draft.Close()
-		return fmt.Errorf("switch: %w", err)
-	}
-	if err := draft.Close(); err != nil {
-		return fmt.Errorf("switch: %w", err)
-	}
-	if err := os.Chmod(draft.Name(), 0o644); err != nil {
-		return fmt.Errorf("switch: %w", err)
-	}
-	if err := os.Rename(draft.Name(), filepath.Join(f.dir, switchesName)); err != nil {
+	if err := f.choose(switchesName, next); err != nil {
 		return fmt.Errorf("switch: %w", err)
 	}
 	f.switches = next
 	return nil
+}
+
+// DayMinutes is how long the admin made the world's day, in minutes: zero
+// while none chose.
+func (f *Folder) DayMinutes() uint32 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.day.Minutes
+}
+
+// KeepDay keeps the admin's word on how long the day is, in minutes.
+func (f *Folder) KeepDay(minutes uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	next := day{Minutes: minutes}
+	if err := f.choose(dayName, next); err != nil {
+		return fmt.Errorf("day: %w", err)
+	}
+	f.day = next
+	return nil
+}
+
+// choose writes a file of the admin's choices whole beside its name and
+// moves it into place, so a crash leaves the old choice or the new one.
+// Under the folder's lock.
+func (f *Folder) choose(name string, value any) error {
+	raw, err := json.MarshalIndent(value, "", "\t")
+	if err != nil {
+		return err
+	}
+	draft, err := os.CreateTemp(f.dir, name+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(draft.Name())
+	if _, err := draft.Write(append(raw, '\n')); err != nil {
+		draft.Close()
+		return err
+	}
+	if err := draft.Sync(); err != nil {
+		draft.Close()
+		return err
+	}
+	if err := draft.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(draft.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(draft.Name(), filepath.Join(f.dir, name))
 }

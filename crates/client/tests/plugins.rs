@@ -76,6 +76,7 @@ fn welcome(client: &Client, plugins: Vec<protocol::Plugin>) -> Vec<u8> {
         clock_ms: 0,
         avatar: String::new(),
         visitor: true,
+        day_minutes: 0,
     }))
 }
 

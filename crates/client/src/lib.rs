@@ -16,6 +16,7 @@ mod cells;
 pub mod collision;
 mod controller;
 mod controls;
+pub mod day;
 mod figure;
 mod given;
 mod grass;
@@ -117,14 +118,6 @@ pub use trunks::Trunks;
 use wardrobe::Wardrobe;
 use way::Ways;
 pub use way::{Held, Profile, Steering, Step, Straddle, Way};
-
-/// Seconds for the sun to go around once.
-const DAY_S: f64 = 1200.0;
-/// How far the sun goes between the directions its shadows are drawn from,
-/// radians: a step every 0.83 s of this day. Between two, a shadow ten
-/// metres long moves a few centimetres, under the width the maps soften
-/// an edge across.
-const SHADOW_STEP: f64 = 0.25 * core::f64::consts::PI / 180.0;
 
 /// How wide a body is for how tall it stands, roughly: what the prompt
 /// keeps clear of on the screen.
@@ -320,9 +313,10 @@ pub struct Client {
     /// so every client shares one sky; offline it counts from the world's
     /// making. The sun, the moon and the weather are functions of it.
     clock_s: f64,
-    /// Sun angle at `clock_s = 0`: mid morning at the spawn, a fact of the
-    /// world, so clients that set their clocks by one server agree on the sun.
-    noon_offset: f64,
+    /// How long the world's day is, minutes: as its admin chose it online,
+    /// [`day::DEFAULT_MINUTES`] while none did and offline. The sun is the
+    /// clock over it ([`day::sun_angle`]).
+    day_minutes: u32,
     stats_timer_s: f64,
     frames_since_stats: u32,
     /// Whether the last frame hung anchors, so the first empty frame after
@@ -431,7 +425,7 @@ impl Client {
             view_px: [1920, 1080],
             clear_px: None,
             clock_s: 0.0,
-            noon_offset: 0.0,
+            day_minutes: day::DEFAULT_MINUTES,
             stats_timer_s: 0.0,
             frames_since_stats: 0,
             had_anchors: false,
@@ -447,7 +441,7 @@ impl Client {
         client
             .requests
             .ask(MANIFEST_PATH.to_owned(), Purpose::Manifest);
-        client.face_the_sun();
+        client.events.push(client.day_event());
         client.events.push(Event::RecipeChanged {
             recipe: client.generator.recipe().clone(),
         });
@@ -562,6 +556,50 @@ impl Client {
     /// headless renders.
     pub fn set_clock(&mut self, seconds: f64) {
         self.clock_s = seconds;
+    }
+
+    /// Sets how long the day is, minutes, and says so: the world's on Welcome
+    /// and whenever its admin changes it, a fixed one for a headless render.
+    /// Zero is a world that never chose, whose day is
+    /// [`day::DEFAULT_MINUTES`]. The sun jumps to where the clock over the
+    /// new length puts it.
+    pub fn set_day(&mut self, minutes: u32) {
+        self.day_minutes = match minutes {
+            0 => day::DEFAULT_MINUTES,
+            minutes => minutes,
+        };
+        self.events.push(self.day_event());
+    }
+
+    /// How long the day is, and the lengths an admin chooses among.
+    fn day_event(&self) -> Event {
+        Event::Day {
+            minutes: self.day_minutes,
+            lengths: protocol::DAY_LENGTHS.map(|length| length as u32).to_vec(),
+        }
+    }
+
+    /// Asks the world for a day `minutes` long: an admin's op, one of the
+    /// lengths [`Event::Day`] lists. The world says the new day to everyone
+    /// here, this client too, and the sun moves when it does.
+    fn ask_day(&mut self, minutes: u32) -> Result<(), String> {
+        if !self.session.online() {
+            return Err("the day is a world's, and no world is here".into());
+        }
+        if self.level != Some(Level::Admin) {
+            return Err("the day's length is the world admin's to choose".into());
+        }
+        if !protocol::DAY_LENGTHS
+            .iter()
+            .any(|&length| length as u32 == minutes)
+        {
+            return Err(format!(
+                "a day is one of {:?} minutes long",
+                protocol::DAY_LENGTHS.map(|length| length as u32)
+            ));
+        }
+        self.session.day(minutes);
+        Ok(())
     }
 
     /// The body this world is printed at: its size, and everything in metres
@@ -756,6 +794,11 @@ impl Client {
                 }
             }
             Command::SetPet { pet } => self.pets.set_kept(pet),
+            Command::SetDay { minutes } => {
+                if let Err(message) = self.ask_day(minutes) {
+                    self.events.push(Event::Rejected { message });
+                }
+            }
             Command::NamePet { name } => match (gaia::fauna::named(&name), self.pets.mine()) {
                 (Some(name), Some(_)) => {
                     self.pets.name(name);
@@ -1917,8 +1960,9 @@ impl Client {
                 {
                     self.wear(avatar);
                 }
-                // The world's clock is the server's from here on.
+                // The world's clock and its day are the server's from here on.
                 self.set_clock(welcome.clock_ms as f64 / 1000.0);
+                self.set_day(welcome.day_minutes);
                 self.level = Some(Level::from_wire(welcome.level));
                 // The world keeps the cells from here on.
                 self.cells.link(welcome.session);
@@ -2017,6 +2061,7 @@ impl Client {
                 }
             }
             Some(Message::Plugins(plugins)) => self.spoken(&plugins.plugins),
+            Some(Message::Day(day)) => self.set_day(day.minutes),
             Some(Message::Refused(refused)) => {
                 self.events.push(Event::Rejected {
                     message: format!("refused by the server: {}", refused.reason),
@@ -2982,9 +3027,10 @@ impl Client {
         }
     }
 
-    /// How far round its day the sun is, radians: a function of the clock.
+    /// How far round its day the sun is, radians: a function of the clock
+    /// and the day's length.
     fn day_angle(&self) -> f64 {
-        self.noon_offset + self.clock_s / DAY_S * core::f64::consts::TAU
+        day::sun_angle(self.clock_s, self.day_minutes)
     }
 
     /// Where the moon is now: an orbit on rails, a function of the clock. It
@@ -3148,7 +3194,7 @@ impl Client {
     ) -> Frame {
         let overlay = self.overlay(&camera, &pictures);
         let angle = self.day_angle();
-        let sun = sun_toward(angle);
+        let sun = day::sun_toward(angle);
 
         // Every body, the player's first: an avatar when its file has
         // landed, the box figure until then. With the camera in its head, or
@@ -3222,7 +3268,7 @@ impl Client {
         Frame {
             camera,
             sun_direction: sun.as_vec3(),
-            sun_steps: sun_steps(angle),
+            sun_steps: day::sun_steps(angle),
             moon: scene::Moon {
                 position: self.moon_position(),
                 radius_m: MOON_RADIUS_M,
@@ -3479,19 +3525,12 @@ impl Client {
         self.terrain.clear();
         self.moon_terrain.clear();
         self.animals.clear();
-        // A new world starts its own clock.
+        // A new world starts its own clock, and its day is the client's own.
         self.clock_s = 0.0;
-        self.face_the_sun();
+        self.set_day(day::DEFAULT_MINUTES);
         self.events.push(Event::RecipeChanged {
             recipe: self.generator.recipe().clone(),
         });
-    }
-
-    /// Mid morning at the spawn when the clock reads zero. The spawn is the
-    /// recipe's, so the offset is the world's too.
-    fn face_the_sun(&mut self) {
-        let up = self.controller.up();
-        self.noon_offset = up.z.atan2(up.x) - 0.7;
     }
 
     /// The name of the pace the body goes at, in a way that goes in paces.
@@ -3536,6 +3575,8 @@ impl Client {
                 place: pose.place(grid),
                 pose: pose.text(grid),
                 bearing_deg: pose.bearing_deg,
+                hour_min: (!pose.on_moon)
+                    .then(|| day::hour_min(self.controller.up().to_array(), self.day_angle())),
                 pace: self.pace(),
                 calls: self.callable().is_some(),
                 flying: self.controller.flying(),
@@ -3573,24 +3614,6 @@ fn dry(sample: Sample, scale: f64) -> bool {
 /// so a search that gave up after sector 0 spawned people hundreds of metres
 /// under water. Sector 0 is still walked first, so a world that had an answer
 /// there opens where it always did.
-/// Toward the sun `angle` radians round its day.
-fn sun_toward(angle: f64) -> DVec3 {
-    DVec3::new(angle.cos(), 0.35, angle.sin()).normalize()
-}
-
-/// The sun the shadows are drawn from at `angle`: the step of its path it
-/// has begun, the next, and how far between. A function of the clock
-/// alone, so every client and every shot of one clock draw the same maps.
-fn sun_steps(angle: f64) -> scene::SunSteps {
-    let steps = angle / SHADOW_STEP;
-    let begun = steps.floor();
-    scene::SunSteps {
-        from: sun_toward(begun * SHADOW_STEP).as_vec3(),
-        to: sun_toward((begun + 1.0) * SHADOW_STEP).as_vec3(),
-        blend: (steps - begun) as f32,
-    }
-}
-
 pub(crate) fn spawn_point(generator: &Generator) -> SurfacePoint {
     let grid = generator.sphere().blocks();
     let side = f64::from(grid.side());

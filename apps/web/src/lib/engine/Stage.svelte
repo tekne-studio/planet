@@ -156,6 +156,8 @@
 	let holder = $state<string | null>(null);
 	let holds = $state(0);
 	let stats = $state<Extract<EngineEvent, { type: 'stats' }>>();
+	/** How long the world's day is, as the engine last said it. */
+	let day = $state<Extract<EngineEvent, { type: 'day' }>>();
 	let session = $state<SessionStatus>('offline');
 	/** This client's own session in the world, while online. */
 	let me = $state<number | null>(null);
@@ -460,6 +462,7 @@
 			ring = event.closed;
 		}
 		else if (event.type === 'stats') stats = event;
+		else if (event.type === 'day') day = event;
 		else if (event.type === 'session') {
 			session = event.status;
 			me = event.session;
@@ -702,7 +705,7 @@
 		</nav>
 	{/if}
 	{#if stats && game.place && !pad && opened !== 'here' && !(opened === 'help' && touch.current)}
-		<Place place={stats.place} bearing_deg={stats.bearing_deg} altitude_m={stats.altitude_m} speed_mps={stats.speed_mps} />
+		<Place place={stats.place} hour_min={stats.hour_min} bearing_deg={stats.bearing_deg} altitude_m={stats.altitude_m} speed_mps={stats.speed_mps} />
 	{/if}
 	{#if opened === 'here' && link}
 		<Panel title={t('engine.here')} corner="top-right" under>
@@ -763,6 +766,14 @@
 						on: (name) => spoken.some((on) => on.name === name),
 						busy: session !== 'online' || switching !== null,
 						onturn: turn
+					}
+				: undefined}
+			day={level === 'admin' && link && day
+				? {
+						minutes: day.minutes,
+						lengths: day.lengths,
+						busy: session !== 'online',
+						onchoose: (minutes) => view?.command({ type: 'set_day', minutes })
 					}
 				: undefined}
 			onclose={() => show(null)}

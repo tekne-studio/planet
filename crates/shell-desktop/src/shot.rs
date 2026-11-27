@@ -115,6 +115,9 @@ pub fn run(shot: Shot) -> Result<(), String> {
     client.set_view([width, height]);
     client.set_clear(shot.clear);
     client.set_clock(shot.clock_s);
+    if let Some(minutes) = shot.day_minutes {
+        client.set_day(minutes);
+    }
     if let Some(effects) = &shot.effects {
         client.command_json(&format!(r#"{{"type":"set_effects","effects":{effects}}}"#));
     }

@@ -112,6 +112,7 @@ impl World {
                 clock_ms: 0,
                 avatar: String::new(),
                 visitor: false,
+                day_minutes: 0,
             },
         )));
         self.here.push(Here {

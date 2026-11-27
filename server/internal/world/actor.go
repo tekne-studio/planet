@@ -1,6 +1,7 @@
 package world
 
 import (
+	"log"
 	"slices"
 	"strings"
 	"time"
@@ -180,14 +181,15 @@ func (a *actor) join(s *session) {
 	}
 	a.sessions[s.id] = s
 	s.send(&pb.ServerMessage{Message: &pb.ServerMessage_Welcome{Welcome: &pb.Welcome{
-		Session: s.id,
-		Recipe:  a.recipe.Wire(),
-		Peers:   peers,
-		Level:   s.identity.Level.wire(),
-		Avatar:  s.identity.Avatar,
-		Plugins: wirePlugins(spoken(a.plugins)),
-		ClockMs: uint64(time.Now().UnixMilli()),
-		Visitor: s.identity.Visitor(),
+		Session:    s.id,
+		Recipe:     a.recipe.Wire(),
+		Peers:      peers,
+		Level:      s.identity.Level.wire(),
+		Avatar:     s.identity.Avatar,
+		Plugins:    wirePlugins(spoken(a.plugins)),
+		ClockMs:    uint64(time.Now().UnixMilli()),
+		Visitor:    s.identity.Visitor(),
+		DayMinutes: a.hub.days.DayMinutes(),
 	}}})
 	a.broadcast(&pb.ServerMessage{Message: &pb.ServerMessage_Joined{Joined: &pb.Joined{Peer: s.peer()}}}, s)
 }
@@ -234,6 +236,8 @@ func (a *actor) handle(s *session, message *pb.ClientMessage) {
 		}}}, s)
 	case *pb.ClientMessage_Relay:
 		a.pass(s, m.Relay, time.Now())
+	case *pb.ClientMessage_Day:
+		a.day(s, m.Day.GetMinutes())
 	case *pb.ClientMessage_Sound:
 		voice := m.Sound.GetVoice()
 		if voice == "" || len(voice) > VoiceBytes || !s.sounds(time.Now()) {
@@ -245,6 +249,34 @@ func (a *actor) handle(s *session, message *pb.ClientMessage) {
 			Seed:    m.Sound.GetSeed(),
 		}}}, s)
 	}
+}
+
+// day takes an admin's word on how long the world's day is: one of the
+// lengths the schema lists, kept in the world folder and said to everyone
+// here, the asker too. The sun is the clock over the day, so it jumps at
+// once in every eye to where the new length puts it. An ask of another
+// level or another length is dropped unheard, as one the folder cannot keep.
+func (a *actor) day(s *session, minutes uint32) {
+	if s.identity.Level < LevelAdmin || !listedDay(minutes) {
+		return
+	}
+	if err := a.hub.days.KeepDay(minutes); err != nil {
+		log.Printf("day: %v", err)
+		return
+	}
+	log.Printf("the day is %d minutes long, by %q", minutes, s.identity.UserID)
+	a.broadcast(&pb.ServerMessage{Message: &pb.ServerMessage_Day{Day: &pb.Day{Minutes: minutes}}}, nil)
+}
+
+// listedDay says whether a day of so many minutes is one an admin may
+// choose: one of the lengths the schema lists.
+func listedDay(minutes uint32) bool {
+	for _, length := range pb.DayLength_value {
+		if length != int32(pb.DayLength_DAY_LENGTH_NONE) && uint32(length) == minutes {
+			return true
+		}
+	}
+	return false
 }
 
 // pass relays one payload to every session that holds its thing, the sender

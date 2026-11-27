@@ -2,19 +2,25 @@
 	import { t } from '$lib/i18n';
 
 	// Where the body is, in one line of small white text at the top right,
-	// under the bar: the place, the way it faces, how high and how fast. It
+	// under the bar: the place, the hour there, the way it faces, how high
+	// and how fast. It
 	// floats on the world as the prompt's card does, on a dark translucent
 	// strip that reads over snow at noon and over the night. The place is
 	// how people tell each other where they are: a click copies it.
 	interface Props {
 		place: string;
+		/** The hour here, minutes past midnight; null on the moon, which keeps no clock. */
+		hour_min: number | null;
 		/** Clockwise from north, degrees; null at a pole. */
 		bearing_deg: number | null;
 		altitude_m: number;
 		speed_mps: number;
 	}
 
-	let { place, bearing_deg, altitude_m, speed_mps }: Props = $props();
+	let { place, hour_min, bearing_deg, altitude_m, speed_mps }: Props = $props();
+
+	// A 24 hour clock, 00:00 to 23:59: digits, the same in every language.
+	const hour = $derived(hour_min === null ? null : `${String(Math.floor(hour_min / 60)).padStart(2, '0')}:${String(hour_min % 60).padStart(2, '0')}`);
 
 	// The compass point a bearing lands on, and the angle beside it. A rose has
 	// sixteen points, so each is 22.5 degrees wide. A pole has no bearing.
@@ -46,6 +52,9 @@
 	<button type="button" class="place" title={t('engine.place.copy')} aria-label="{t('engine.stats.place')} {place}. {t('engine.place.copy')}" onclick={copy}>
 		{copied ? t('engine.place.copied') : place}
 	</button>
+	{#if hour !== null}
+		<span title={t('engine.stats.hour')}>{hour}</span>
+	{/if}
 	<span title={t('engine.stats.facing')}>{facing}</span>
 	<span title={t('engine.stats.altitude')}>{t('engine.stats.metres', { n: altitude_m.toFixed(1) })}</span>
 	<span title={t('engine.stats.speed')}>{t('engine.stats.metresPerSecond', { n: speed_mps.toFixed(1) })}</span>

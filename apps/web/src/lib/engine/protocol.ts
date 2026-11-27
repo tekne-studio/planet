@@ -140,7 +140,9 @@ export type Command =
 	/** A visitor's pet, as this browser kept it from `pet`, handed to the engine before any world answers; null lets it go. An account's is the world's, and the engine leaves this be. */
 	| { type: 'set_pet'; pet: Pet | null }
 	/** Names the body's pet: trimmed, no control character, at most 32 bytes. */
-	| { type: 'name_pet'; name: string };
+	| { type: 'name_pet'; name: string }
+	/** Makes the world's day this many minutes long, one of the lengths `day` lists: the world admin's to choose. The sun jumps, for everyone here at once. */
+	| { type: 'set_day'; minutes: number };
 
 /** Where a pet stands and which way it faces, since when: a sector, a place in it in blocks, a heading in radians, the world's clock in milliseconds. */
 export interface Spot {
@@ -363,6 +365,8 @@ export type EngineEvent =
 	| { type: 'session'; status: SessionStatus; session: number | null; level: Level | null }
 	/** Who else is here, whenever that changes. Empty when offline. */
 	| { type: 'peers'; peers: PeerInfo[] }
+	/** How long the world's day is, minutes, whenever that changes and once at the start; `lengths` are the ones its admin chooses among. */
+	| { type: 'day'; minutes: number; lengths: number[] }
 	/** The plugins that are on in this world, whenever that changes. Empty when offline. */
 	| { type: 'statement'; plugins: PluginOn[] }
 	/** Every head in view, yours included, every frame while there is one and once empty after. */
@@ -436,6 +440,8 @@ export type EngineEvent =
 			pose: string;
 			/** Degrees clockwise from north, or null at a pole. */
 			bearing_deg: number | null;
+			/** The hour of the day here, minutes past midnight (0 to 1439): the sun's at the middle meridian of the place's time zone, the same for everyone in it. Null on the moon. */
+			hour_min: number | null;
 			/** The pace the body goes at in a way that goes in paces, a word of its plugin's; null otherwise. */
 			pace: string | null;
 			/** Whether a whistle calls someone now: the body has a pet, is not on it, and stands where animals live. */
@@ -444,39 +450,43 @@ export type EngineEvent =
 			flying: boolean;
 	  };
 
-const EVENT_TYPES: ReadonlySet<string> = new Set<EngineEvent['type']>([
-	'ready',
-	'stick',
-	'recipe_changed',
-	'rejected',
-	'settled',
-	'mode_changed',
-	'prompt',
-	'prompt_at',
-	'ring',
-	'acted',
-	'offers',
-	'animals',
-	'markers_changed',
-	'markers_at',
-	'markers',
-	'avatar_changed',
-	'effects_changed',
-	'pointer_changed',
-	'controls_changed',
-	'stats',
-	'session',
-	'peers',
-	'statement',
-	'anchors',
-	'labels',
-	'waiting',
-	'palette',
-	'home',
-	'choices',
-	'pet',
-	'whistled'
-]);
+// Every event type of the core, once: a record over the union, so a type
+// added to `EngineEvent` and left out here fails the check.
+const CORE_EVENTS = {
+	ready: true,
+	stick: true,
+	recipe_changed: true,
+	rejected: true,
+	settled: true,
+	mode_changed: true,
+	prompt: true,
+	prompt_at: true,
+	ring: true,
+	acted: true,
+	offers: true,
+	animals: true,
+	markers_changed: true,
+	markers_at: true,
+	markers: true,
+	avatar_changed: true,
+	effects_changed: true,
+	pointer_changed: true,
+	controls_changed: true,
+	stats: true,
+	session: true,
+	peers: true,
+	day: true,
+	statement: true,
+	anchors: true,
+	labels: true,
+	waiting: true,
+	palette: true,
+	home: true,
+	choices: true,
+	pet: true,
+	whistled: true
+} as const satisfies Record<EngineEvent['type'], true>;
+const EVENT_TYPES: ReadonlySet<string> = new Set(Object.keys(CORE_EVENTS));
 
 /** Whether a value has the shape of an animal's traits: each field there, of its type. */
 function traits(value: unknown): value is Traits {

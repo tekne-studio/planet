@@ -37,6 +37,7 @@ fn welcomed_as(visitor: bool) -> Client {
             clock_ms: 0,
             avatar: String::new(),
             visitor,
+            day_minutes: 0,
         },
     )));
     client.drain_events();

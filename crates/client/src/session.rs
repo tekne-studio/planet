@@ -142,6 +142,13 @@ impl Session {
         }
     }
 
+    /// Asks the world for a day `minutes` long: an admin's op.
+    pub fn day(&mut self, minutes: u32) {
+        if self.online() {
+            self.say(client_message::Message::Day(protocol::Day { minutes }));
+        }
+    }
+
     pub fn wear(&mut self, avatar: &str) {
         if self.online() {
             self.say(client_message::Message::Wear(protocol::Wear {

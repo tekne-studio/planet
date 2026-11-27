@@ -72,6 +72,7 @@ fn welcome_at(
         clock_ms,
         avatar: String::new(),
         visitor: level == protocol::Level::Anonymous,
+        day_minutes: 0,
     }))
 }
 
@@ -286,6 +287,7 @@ fn another_recipe_is_another_world() {
             clock_ms: 0,
             avatar: String::new(),
             visitor: false,
+            day_minutes: 0,
         },
     )));
     assert!(client.drain_outbound().contains(&Outbound::Close));

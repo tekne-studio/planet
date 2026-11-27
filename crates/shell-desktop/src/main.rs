@@ -5,7 +5,7 @@
 //! ```text
 //! planet [--seed HEX] [--bits N] [--avatar NAME] [--at U,V]
 //! planet shot --out FILE [--seed HEX] [--bits N] [--avatar NAME] [--size WxH] [--clock S]
-//!             [--altitude M] [--pitch DEG] [--boom M] [--walk S] [--at U,V] [--moon M]
+//!             [--day MIN] [--altitude M] [--pitch DEG] [--boom M] [--walk S] [--at U,V] [--moon M]
 //!             [--command JSON]... [--drag X0,Y0,X1,Y1]... [--ride] [--fly S [--against-sun]]
 //!             [--yaw DEG] [--animals DIR | --wings DIR [--against-sun] [--look SEED]
 //!             | --saddle DIR | --herd DIR | --takeoff DIR | --leap DIR | --deck DIR

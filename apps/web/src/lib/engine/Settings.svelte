@@ -11,7 +11,8 @@
 	// value in the preset last picked. Sound is how loud each group of what
 	// is heard is, under everything and a mute. Game is what floats over the
 	// world: the place line and the markers, by kind.
-	// Plugins, for who may switch them, and the language. A front end only:
+	// Plugins, for who may switch them, with the length of the world's day,
+	// and the language. A front end only:
 	// it shows what the engine said is in force and asks for changes, which
 	// the engine clamps and answers; the stage keeps the choices.
 	interface Switches {
@@ -20,6 +21,15 @@
 		/** Offline, or a switch on its way: none can be turned. */
 		busy: boolean;
 		onturn: (name: string, on: boolean) => void;
+	}
+	interface Day {
+		/** How long the world's day is, as the world last said it. */
+		minutes: number;
+		/** The lengths to choose among, minutes. */
+		lengths: readonly number[];
+		/** Offline: no length can be chosen. */
+		busy: boolean;
+		onchoose: (minutes: number) => void;
 	}
 	interface Props {
 		/** What the engine last reported. Undefined until it has. */
@@ -41,10 +51,12 @@
 		ongame: (game: Game) => void;
 		/** The plugins' switches, for one who may switch them; absent, the section is. */
 		plugins?: Switches;
+		/** The world's day, for one who may choose it: its admin. */
+		day?: Day;
 		onclose: () => void;
 	}
 
-	let { effects, presets, base, custom, onpicture, onchange, fps, loudness, onloudness, game, ongame, plugins, onclose }: Props = $props();
+	let { effects, presets, base, custom, onpicture, onchange, fps, loudness, onloudness, game, ongame, plugins, day, onclose }: Props = $props();
 
 	type Section = 'graphics' | 'sound' | 'game' | 'plugins' | 'language';
 	let section = $state<Section>('graphics');
@@ -52,9 +64,14 @@
 		{ value: 'graphics', label: t('engine.settings.graphics') },
 		{ value: 'sound', label: t('engine.settings.sound') },
 		{ value: 'game', label: t('engine.settings.game') },
-		...(plugins ? [{ value: 'plugins' as const, label: t('engine.plugins') }] : []),
+		...(plugins || day ? [{ value: 'plugins' as const, label: t('engine.plugins') }] : []),
 		{ value: 'language', label: t('common.language') }
 	]);
+
+	/** A day's length as a person reads it: minutes under an hour, hours from one. */
+	function length(minutes: number): string {
+		return minutes < 60 ? t('engine.day.minutes', { n: minutes }) : t('engine.day.hours', { n: minutes / 60 });
+	}
 
 	const picture = $derived<Picture>(effects && presets ? (matching(effects, presets) ?? 'custom') : base);
 	const pictures = $derived<{ value: Picture; label: string }[]>([
@@ -291,14 +308,29 @@
 						{/each}
 					</div>
 				</section>
-			{:else if section === 'plugins' && plugins}
-				<div class="rows">
-					{#each plugins.list as plugin (plugin.name)}
-						<Checkbox checked={plugins.on(plugin.name)} disabled={plugins.busy} onchange={(on) => plugins.onturn(plugin.name, on)}>
-							{plugin.label()}
-						</Checkbox>
-					{/each}
-				</div>
+			{:else if section === 'plugins' && (plugins || day)}
+				{#if plugins}
+					<div class="rows">
+						{#each plugins.list as plugin (plugin.name)}
+							<Checkbox checked={plugins.on(plugin.name)} disabled={plugins.busy} onchange={(on) => plugins.onturn(plugin.name, on)}>
+								{plugin.label()}
+							</Checkbox>
+						{/each}
+					</div>
+				{/if}
+				{#if day}
+					<section class="group day">
+						<h3>{t('engine.day')}</h3>
+						<!-- The choice follows what the world says, never the click. -->
+						<Segmented
+							options={day.lengths.map((minutes) => ({ value: String(minutes), label: length(minutes) }))}
+							value={String(day.minutes)}
+							label={t('engine.day')}
+							onselect={(value) => !day.busy && Number(value) !== day.minutes && day.onchoose(Number(value))}
+						/>
+						<p class="note">{t('engine.day.note')}</p>
+					</section>
+				{/if}
 			{:else if section === 'language'}
 				<LangSwitch layout="list" />
 			{/if}
@@ -377,6 +409,12 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--sp-1);
+	}
+	.day {
+		margin-top: var(--sp-6);
+	}
+	.note {
+		color: var(--text-muted);
 	}
 	@media (max-width: 640px) {
 		.body {
