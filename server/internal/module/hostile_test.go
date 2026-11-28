@@ -151,7 +151,9 @@ func TestAModuleTakesNoMoreMemoryThanItsCeiling(t *testing.T) {
 	// Grows a page at a time until it is refused, then returns.
 	hog := hostile(1, nil, w.I32(0), w.Join([]byte{0x03, 0x40}, w.I32(1), []byte{0x40, 0x00}, w.I32(-1), []byte{0x47, 0x0d, 0x00, 0x0b}))
 	m := opened(t, hog)
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	// The ceiling is what is held here, not the clock: a thousand growths
+	// take a slow machine longer than a call's deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := m.ask(ctx, nil); err != nil {
 		t.Fatalf("it returns once it is refused: %v", err)
