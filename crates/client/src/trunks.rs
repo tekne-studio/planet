@@ -1050,7 +1050,9 @@ pub(crate) mod tests {
         assert_eq!(met(&cells), None, "a floor through the tree");
     }
 
-    /// Every frame of a body, bit for bit, folded into one number.
+    /// Every frame of a body folded into one number, each length to the
+    /// millimetre: a sine's last bit is its machine's, and the number is
+    /// every machine's.
     struct Fold(u64);
 
     impl Fold {
@@ -1071,7 +1073,7 @@ pub(crate) mod tests {
                 facing.z,
                 body.speed_mps(),
             ] {
-                self.put(value.to_bits());
+                self.put((value * 1000.0).round() as i64 as u64);
             }
             self.put(u64::from(body.grounded()));
             self.put(u64::from(body.aloft()));
@@ -1600,5 +1602,5 @@ pub(crate) mod tests {
         assert_eq!(got, MET_FROM_OUTSIDE, "{got:#x}");
     }
 
-    const MET_FROM_OUTSIDE: u64 = 0x27b4_afa4_c8ff_840c;
+    const MET_FROM_OUTSIDE: u64 = 0x436c_80d2_f914_e72c;
 }
