@@ -331,6 +331,18 @@ impl Volumes {
         })
     }
 
+    /// The floor a body standing in column `x, y` rests on within its
+    /// step, when the step reaches `reach` cells up the frame, if it is
+    /// higher than `over` cells, as [`Volume::floor_over`] reads it.
+    /// `None` off every volume.
+    pub fn floor_over(&self, x: i32, y: i32, reach: f64, over: f64) -> Option<i32> {
+        let standing = self.over(x, y)?;
+        let [x0, y0, low] = standing.origin;
+        let low_m = f64::from(low);
+        let floor = (standing.volume).floor_over(x - x0, y - y0, reach - low_m, over - low_m)?;
+        Some(floor + low)
+    }
+
     /// Whether a column holds a solid cell with any part of it between two
     /// heights: what stands in the way of something that tall.
     pub fn covers(&self, x: i32, y: i32, from: f64, to: f64) -> bool {
@@ -517,6 +529,10 @@ mod tests {
         assert_eq!(volumes.gap(31, 3, 5.0).unwrap().floor, Some(5));
         assert_eq!(volumes.gap(32, 3, 5.0).unwrap().floor, None);
         assert_eq!(volumes.gap(32, 3, 21.0).unwrap().floor, Some(21));
+        assert_eq!(volumes.floor_over(31, 3, 5.0, 4.5), Some(5));
+        assert_eq!(volumes.floor_over(31, 3, 5.0, 5.0), None);
+        assert_eq!(volumes.floor_over(32, 3, 21.0, 20.5), Some(21));
+        assert_eq!(volumes.floor_over(32, 3, 20.0, 0.0), None);
     }
 
     #[test]

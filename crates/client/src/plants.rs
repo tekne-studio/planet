@@ -382,6 +382,13 @@ pub struct Rooting {
 }
 
 impl Rooting {
+    /// A plant rooted in `root`'s column spanning `span_m`, metres over
+    /// the datum: a tree of a test's own.
+    #[cfg(test)]
+    pub(crate) fn standing(root: Column, span_m: [f64; 2]) -> Rooting {
+        Rooting { root, span_m }
+    }
+
     pub fn of(flora: &Flora, plant: Plant) -> Rooting {
         let shape = &flora.shapes()[usize::from(plant.shape)];
         let top = shape.low()[2] + shape.size()[2] as i32;
@@ -390,6 +397,11 @@ impl Rooting {
             root: plant.root.column,
             span_m: [bottom, bottom + top].map(|h| f64::from(h) * BLOCK_M),
         }
+    }
+
+    /// The column the plant's root is in: which plant it is.
+    pub fn root(self) -> Column {
+        self.root
     }
 
     /// Whether the plant grows: no cell stands in its root's column

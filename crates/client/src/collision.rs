@@ -32,7 +32,6 @@ const SPINE_POINTS: usize = 8;
 /// the width a point stands on plus a column, so no column between two is
 /// missed.
 const SPINE_APART_M: f64 = 1.0;
-
 /// What a body at one direction stands on, and what is over its head.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Footing {
@@ -81,14 +80,18 @@ impl Footing {
     }
 }
 
-/// What holds a body up at a column, the ground and what is built apart.
-/// Together they are its [`Footing`]; apart, they are what [`aloft`] asks
-/// about.
+/// What holds a body up at a column, the ground, what is built and the
+/// wood of the trunks apart. Together they are its [`Footing`], what stops
+/// it; apart, they are what [`aloft`] asks about, and what [`Held::holds`]
+/// a body up.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Held {
     pub ground: Footing,
     /// `None` with nothing built near.
     pub built: Option<Footing>,
+    /// What the trunks under the body's width are to it, as what is built
+    /// is: `None` with none.
+    pub wood: Option<Footing>,
 }
 
 impl Held {
@@ -96,17 +99,56 @@ impl Held {
     pub const OPEN: Held = Held {
         ground: Footing::OPEN,
         built: None,
+        wood: None,
     };
 
-    /// Both as one: what a body stands on and has over its head.
+    /// All as one: what a body is stopped by, what it steps onto and what
+    /// it has over its head.
     pub fn footing(self) -> Footing {
-        self.built
-            .map_or(self.ground, |built| self.ground.with(built))
+        self.with_wood(self.wood)
     }
 
-    /// The highest floor built here, if any.
+    /// What holds a body up with its feet at `feet_m`: as
+    /// [`Held::footing`], with a trunk's top a floor only within a step
+    /// over the feet, where a step takes them onto it. A body deeper in
+    /// the wood is never lifted onto the top: it goes out by the side
+    /// ([`crate::shed`]).
+    pub fn holds(self, feet_m: f64) -> Footing {
+        self.topped(|top_m| top_m <= feet_m + STEP_M)
+    }
+
+    /// What a body coming down with its feet at `feet_m` comes down on: as
+    /// [`Held::holds`], with a trunk's top a floor only with the feet on
+    /// it, within `on_m` over it. One over a trunk is eased off it on the
+    /// way down, and comes down beside it.
+    pub fn lands(self, feet_m: f64, on_m: f64) -> Footing {
+        self.topped(|top_m| top_m <= feet_m + STEP_M && feet_m <= top_m + on_m)
+    }
+
+    /// The ground and what is built, with the wood's top a floor where
+    /// `floor` says.
+    fn topped(self, floor: impl Fn(f64) -> bool) -> Footing {
+        self.with_wood(self.wood.map(|wood| Footing {
+            floor_m: wood.floor_m.filter(|&top_m| floor(top_m)),
+            ..wood
+        }))
+    }
+
+    /// The ground and what is built, with `wood`.
+    fn with_wood(self, wood: Option<Footing>) -> Footing {
+        [self.built, wood]
+            .into_iter()
+            .flatten()
+            .fold(self.ground, Footing::with)
+    }
+
+    /// The highest floor built here, the wood's among it, if any.
     fn built_m(self) -> Option<f64> {
-        self.built.and_then(|built| built.floor_m)
+        [self.built, self.wood]
+            .into_iter()
+            .flatten()
+            .filter_map(|footing| footing.floor_m)
+            .reduce(f64::max)
     }
 }
 

@@ -54,6 +54,7 @@ use crate::cells::Cells;
 use crate::collision::{self, BODY_M, Held, STEP_M, Spine};
 use crate::controller::{self, Built, GRAVITY_MPS2};
 use crate::pets::{Pet, Spot};
+use crate::shed::{self, Footprint, Leaves, Leaving, Left};
 use crate::way::{Step, Straddle};
 
 /// How far from the body an animal is drawn, metres.
@@ -233,16 +234,26 @@ enum Away {
     /// Trotting to where its herd has it now: what was built turned the
     /// place it was at away.
     Catching,
-    /// A pet, where the world keeps it.
-    Kept { feet: Feet },
+    /// A pet, where the world keeps it: at `at` when its feet were set.
+    Kept { feet: Feet, at: SurfacePoint },
 }
 
 impl Away {
     /// Its own feet, out of its herd: none where its herd has it.
     fn feet(self) -> Option<Feet> {
         match self {
-            Away::Left { feet, .. } | Away::Returning { feet } | Away::Kept { feet } => Some(feet),
+            Away::Left { feet, .. } | Away::Returning { feet } | Away::Kept { feet, .. } => {
+                Some(feet)
+            }
             Away::Home | Away::Catching => None,
+        }
+    }
+
+    /// The point the world keeps it at, a pet's: none for any other.
+    fn kept_at(self) -> Option<SurfacePoint> {
+        match self {
+            Away::Kept { at, .. } => Some(at),
+            _ => None,
         }
     }
 }
@@ -258,6 +269,8 @@ struct Feet {
     /// Over the datum, metres.
     height_m: f64,
     stance: Stance,
+    /// Its way out of the wood of a trunk, while it is on it.
+    leaving: Option<Leaving>,
 }
 
 /// What holds feet up.
@@ -291,6 +304,7 @@ impl Feet {
             point: sphere.blocks().surface_point(position.to_array()),
             height_m: position.length() - sphere.radius_m(),
             stance: Stance::Ground,
+            leaving: None,
         }
     }
 
@@ -306,8 +320,9 @@ impl Feet {
 
     /// What holds it at a column, its feet `feet_m` over the datum.
     fn held(&self, point: SurfacePoint, feet_m: f64, ground: &Hooves<'_>) -> Held {
-        let seat = Seat::Sector(point.sector);
-        controller::held(seat, point, feet_m, ground.generator, Some(ground.built))
+        let (seat, built) = (Seat::Sector(point.sector), Some(ground.built));
+        let leaves = self.leaving.and_then(|leaving| leaving.leaves());
+        controller::held(seat, point, feet_m, ground.generator, built, leaves)
     }
 
     /// Whether `body` standing here turns from `facing` to `heading`,
@@ -324,7 +339,7 @@ impl Feet {
             self.spine(heading, body, ground),
         );
         let seat = self.held(self.point, self.height_m, ground);
-        collision::turns(seat, &was, &will, off, self.admits(body))
+        collision::turns(seat, &was, &will, off, self.admits(body.kind))
     }
 
     /// One frame of `body` facing `facing` on its way along the ground
@@ -393,11 +408,21 @@ impl Feet {
             pieces,
             &spine,
             footing,
-            self.admits(body),
+            self.admits(body.kind),
         );
         let from = self.position(generator);
         self.point = to;
         ((self.position(generator) - from).length(), to == asked)
+    }
+
+    /// Its feet as a pet the world keeps at `point`: where they stand
+    /// while it kept it at the same point, `was`, else on that point at
+    /// the height they had.
+    fn kept(self, was: Option<SurfacePoint>, point: SurfacePoint) -> Feet {
+        match was == Some(point) {
+            true => self,
+            false => Feet { point, ..self },
+        }
     }
 
     /// How far its feet are from the planet's centre, metres.
@@ -408,17 +433,27 @@ impl Feet {
     /// The spine of `body` standing here facing `toward`: as long as its
     /// kind's at its size.
     fn spine(&self, toward: DVec3, body: &Body, ground: &Hooves<'_>) -> Spine {
+        self.footprint(toward, body, ground).spine
+    }
+
+    /// What of `body` standing here facing `toward` a way out of wood
+    /// clears: its spine, and the way it faces.
+    fn footprint(&self, toward: DVec3, body: &Body, ground: &Hooves<'_>) -> Footprint {
         let generator = ground.generator;
         let grid = generator.sphere().blocks();
         let (du, dv) = collision::address_step(grid, self.point, self.radius_m(generator), toward);
         let [ahead_m, behind_m] = body.kind.reach_m().map(|m| m * body.animal.traits().size);
-        Spine::along([du, dv], ahead_m, behind_m)
+        Footprint {
+            spine: Spine::along([du, dv], ahead_m, behind_m),
+            toward: [du, dv],
+        }
     }
 
-    /// Whether a point of `body` goes from one footing to another, its
-    /// middle on a third, as a walker's does, with the room it needs.
-    fn admits(&self, body: &Body) -> impl Fn(Held, Held, Held, f64) -> bool {
-        let (height_m, room_m) = (self.height_m, room_m(body.kind));
+    /// Whether a point of an animal of `kind` goes from one footing to
+    /// another, its middle on a third, as a walker's does, with the room
+    /// it needs.
+    fn admits(&self, kind: &Kind) -> impl Fn(Held, Held, Held, f64) -> bool + use<> {
+        let (height_m, room_m) = (self.height_m, room_m(kind));
         move |seat, was, will, _| collision::afoot(seat, was, will, height_m, room_m)
     }
 
@@ -433,7 +468,7 @@ impl Feet {
         let mut feet_m = self.height_m;
         loop {
             let held = self.held(self.point, feet_m, ground);
-            let footing = held.footing();
+            let footing = held.holds(feet_m);
             let natural = footing.floor_m == held.ground.floor_m;
             match (footing.floor_m, footing.ceiling_m) {
                 (Some(floor_m), Some(ceiling_m))
@@ -450,13 +485,15 @@ impl Feet {
     /// does: on a floor it is at or under, on one within a step down while
     /// it stood, else falling to it; standing on the ground, on the ground
     /// however far down. A wall built over it, or one a pet's run in
-    /// closed form takes it into, sets it on top. While the cells near the
-    /// body have not come, it stands as it is: a floor not come yet is no
-    /// drop.
-    fn settle(&mut self, dt: f64, kind: &Kind, ground: &Hooves<'_>) {
+    /// closed form takes it into, sets it on top; a trunk it stands in, or
+    /// comes down on, it leaves by the side, its `footprint` clear of it.
+    /// While the cells near the body have not come, it stands as it is: a
+    /// floor not come yet is no drop.
+    fn settle(&mut self, dt: f64, kind: &Kind, footprint: &Footprint, ground: &Hooves<'_>) {
         if !ground.built.cells.come() {
             return;
         }
+        self.leave_wood(dt, kind, footprint, ground);
         let (floor_m, natural) = self.floor(kind, ground);
         let on = if natural {
             Stance::Ground
@@ -487,6 +524,49 @@ impl Feet {
         if let Some(floor_m) = stands(self.height_m, self.stance) {
             (self.height_m, self.stance) = (floor_m, on);
         }
+    }
+
+    /// Takes it a step of `dt` along its way out of the wood of a trunk it
+    /// stands in, on, or comes down on, as [`shed::step`] has a body on its
+    /// feet leave it, from its height to where it falls to: walked as a
+    /// step is, what is built and every trunk but the ones it leaves a
+    /// wall to it, and down once it stands.
+    fn leave_wood(&mut self, dt: f64, kind: &Kind, footprint: &Footprint, ground: &Hooves<'_>) {
+        let generator = ground.generator;
+        let to_m = match self.stance {
+            Stance::Falling(mps) => self.height_m - (mps + GRAVITY_MPS2 * dt) * dt,
+            Stance::Ground | Stance::Built => self.height_m,
+        };
+        let (grid, feet_m) = (generator.sphere().blocks(), self.height_m);
+        let walk = |from: SurfacePoint, [du, dv]: [f64; 2], left: Left| {
+            let held = |point: SurfacePoint| {
+                let (seat, leaves) = (Seat::Sector(point.sector), Some((left, Leaves::Through)));
+                controller::held(seat, point, feet_m, generator, Some(ground.built), leaves)
+            };
+            let pieces = collision::cell_by_cell(du, dv);
+            collision::walk(
+                grid,
+                from,
+                [du, dv],
+                pieces,
+                &footprint.spine,
+                held,
+                self.admits(kind),
+            )
+        };
+        let landed = !matches!(self.stance, Stance::Falling(_));
+        let (leaving, from, built) = (self.leaving, self.point, ground.built);
+        (self.leaving, self.point) = shed::step(
+            leaving,
+            from,
+            [feet_m, to_m],
+            footprint,
+            landed,
+            dt,
+            generator,
+            built,
+            walk,
+        );
     }
 }
 
@@ -573,9 +653,10 @@ pub(crate) struct Animals {
     /// Every pet of the world, by its number, as the world told it.
     pets: HashMap<u64, Pet>,
     /// The feet of each pet whose body was let go, out of view, by its
-    /// number, with the spot the world had for it then: its body comes
-    /// back on them while the world has it there still.
-    unseen: HashMap<u64, (Spot, Feet)>,
+    /// number, with the spot the world had for it then and the point it
+    /// kept it at, if it was kept: its body comes back on them while the
+    /// world has it there still.
+    unseen: HashMap<u64, (Spot, Feet, Option<SurfacePoint>)>,
     /// The animal this client's body stepped down from this frame: its
     /// number, where it stands and which way it faces.
     stepped_off: Option<(u64, DVec3, DVec3)>,
@@ -708,9 +789,9 @@ impl Animals {
                 let unseen = self
                     .unseen
                     .get(&number)
-                    .filter(|(spot, _)| *spot == pet.spot);
-                let at = unseen.map_or(going.position, |&(_, feet)| {
-                    Feet { point, ..feet }.position(generator)
+                    .filter(|(spot, ..)| *spot == pet.spot);
+                let at = unseen.map_or(going.position, |&(_, feet, at)| {
+                    feet.kept(at, point).position(generator)
                 });
                 (at, going.heading)
             }
@@ -1029,8 +1110,10 @@ impl Animals {
             // A pet's run in sight is at most earshot: one that far past
             // the view stays out of it.
             if far_m > VIEW_M + fauna::HEARS_M || self.seen.len() >= DRAWN {
-                if let Some(feet) = self.left.remove(&number).and_then(|body| body.away.feet()) {
-                    self.unseen.insert(number, (spot, feet));
+                let away = self.left.remove(&number).map(|body| body.away);
+                if let Some(feet) = away.and_then(Away::feet) {
+                    let at = away.and_then(Away::kept_at);
+                    self.unseen.insert(number, (spot, feet, at));
                 }
                 continue;
             }
@@ -1049,8 +1132,11 @@ impl Animals {
             };
             let away = had.as_ref().map(|body| body.away);
             let unseen = self.unseen.remove(&number);
-            let feet = (away.and_then(Away::feet))
-                .or_else(|| unseen.filter(|(was, _)| *was == spot).map(|(_, feet)| feet));
+            let (feet, kept_at) = match (away, unseen.filter(|(was, ..)| *was == spot)) {
+                (Some(away), _) => (away.feet(), away.kept_at()),
+                (None, Some((_, feet, at))) => (Some(feet), at),
+                (None, None) => (None, None),
+            };
             let (mut feet, going, left) = match away {
                 Some(Away::Left {
                     since_s,
@@ -1064,7 +1150,9 @@ impl Animals {
                     (feet, going, Some((since_s, heading)))
                 }
                 // Where the world keeps it, at the height its feet had, or
-                // first drawn, on the ground there.
+                // first drawn, on the ground there. While that holds still,
+                // in view or out, its feet stay where they stand: off it,
+                // where a trunk's wood it was kept in eased them out.
                 _ => match self
                     .pets
                     .get(&number)
@@ -1072,10 +1160,10 @@ impl Animals {
                 {
                     Some(going) => {
                         let point = grid.surface_point(going.position.to_array());
-                        let feet = feet.map_or_else(
-                            || Feet::at(going.position, generator),
-                            |feet| Feet { point, ..feet },
-                        );
+                        let feet = match feet {
+                            Some(feet) => feet.kept(kept_at, point),
+                            None => Feet::at(going.position, generator),
+                        };
                         (feet, going, None)
                     }
                     None => continue,
@@ -1087,20 +1175,25 @@ impl Animals {
             // Out of view its feet are kept as they are: nothing is read
             // for a pet not drawn.
             if !drawn {
-                if unseen != Some((spot, feet)) {
+                let at = left
+                    .is_none()
+                    .then(|| grid.surface_point(going.position.to_array()));
+                if unseen != Some((spot, feet, at)) {
                     *self.found.get_mut() = None;
                 }
-                self.unseen.insert(number, (spot, feet));
+                self.unseen.insert(number, (spot, feet, at));
                 continue;
             }
-            feet.settle(dt, kind, ground);
+            let Some(mut body) = had.or_else(|| self.body(number, generator)) else {
+                continue;
+            };
+            let at = grid.surface_point(going.position.to_array());
+            let footprint = feet.footprint(body.animal.heading(), &body, ground);
+            feet.settle(dt, kind, &footprint, ground);
             let going = Going {
                 position: feet.position(generator),
                 leap: feet.leap(),
                 ..going
-            };
-            let Some(mut body) = had.or_else(|| self.body(number, generator)) else {
-                continue;
             };
             body.away = match left {
                 Some((since_s, heading)) => Away::Left {
@@ -1108,7 +1201,7 @@ impl Animals {
                     heading,
                     feet,
                 },
-                None => Away::Kept { feet },
+                None => Away::Kept { feet, at },
             };
             amble(&mut body, going, dt, ground, &mut self.ambled);
             body.stepped = self.frame;
@@ -1188,7 +1281,8 @@ impl Animals {
                 }
                 continue;
             }
-            feet.settle(dt, body.kind, ground);
+            let footprint = feet.footprint(facing, &body, ground);
+            feet.settle(dt, body.kind, &footprint, ground);
             let at = feet.position(generator);
             let going = match stride {
                 None => {
@@ -2795,79 +2889,6 @@ mod tests {
         }
     }
 
-    /// A rider whose machine draws no trees rides into a trunk's column and
-    /// steps down there. The body stands beside its horse, off the wood;
-    /// the horse, which meets every trunk, stands on the trunk's top, waits
-    /// there while the body is near, and walks home off it once it goes.
-    #[test]
-    fn a_horse_left_in_a_trunk_by_a_rider_with_no_trees_stands_on_its_top() {
-        use crate::controller::Wish;
-        let mut world = World::new();
-        let (plant, trunks, _) = crate::trunks::tests::a_tree(&world.generator);
-        world.trunks = trunks;
-        let number = a_horse(&world);
-        let generator = &world.generator;
-        let (grid, radius_m) = (generator.sphere().blocks(), generator.sphere().radius_m());
-        let root = plant.root.column;
-        let top_m = world.trunks.top_of(root).unwrap();
-        let none = world.trunks.drawn(false);
-        let from = SurfacePoint::new(
-            root.sector,
-            f64::from(root.u) - 4.5,
-            f64::from(root.v) + 0.5,
-        );
-        let mut riding = Riding::new(&world, number, from, None);
-        let ahead = Wish {
-            movement: [0.0, 1.0],
-            ..Wish::default()
-        };
-        let mut over_root = false;
-        for _ in 0..300 {
-            riding.ride_meeting(&world, none, ahead);
-            over_root = grid.column_of(riding.controller.point()) == root;
-            if over_root {
-                break;
-            }
-        }
-        assert!(over_root, "ridden into the trunk's column");
-        let off = Built {
-            trunks: none,
-            ..world.built()
-        };
-        riding.controller.step_off(generator, off);
-        let body = riding.controller.point();
-        assert_eq!(
-            world.trunks.top_of(grid.column_of(body)),
-            None,
-            "the body stands off the wood"
-        );
-
-        let horse = |animals: &Animals| animals.left[&number].animal.position();
-        let mut on_foot = vec![riding.controller.drawn_position()];
-        for frame in 0..900 {
-            if frame == 300 {
-                on_foot.clear();
-            }
-            riding.now_s += 1.0 / 60.0;
-            let bodies = Bodies {
-                riders: &[],
-                on_foot: &on_foot,
-            };
-            world.step(&mut riding.animals, riding.now_s, body, bodies);
-            let on_m = horse(&riding.animals).length() - radius_m;
-            if frame < 300 {
-                assert!(
-                    (on_m - top_m).abs() < 0.05,
-                    "frame {frame}: the horse stands on the top, at {on_m}"
-                );
-            }
-        }
-        let home = horse(&riding.animals);
-        let column = grid.column_of(grid.surface_point(home.to_array()));
-        assert_ne!(column, root, "the horse walks home off the top");
-        assert!(home.length() - radius_m < top_m - 5.0, "the horse is down");
-    }
-
     /// A world with a floor laid over the plot [`crate::Cells::floor`]
     /// lays, and on it, cells counted from its corner: a wall two metres
     /// high along `v` at `u` 10, over `v` 0 to 20, and over `v` 30 to 63 a
@@ -3348,7 +3369,7 @@ mod tests {
             for frame in 1..=(60.0 / (run_mps * dt)) as i32 {
                 let to = at + way * (run_mps * dt * f64::from(frame));
                 feet.point = grid.surface_point(to.to_array());
-                feet.settle(dt, &gaia::fauna::horse::HORSE, &ground);
+                feet.settle(dt, &gaia::fauna::horse::HORSE, &Footprint::NONE, &ground);
                 falling += usize::from(feet.leap().is_some());
             }
         }
@@ -3374,13 +3395,13 @@ mod tests {
             )
         };
         let mut feet = Feet::at(on(40.5), generator);
-        feet.settle(1.0 / 60.0, body.kind, &ground);
+        feet.settle(1.0 / 60.0, body.kind, &Footprint::NONE, &ground);
         let up = on(40.5).normalize();
         let heading = on(41.5) - on(40.5);
         let heading = (heading - up * heading.dot(up)).normalize();
         for frame in 0..60 * 8 {
             feet.walk(heading, 1.3 / 60.0, &body, &ground);
-            feet.settle(1.0 / 60.0, body.kind, &ground);
+            feet.settle(1.0 / 60.0, body.kind, &Footprint::NONE, &ground);
             assert!(feet.leap().is_none(), "frame {frame}: falling");
         }
         let down = feet.height_m / BLOCK_M - f64::from(top);
@@ -3418,12 +3439,446 @@ mod tests {
             .sphere()
             .position(column, f64::from(top) * BLOCK_M);
         let mut feet = Feet::at(DVec3::from(at), &world.generator);
-        feet.settle(1.0 / 60.0, horse, &world.ground());
+        feet.settle(1.0 / 60.0, horse, &Footprint::NONE, &world.ground());
         let on = feet.height_m / BLOCK_M - f64::from(top);
         assert!(
             (on - 7.0).abs() < 1e-6,
             "it stands {on} cells over the floor"
         );
+    }
+
+    /// Whether an animal on its own feet is in the wood of a trunk, its
+    /// footprint over one whose top is over its feet, and whether it turns
+    /// every way clear of the wood.
+    fn wooded(world: &World, body: &Body) -> (bool, bool) {
+        let feet = body.away.feet().expect("on its own feet");
+        let footprint = feet.footprint(body.animal.heading(), body, &world.ground());
+        let (generator, built) = (&world.generator, world.built());
+        let grid = generator.sphere().blocks();
+        let in_wood = footprint.offsets().any(|[du, dv]| {
+            let at = SurfacePoint::new(feet.point.sector, feet.point.u + du, feet.point.v + dv);
+            let at = grid.wrapped(at);
+            (built.wood(generator, Seat::Sector(at.sector), at, feet.height_m))
+                .and_then(|wood| wood.floor_m)
+                .is_some_and(|top_m| top_m > feet.height_m)
+        });
+        let reach = footprint.reach();
+        let clear =
+            crate::shed::tests::turns_clear(feet.point, feet.height_m, reach, generator, built);
+        (in_wood, clear)
+    }
+
+    /// Turns a ridden body away from a root's column and rides it on a
+    /// second: how far it went, metres.
+    fn rides_off(riding: &mut Riding, world: &World, root: topology::Column) -> f64 {
+        let grid = world.generator.sphere().blocks();
+        let point = riding.controller.point();
+        let along = grid.tangents(point);
+        let [du, dv] =
+            [(point.u, root.u), (point.v, root.v)].map(|(at, n)| at - f64::from(n) - 0.5);
+        let away = DVec3::from(along.du) * du + DVec3::from(along.dv) * dv;
+        let bearing = topology::bearing_deg(grid.direction(point), away.to_array());
+        riding.controller.face(bearing.unwrap());
+        let from = riding.controller.position();
+        let ahead = crate::controller::Wish {
+            movement: [0.0, 1.0],
+            ..Default::default()
+        };
+        for _ in 0..60 {
+            riding.ride(world, ahead);
+        }
+        (riding.controller.position() - from).length()
+    }
+
+    /// A pegasus brought down on a tree's crown, over its trunk's middle
+    /// and its edges, facing each way, with no key held, one ahead or one
+    /// turning: it is never in the wood and comes down beside the trunk,
+    /// every hoof it sets down on the ground, never back up on the top. With
+    /// no key held, its height and tilt hold still within a second of
+    /// touching down, and it turns and walks off at once.
+    #[test]
+    fn a_pegasus_brought_down_on_a_crown_lands_beside_the_trunk() {
+        use crate::controller::Wish;
+        let mut world = World::new();
+        let (plant, trunks, _) = crate::trunks::tests::a_tree(&world.generator);
+        world.trunks = trunks;
+        let seed = world.generator.recipe().seed;
+        let mut herds = Animals::default();
+        world.step(
+            &mut herds,
+            1.0e3,
+            crate::spawn_point(&world.generator),
+            NONE,
+        );
+        let number = (herds.near().iter().map(|near| near.number))
+            .find(|&number| Region::wings(number, seed).is_some())
+            .expect("a pegasus near the spawn");
+        let generator = &world.generator;
+        let (grid, sphere) = (generator.sphere().blocks(), generator.sphere());
+        let root = plant.root.column;
+        let top_m = world.trunks.top_of(root).unwrap();
+        let ground_m = |at: DVec3| {
+            let direction = grid.direction(grid.surface_point(at.to_array()));
+            generator.sample(direction).height_m
+        };
+        let over = |at: DVec3| at.length() - sphere.radius_m() - ground_m(at);
+        let still = Wish::default();
+        let mut cases = Vec::new();
+        for off in [[0.0, 0.0], [0.7, 0.0], [-0.7, 0.3], [1.4, 0.6]] {
+            for heading_deg in [0.0_f64, 90.0, 180.0, 270.0] {
+                cases.push((off, heading_deg, [0.0, 0.0]));
+            }
+            cases.push((off, 45.0, [0.0, 1.0]));
+            cases.push((off, 45.0, [1.0, 0.0]));
+        }
+        for (off, heading_deg, keys) in cases {
+            let case = format!("{off:?} off, facing {heading_deg}, keys {keys:?}");
+            let at = SurfacePoint::new(
+                root.sector,
+                f64::from(root.u) + 0.5 + off[0],
+                f64::from(root.v) + 0.5 + off[1],
+            );
+            let mut riding = Riding::new(&world, number, at, None);
+            let pegasus = crate::way::Profile::Paces(Box::new(crate::paces::tests::pegasus()));
+            let steered = crate::way::Steering::Steered;
+            let controller = &mut riding.controller;
+            assert!(controller.take_way("test.horse", &pegasus, steered, number, generator));
+            controller.stand_at(Some(top_m + 3.0), generator);
+            let along = grid.tangents(at);
+            let turn = heading_deg.to_radians();
+            let heading = DVec3::from(along.du) * turn.cos() + DVec3::from(along.dv) * turn.sin();
+            controller.face(topology::bearing_deg(grid.direction(at), heading.to_array()).unwrap());
+            let took = controller.take_off(true, generator, world.built());
+            assert_eq!(took, Ok(()), "{case}");
+            for _ in 0..30 {
+                riding.ride(&world, still);
+            }
+            riding.controller.stand_at(Some(top_m + 3.0), generator);
+            assert_eq!(
+                riding.controller.land(generator, world.built()),
+                Ok(()),
+                "{case}"
+            );
+            let wish = Wish {
+                movement: keys,
+                ..Wish::default()
+            };
+            let (mut touched, mut held) = (None, Vec::new());
+            for frame in 0..420 {
+                let hooves = riding.ride(&world, wish);
+                let controller = &riding.controller;
+                assert!(
+                    !controller.in_wood(generator, world.built()),
+                    "{case}, frame {frame}: in the wood"
+                );
+                if controller.grounded() && !controller.aloft() {
+                    touched = touched.or(Some(frame));
+                }
+                let Some(touched) = touched else {
+                    continue;
+                };
+                let feet = controller.position();
+                assert!(
+                    over(feet).abs() < 1e-6,
+                    "{case}, frame {frame}: {} m over the ground",
+                    over(feet)
+                );
+                for hoof in hooves {
+                    let over_m = over(hoof);
+                    assert!(
+                        over_m.abs() < 0.4,
+                        "{case}, frame {frame}: a hoof {over_m} m over the ground"
+                    );
+                }
+                if frame >= touched + 60 {
+                    let animal = &riding.animals.ridden[&None].animal;
+                    let up = animal.position().normalize();
+                    let saddle = animal
+                        .saddle()
+                        .expect("a saddle")
+                        .matrix3
+                        .y_axis
+                        .normalize();
+                    held.push((feet, saddle.angle_between(up).to_degrees()));
+                }
+            }
+            assert!(
+                touched.is_some_and(|frame| frame < 240),
+                "{case}: touched down at {touched:?}"
+            );
+            if keys != [0.0, 0.0] {
+                continue;
+            }
+            let (first, tilt_deg) = held[0];
+            assert!(tilt_deg < 20.0, "{case}: tilted {tilt_deg} degrees");
+            for &(feet, tilt) in &held {
+                assert!(
+                    (feet - first).length() < 1e-6,
+                    "{case}: moved {}",
+                    (feet - first).length()
+                );
+                assert!(
+                    (tilt - tilt_deg).abs() < 0.05,
+                    "{case}: tilt from {tilt_deg} to {tilt}"
+                );
+            }
+            let facing = riding.controller.facing();
+            let turning = Wish {
+                movement: [1.0, 0.0],
+                ..Wish::default()
+            };
+            for _ in 0..30 {
+                riding.ride(&world, turning);
+            }
+            let turned_deg = riding
+                .controller
+                .facing()
+                .angle_between(facing)
+                .to_degrees();
+            assert!(turned_deg > 20.0, "{case}: turned {turned_deg} degrees");
+            let off_m = rides_off(&mut riding, &world, root);
+            assert!(off_m > 1.0, "{case}: walked {off_m} m off");
+        }
+    }
+
+    /// A rider whose machine draws no trees rides into a trunk's column and
+    /// steps down there. The horse, which meets every trunk, goes out of
+    /// the wood by the side at a walk's stride, on the ground and never on
+    /// the top, to where it turns every way clear of it; it waits there
+    /// while the body is near, and walks home once it goes.
+    #[test]
+    fn a_horse_left_in_a_trunk_by_a_rider_with_no_trees_walks_out_beside_it() {
+        use crate::controller::Wish;
+        let mut world = World::new();
+        let (plant, trunks, _) = crate::trunks::tests::a_tree(&world.generator);
+        world.trunks = trunks;
+        let number = a_horse(&world);
+        let generator = &world.generator;
+        let (grid, radius_m) = (generator.sphere().blocks(), generator.sphere().radius_m());
+        let root = plant.root.column;
+        let none = world.trunks.drawn(false);
+        let ground_m = |at: DVec3| {
+            let direction = grid.direction(grid.surface_point(at.to_array()));
+            generator.sample(direction).height_m
+        };
+        for aside in [0.0, 0.3, -0.3] {
+            let case = format!("{aside} aside");
+            let from = SurfacePoint::new(
+                root.sector,
+                f64::from(root.u) - 4.5,
+                f64::from(root.v) + 0.5 + aside,
+            );
+            let mut riding = Riding::new(&world, number, from, None);
+            let ahead = Wish {
+                movement: [0.0, 1.0],
+                ..Wish::default()
+            };
+            for _ in 0..300 {
+                riding.ride_meeting(&world, none, ahead);
+                if grid.column_of(riding.controller.point()) == root {
+                    break;
+                }
+            }
+            assert_eq!(
+                grid.column_of(riding.controller.point()),
+                root,
+                "{case}: in the trunk"
+            );
+            let blind = Built {
+                trunks: none,
+                ..world.built()
+            };
+            riding.controller.step_off(generator, blind);
+            let body = riding.controller.point();
+            let mut on_foot = vec![riding.controller.drawn_position()];
+            let (mut was, mut out) = (riding.animals.ridden[&None].animal.position(), None);
+            let mut stood = was;
+            for frame in 0..900 {
+                if frame == 300 {
+                    on_foot.clear();
+                    stood = was;
+                }
+                riding.now_s += 1.0 / 60.0;
+                let bodies = Bodies {
+                    riders: &[],
+                    on_foot: &on_foot,
+                };
+                world.step(&mut riding.animals, riding.now_s, body, bodies);
+                let Some(left) = riding.animals.left.get(&number) else {
+                    break;
+                };
+                let at = left.animal.position();
+                let on_m = at.length() - radius_m - ground_m(at);
+                assert!(
+                    on_m < STEP_M,
+                    "frame {frame}, {case}: {on_m} m over the ground"
+                );
+                let stride_m = (at - was).length();
+                assert!(
+                    frame >= 300 || stride_m < 0.1,
+                    "frame {frame}, {case}: a stride of {stride_m} m"
+                );
+                was = at;
+                if frame < 300 {
+                    let (in_wood, clear) = wooded(&world, &riding.animals.left[&number]);
+                    if out.is_some_and(|out| frame > out + 10) {
+                        assert!(
+                            stride_m < 1e-9,
+                            "frame {frame}, {case}: on the move, {stride_m} m"
+                        );
+                    }
+                    match out {
+                        Some(_) => assert!(clear && !in_wood, "frame {frame}, {case}: back in"),
+                        None if clear => out = Some(frame),
+                        None => {}
+                    }
+                }
+            }
+            assert!(
+                out.is_some_and(|frame| frame < 120),
+                "{case}: out at {out:?}"
+            );
+            let home = riding
+                .animals
+                .left
+                .get(&number)
+                .map(|left| left.animal.position());
+            let gone_m = home.map_or(f64::INFINITY, |home| (home - stood).length());
+            assert!(gone_m > 5.0, "{case}: walked {gone_m} m home");
+        }
+    }
+
+    /// A pet the world keeps at `point`, in a trunk's column, left there by
+    /// a keeper whose machine drew no trees, drawn where the trees are for
+    /// `seconds` at `dt` a frame, its keeper four metres off: each frame,
+    /// where it is, and as [`wooded`] says, whether it is in the wood and
+    /// whether it turns clear of it. Then, `away` times, a second out of
+    /// view and `seconds` in it again.
+    fn kept_in_a_trunk(
+        world: &World,
+        point: SurfacePoint,
+        dt: f64,
+        seconds: f64,
+        away: usize,
+    ) -> Vec<Vec<(DVec3, bool, bool)>> {
+        let number = a_horse(world);
+        let generator = &world.generator;
+        let (grid, sphere) = (generator.sphere().blocks(), generator.sphere());
+        let ground_m = generator.sample(grid.direction(point)).height_m;
+        let at = DVec3::from(sphere.position(point, ground_m));
+        let facing = rider(None, number, at).facing;
+        let mut animals = Animals::default();
+        let pet = Pet {
+            number,
+            spot: spot_of(at, facing, 0, generator),
+            mine: true,
+            ..Pet::default()
+        };
+        animals.set_pets([pet].iter(), generator);
+        let beside = [at + facing * 4.0];
+        let bodies = Bodies {
+            riders: &[],
+            on_foot: &beside,
+        };
+        let far =
+            grid.surface_point((at + at.normalize().any_orthonormal_vector() * 400.0).to_array());
+        let mut now_s = 1.0e3;
+        let mut visits = Vec::new();
+        for visit in 0..=away {
+            if visit > 0 {
+                for _ in 0..(1.0 / dt) as usize {
+                    now_s += dt;
+                    animals.update(dt, now_s, Some(far), bodies, generator, world.built());
+                }
+                assert!(!animals.left.contains_key(&number), "drawn out of view");
+            }
+            let mut frames = Vec::new();
+            for _ in 0..(seconds / dt) as usize {
+                now_s += dt;
+                animals.update(dt, now_s, Some(point), bodies, generator, world.built());
+                let pet = &animals.left[&number];
+                let (in_wood, clear) = wooded(world, pet);
+                frames.push((pet.animal.position(), in_wood, clear));
+            }
+            visits.push(frames);
+        }
+        visits
+    }
+
+    /// A pet the world keeps in a trunk's column: drawn where the trees
+    /// are, it goes out of the wood by the side at a walk's stride, on the
+    /// ground and never on the top, and stands still beside it; out of view
+    /// and back, it stands there still.
+    #[test]
+    fn a_pet_kept_in_a_trunk_stands_beside_it() {
+        let mut world = World::new();
+        let (plant, trunks, _) = crate::trunks::tests::a_tree(&world.generator);
+        world.trunks = trunks;
+        let generator = &world.generator;
+        let (grid, sphere) = (generator.sphere().blocks(), generator.sphere());
+        let root = plant.root.column;
+        let ground_m = |at: DVec3| {
+            let direction = grid.direction(grid.surface_point(at.to_array()));
+            generator.sample(direction).height_m
+        };
+        for [du, dv] in [[0.5, 0.5], [0.2, 0.7]] {
+            let case = format!("kept at {du} {dv}");
+            let point =
+                SurfacePoint::new(root.sector, f64::from(root.u) + du, f64::from(root.v) + dv);
+            let visits = kept_in_a_trunk(&world, point, 1.0 / 60.0, 4.0, 1);
+            let (mut was, mut out) = (None::<DVec3>, None);
+            for (frame, &(at, in_wood, clear)) in visits.concat().iter().enumerate() {
+                let on_m = at.length() - sphere.radius_m() - ground_m(at);
+                assert!(
+                    on_m < STEP_M,
+                    "frame {frame}, {case}: {on_m} m over the ground"
+                );
+                if let Some(was) = was {
+                    let stride_m = (at - was).length();
+                    assert!(
+                        stride_m < 0.1,
+                        "frame {frame}, {case}: a stride of {stride_m} m"
+                    );
+                }
+                match out {
+                    Some(_) => assert!(clear && !in_wood, "frame {frame}, {case}: back in"),
+                    None if clear => out = Some(at),
+                    None => {}
+                }
+                was = Some(at);
+            }
+            let out = out.unwrap_or_else(|| panic!("{case}: never out"));
+            let rest_m = (was.unwrap() - out).length();
+            assert!(rest_m < 1e-6, "{case}: moved {rest_m} m once out");
+        }
+    }
+
+    /// A pet kept in a trunk's column goes out of it to one spot, at
+    /// whatever frame rate its keeper's machine draws it.
+    #[test]
+    fn a_pet_kept_in_a_trunk_goes_out_to_one_spot_at_any_frame_rate() {
+        let mut world = World::new();
+        let (plant, trunks, _) = crate::trunks::tests::a_tree(&world.generator);
+        world.trunks = trunks;
+        let root = plant.root.column;
+        for [du, dv] in [[0.5, 0.5], [0.2, 0.7]] {
+            let point =
+                SurfacePoint::new(root.sector, f64::from(root.u) + du, f64::from(root.v) + dv);
+            let end = |fps: f64| {
+                kept_in_a_trunk(&world, point, 1.0 / fps, 4.0, 0)[0]
+                    .last()
+                    .unwrap()
+                    .0
+            };
+            let at = end(60.0);
+            for fps in [20.0, 30.0, 144.0] {
+                let apart_m = (end(fps) - at).length();
+                assert!(
+                    apart_m < 1e-6,
+                    "kept at {du} {dv}: {apart_m} m from 60 frames a second at {fps}"
+                );
+            }
+        }
     }
 
     /// A horse left on a deck, its body then landing far, where the cells

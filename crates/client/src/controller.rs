@@ -20,6 +20,7 @@ use crate::hover::{self, Glide, Hover, Step};
 use crate::paces::{Ahead, Arc, Flight, Paces, Pacing, Reins};
 use crate::parts::Parts;
 use crate::seam::Mode;
+use crate::shed::{self, Footprint, Leaves, Leaving, Left};
 use crate::spring::{Follow, Spring};
 use crate::trunks::Trunks;
 use crate::way::{Profile, Steering};
@@ -36,8 +37,9 @@ pub struct Built<'a> {
 
 impl<'a> Built<'a> {
     /// What a body with its feet `feet_m` over the datum, standing in a
-    /// column of a seat, has under and over it of what is built. `None`
-    /// with nothing built near.
+    /// column of a seat, has under and over it of what is built, the wood
+    /// of the trunks among it: what stops it. `None` with nothing built
+    /// near.
     pub(crate) fn footing(
         &self,
         generator: &Generator,
@@ -45,12 +47,15 @@ impl<'a> Built<'a> {
         point: SurfacePoint,
         feet_m: f64,
     ) -> Option<Footing> {
+        let wood = self.wood(generator, seat, point, feet_m);
         self.footings(generator, seat, point, feet_m)
+            .chain(wood)
             .reduce(Footing::with)
     }
 
-    /// [`Built::footing`] one column or part at a time, before the highest
-    /// floor and the lowest roof are taken.
+    /// The cells and the solid parts of [`Built::footing`], one column or
+    /// part at a time, before the highest floor and the lowest roof are
+    /// taken: what a hoof stands on. A trunk's wood is none of it.
     pub(crate) fn footings(
         &self,
         generator: &'a Generator,
@@ -60,10 +65,45 @@ impl<'a> Built<'a> {
     ) -> impl Iterator<Item = Footing> + 'a {
         let cells = self.cells.footings(seat, point, feet_m);
         let parts = self.parts.footings(generator, seat, point, feet_m);
-        let trunks = self
-            .trunks
-            .footings(generator, self.cells, seat, point, feet_m);
-        cells.chain(parts).chain(trunks)
+        cells.chain(parts)
+    }
+
+    /// The highest floor of what is built a body with its feet `feet_m`
+    /// over the datum rests on within a step at a point of a seat, if it
+    /// is higher than `over_m`: metres over the datum, the floor
+    /// [`Built::footings`] holds it on, read no lower than it needs. `None`
+    /// with none.
+    pub(crate) fn floor_over(
+        &self,
+        generator: &Generator,
+        seat: Seat,
+        point: SurfacePoint,
+        feet_m: f64,
+        over_m: f64,
+    ) -> Option<f64> {
+        let parts = (self.parts.footings(generator, seat, point, feet_m))
+            .filter_map(|footing| footing.floor_m)
+            .filter(|&floor_m| floor_m > over_m && floor_m <= feet_m + STEP_M);
+        (self
+            .cells
+            .floor_over(seat, point, feet_m, over_m)
+            .into_iter())
+        .chain(parts)
+        .reduce(f64::max)
+    }
+
+    /// What the trunks under the body's width are to it, as a column of
+    /// cells is: a wall, its top a floor over it, and a roof over its
+    /// bottom. `None` with none.
+    pub(crate) fn wood(
+        &self,
+        generator: &Generator,
+        seat: Seat,
+        point: SurfacePoint,
+        feet_m: f64,
+    ) -> Option<Footing> {
+        self.trunks
+            .footing(generator, self.cells, seat, point, feet_m)
     }
 
     /// Whether anything stands on a body.
@@ -73,22 +113,48 @@ impl<'a> Built<'a> {
 }
 
 /// What holds a body with its feet `feet_m` over the datum at a column of
-/// a seat: the ground, and what is built under or over it, apart; with no
-/// `built`, the ground alone. The one read of what a body on its feet
-/// stands on and is stopped by: a walker, a body in a way and the animal
-/// it rode, left.
+/// a seat: the ground, what is built and the wood of the trunks under or
+/// over it, apart; with no `built`, the ground alone. The trees a body
+/// `leaves` are to it what that says, among what is built where they hold
+/// it as what is built does. The one read of what a body on its feet
+/// stands on and is stopped by: a walker, a body in a way and an animal on
+/// its own, left or kept.
 pub(crate) fn held(
     seat: Seat,
     point: SurfacePoint,
     feet_m: f64,
     generator: &Generator,
     built: Option<Built<'_>>,
+    leaves: Option<(Left, Leaves)>,
 ) -> Held {
     let direction = seat.sphere(generator).blocks().direction(point);
-    Held {
+    let mut held = Held {
         ground: Footing::solid(seat::ground_m(generator, seat.body(), direction)),
-        built: built.and_then(|built| built.footing(generator, seat, point, feet_m)),
+        built: built.and_then(|built| {
+            (built.footings(generator, seat, point, feet_m)).reduce(Footing::with)
+        }),
+        wood: None,
+    };
+    let wood = built
+        .into_iter()
+        .flat_map(|built| (built.trunks).rooted(generator, built.cells, seat, point, feet_m));
+    for (footing, root) in wood {
+        let leaves = leaves.filter(|(left, _)| left.has(root));
+        let (into, footing) = match leaves.map(|(_, leaves)| leaves) {
+            None => (&mut held.wood, footing),
+            Some(Leaves::Through) => continue,
+            Some(Leaves::Walls) => {
+                let wall = Footing {
+                    floor_m: footing.floor_m.map(|_| f64::INFINITY),
+                    ..footing
+                };
+                (&mut held.wood, wall)
+            }
+            Some(Leaves::Built) => (&mut held.built, footing),
+        };
+        *into = Some(into.map_or(footing, |was| was.with(footing)));
     }
+    held
 }
 
 const WALK_MPS: f64 = 4.8;
@@ -396,6 +462,8 @@ pub struct Controller {
     /// Metres of room over the feet under the roof the body stood under
     /// last step; none under open sky. Where the eye is held.
     roof_m: Option<f64>,
+    /// Its way out of the wood of a trunk, while it is on it.
+    leaving: Option<Leaving>,
 }
 
 impl Controller {
@@ -432,6 +500,7 @@ impl Controller {
             riding: Follow::default(),
             banked: Follow::default(),
             roof_m: None,
+            leaving: None,
         }
     }
 
@@ -755,7 +824,11 @@ impl Controller {
             return false;
         }
         let point = self.sphere.blocks().wrapped(point);
-        let footing = self.footing_at(Seat::Sector(point.sector), point, generator, Some(built));
+        self.leaving = None;
+        let held = self.held_at(Seat::Sector(point.sector), point, generator, Some(built));
+        // A body set down where a trunk stands is on the ground under it,
+        // never on the top, and leaves the wood from there.
+        let footing = held.lands(self.height_m, 0.0);
         self.point = point;
         self.height_m = footing.floor_m.unwrap_or_else(|| self.ground_m(generator));
         self.vertical_mps = 0.0;
@@ -1144,14 +1217,6 @@ impl Controller {
         }
     }
 
-    /// What the body stands on, and what is over its head. Out in the open
-    /// the floor is the surface and there is no roof; inside a volume both
-    /// are its cells.
-    fn footing(&self, generator: &Generator, built: Option<Built<'_>>) -> Footing {
-        let (seat, point) = self.over(generator);
-        self.footing_at(seat, point, generator, built)
-    }
-
     /// What a body with its feet where they are would stand on at a column
     /// of a seat: the ground, and what is built under or over it.
     fn footing_at(
@@ -1172,7 +1237,8 @@ impl Controller {
         generator: &Generator,
         built: Option<Built<'_>>,
     ) -> Held {
-        held(seat, point, self.height_m, generator, built)
+        let leaves = self.leaving.and_then(|leaving| leaving.leaves());
+        held(seat, point, self.height_m, generator, built, leaves)
     }
 
     /// Whether the body is under the ground as the heightfield draws it: in a
@@ -1595,7 +1661,7 @@ impl Controller {
         };
 
         self.settle_drawn(dt);
-        self.step(velocity * dt, generator, built);
+        self.step(dt, velocity * dt, generator, built);
         self.resolve_site();
         self.touch_down(generator, built);
         self.speed_mps = velocity.length();
@@ -1691,7 +1757,17 @@ impl Controller {
     /// where it would come down, the floor, or [`SEA_OVER_M`] over water
     /// deeper than its way wades, and whether that is water.
     fn below(&self, generator: &Generator, built: Built<'_>) -> Below {
-        let under = self.ahead(DVec3::ZERO, generator, built);
+        // Coming down, a trunk's top is no floor until the feet are on it:
+        // the body is eased off it on the way, and comes down beside it.
+        let under = match self.mount_aloft() {
+            Some((_, Aloft::Landing)) => {
+                let feet_m = self.height_m;
+                self.under(DVec3::ZERO, generator, built, |held| {
+                    held.lands(feet_m, TOUCH_M)
+                })
+            }
+            _ => self.ahead(DVec3::ZERO, generator, built),
+        };
         let wade_m = match &self.moves {
             Moves::Way {
                 kept: Kept::Paced { paces, .. },
@@ -1854,7 +1930,7 @@ impl Controller {
         let position = self.position();
         // The body steps as it faces now, its spine along it.
         self.facing = pacing.heading;
-        self.step(velocity * dt, generator, built);
+        self.step(dt, velocity * dt, generator, built);
         self.resolve_site();
         // A wall takes what it stopped.
         let went = tangent(self.position() - position) / dt;
@@ -1926,7 +2002,7 @@ impl Controller {
         let velocity = heading * mps + self.gravity_up() * self.vertical_mps;
         let position = self.position();
         self.facing = heading;
-        self.step(velocity * dt, generator, built);
+        self.step(dt, velocity * dt, generator, built);
         self.resolve_site();
         let went = self.position() - position;
         self.ground_mps = (went - up * went.dot(up)).length() / dt;
@@ -1977,6 +2053,18 @@ impl Controller {
     /// feet, how deep the sea is over it and how much room a roof leaves.
     /// Off the planet it finds nothing.
     fn ahead(&self, offset: DVec3, generator: &Generator, built: Built<'_>) -> Ahead {
+        self.under(offset, generator, built, Held::footing)
+    }
+
+    /// [`Controller::ahead`], the floor and the roof read off what holds
+    /// the body there by `footing`.
+    fn under(
+        &self,
+        offset: DVec3,
+        generator: &Generator,
+        built: Built<'_>,
+        footing: impl Fn(Held) -> Footing,
+    ) -> Ahead {
         let open = Ahead {
             rise_m: 0.0,
             water_m: 0.0,
@@ -1992,12 +2080,12 @@ impl Controller {
             self.point.u + du,
             self.point.v + dv,
         ));
-        let footing = self.footing_at(
+        let footing = footing(self.held_at(
             Seat::Sector(point.sector),
             point,
             generator,
             self.built(built),
-        );
+        ));
         let ground_m = generator.sample(grid.direction(point)).height_m;
         let floor_m = footing.floor_m.unwrap_or(ground_m);
         Ahead {
@@ -2055,6 +2143,7 @@ impl Controller {
 
         let position = self.position();
         self.settle_drawn(dt);
+        let stood_m = self.height_m;
         self.step_on_planet(velocity * dt, generator, built);
         // A wall takes what it stopped.
         let went = tangent(self.position() - position) / dt;
@@ -2074,8 +2163,8 @@ impl Controller {
         let speed_mps = went.dot(glide.heading);
         let ground_m = hover::surface_m(&hover, self.ground_m(generator));
         let mut reading = hover::read(&hover, up, glide.heading, speed_mps, surface).over(ground_m);
-        let built = self.built(built);
-        let footing = self.footing(generator, built);
+        let (held, (seat, point)) = (self.built(built), self.over(generator));
+        let footing = (self.held_at(seat, point, generator, held)).holds(self.height_m);
         if let Some(floor_m) = footing.floor_m.filter(|floor_m| *floor_m > ground_m) {
             reading = reading.on(floor_m);
         }
@@ -2102,6 +2191,9 @@ impl Controller {
         self.facing = glide.heading;
         self.align_frame(dt, generator);
         self.transport();
+        // Off the wood once the cushion has floated, so coming down on a
+        // trunk's top eases it aside as it comes down.
+        self.leave_wood(dt, stood_m, generator, built);
         if let Moves::Way {
             kept: Kept::Glide { glide: kept, .. },
             ..
@@ -2134,15 +2226,19 @@ impl Controller {
         self.boom.zoom(f64::from(wish.zoom));
     }
 
-    /// Moves by a world space displacement: in address space on the planet,
-    /// over a plain sphere on the moon, where the cells of a volume in the
-    /// way stop it all the same.
-    fn step(&mut self, delta: DVec3, generator: &Generator, built: Built<'_>) {
+    /// Moves by a world space displacement over a step of `dt`: in address
+    /// space on the planet, over a plain sphere on the moon, where the
+    /// cells of a volume in the way stop it all the same. Out of the wood
+    /// of a trunk it is in or comes down on, it is eased aside.
+    fn step(&mut self, dt: f64, delta: DVec3, generator: &Generator, built: Built<'_>) {
         // Where the feet stood: a step along the curve lifts them a hair
         // off the floor they stood on, and a step down is measured from it.
         let stood_m = self.height_m;
         match self.site {
-            Site::Planet => self.step_on_planet(delta, generator, built),
+            Site::Planet => {
+                self.step_on_planet(delta, generator, built);
+                self.leave_wood(dt, stood_m, generator, built);
+            }
             Site::Moon { direction } => {
                 let radius = self.body().1 + self.height_m;
                 let along = delta - direction * direction.dot(delta);
@@ -2171,7 +2267,9 @@ impl Controller {
         // sea, a floor whatever its speed and the frame's length.
         let sea_m = (self.aloft() && self.below(generator, built).wet).then_some(SEA_OVER_M);
         let built = self.built(built);
-        let footing = self.footing(generator, built);
+        let (seat, point) = self.over(generator);
+        let footing =
+            (self.held_at(seat, point, generator, built)).holds(stood_m.max(self.height_m));
         let floor_m = match self.moves {
             // A flyer is held over the ground as it is drawn, so it never
             // ends up looking at the terrain from underneath, and over the
@@ -2315,6 +2413,97 @@ impl Controller {
             ))
         };
         self.height_m += up.dot(delta);
+    }
+
+    /// Takes the body a step of `dt` along its way out of the wood of a
+    /// trunk, a step that took its feet from `stood_m` to where they are,
+    /// as [`shed::step`] does: walked a cell at a time as a step on feet
+    /// is, coming down on wings too, what is built and every trunk but the
+    /// ones it leaves a wall to it, and down once it is on its feet or its
+    /// cushion holds it. On a cushion, its feet are the cushion's. A body
+    /// that goes on feet does, or one coming down to them; one on wings or
+    /// a flyer's goes over a trunk's top as it goes over a wall's.
+    fn leave_wood(&mut self, dt: f64, stood_m: f64, generator: &Generator, built: Built<'_>) {
+        let Some(built) = self.built(built).filter(|_| self.sheds()) else {
+            self.leaving = None;
+            return;
+        };
+        let cushion_m = match &self.moves {
+            Moves::Way {
+                kept: Kept::Glide { hover, .. },
+                ..
+            } => hover.height_m,
+            _ => 0.0,
+        };
+        let (footprint, grid) = (self.footprint(), self.sphere.blocks());
+        let feet_m = [stood_m, self.height_m].map(|m| m - cushion_m);
+        // A flyer's step is held only where it ends; a way out held so
+        // would go through a wall a long body comes down over.
+        let admits = |seat, was, will, along_m| self.admits(seat, was, will, along_m);
+        let walk = |from: SurfacePoint, [du, dv]: [f64; 2], left: Left| {
+            let footing = |point: SurfacePoint| {
+                let (seat, leaves) = (Seat::Sector(point.sector), Some((left, Leaves::Through)));
+                held(seat, point, self.height_m, generator, Some(built), leaves)
+            };
+            let pieces = collision::cell_by_cell(du, dv);
+            collision::walk(
+                grid,
+                from,
+                [du, dv],
+                pieces,
+                &footprint.spine,
+                footing,
+                admits,
+            )
+        };
+        let (leaving, from, landed) = (self.leaving, self.point, self.grounded);
+        (self.leaving, self.point) = shed::step(
+            leaving, from, feet_m, &footprint, landed, dt, generator, built, walk,
+        );
+    }
+
+    /// Whether the body leaves the wood of a trunk it is in or comes down
+    /// on: on its feet, coming down to land, or on a cushion. Never
+    /// swimming or flying, nor springing off its legs or on its wings to
+    /// take off, which go over a trunk's top as over a wall's.
+    fn sheds(&self) -> bool {
+        let goes = match &self.moves {
+            Moves::Walk => true,
+            Moves::Way {
+                kept: Kept::Paced { aloft, .. },
+                ..
+            } => matches!(aloft, None | Some(Aloft::Landing)),
+            Moves::Way {
+                kept: Kept::Glide { .. },
+                ..
+            } => true,
+            Moves::Fly => false,
+        };
+        self.site == Site::Planet && !self.swimming && goes
+    }
+
+    /// What of the body a way out of wood clears, and the way it faces:
+    /// what its collision keeps out of a wall, its spine on its feet and
+    /// its middle on a spring, and coming down to land the spine it lands
+    /// with, so its nose and rump come down clear.
+    fn footprint(&self) -> Footprint {
+        let (du, dv) = self.address_step(self.facing);
+        let spine = match &self.moves {
+            Moves::Way {
+                kept:
+                    Kept::Paced {
+                        paces,
+                        aloft: None | Some(Aloft::Landing),
+                        ..
+                    },
+                ..
+            } => Spine::along([du, dv], paces.ahead_m, paces.behind_m),
+            _ => Spine::NONE,
+        };
+        Footprint {
+            spine,
+            toward: [du, dv],
+        }
     }
 
     /// Whether rock in the way stops this body. A walker and a body in a
@@ -2539,6 +2728,34 @@ fn turn_toward(from: DVec3, to: DVec3, fraction: f64, fallback_axis: DVec3) -> D
 /// `from` turned a `fraction` of the way to `to`.
 fn rotate_toward(from: DVec3, to: DVec3, fraction: f64, fallback_axis: DVec3) -> DVec3 {
     (turn_toward(from, to, fraction, fallback_axis) * from).normalize()
+}
+
+#[cfg(test)]
+impl Controller {
+    /// Whether the body is in the wood of a trunk: its footprint over one
+    /// whose top is over its feet.
+    pub(crate) fn in_wood(&self, generator: &Generator, built: Built<'_>) -> bool {
+        self.sunk_m(generator, built) > 0.0
+    }
+
+    /// How deep the body is in the wood of a trunk, metres: how far the
+    /// highest top under its footprint is over its feet, none out of it.
+    pub(crate) fn sunk_m(&self, generator: &Generator, built: Built<'_>) -> f64 {
+        let grid = self.sphere.blocks();
+        (self.footprint().offsets())
+            .filter_map(|[du, dv]| {
+                let at = SurfacePoint::new(self.point.sector, self.point.u + du, self.point.v + dv);
+                let at = grid.wrapped(at);
+                (built.wood(generator, Seat::Sector(at.sector), at, self.height_m))
+                    .and_then(|wood| wood.floor_m)
+            })
+            .fold(0.0, |sunk_m: f64, top_m| sunk_m.max(top_m - self.height_m))
+    }
+
+    /// Whether it is on its way out of the wood of a trunk.
+    pub(crate) fn leaving(&self) -> bool {
+        self.leaving.is_some_and(|leaving| leaving.going())
+    }
 }
 
 #[cfg(test)]
@@ -3684,7 +3901,9 @@ mod tests {
                 (controller.carrier(), controller.mode()),
                 (1, Mode::Way("test.horse".into()))
             );
-            let ground_m = controller.footing(generator, Some(built)).floor_m.unwrap();
+            let (seat, point) = controller.over(generator);
+            let footing = controller.footing_at(seat, point, generator, Some(built));
+            let ground_m = footing.floor_m.unwrap();
             assert!((controller.height_m - ground_m).abs() < 0.01);
             assert!(controller.pace().is_some(), "down at a pace");
         });

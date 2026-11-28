@@ -40,6 +40,7 @@ mod plants;
 mod plugin;
 mod seam;
 mod session;
+mod shed;
 mod sound;
 mod speakers;
 mod spring;

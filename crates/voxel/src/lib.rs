@@ -422,7 +422,7 @@ impl Volume {
             return None;
         }
         let top = self.size[2] as i32;
-        let probe = (reach.floor() as i32).clamp(-1, top);
+        let probe = self.probe(reach);
         let solid = |z: i32| self.solid([x, y, z]);
         if solid(probe) {
             let mut z = probe;
@@ -435,9 +435,43 @@ impl Volume {
                 ceiling,
             });
         }
-        let floor = (0..probe).rev().find(|&z| solid(z)).map(|z| z + 1);
+        let floor = self.floor_under(x, y, probe, 0);
         let ceiling = (probe + 1..top).find(|&z| solid(z));
         Some(Gap { floor, ceiling })
+    }
+
+    /// The floor a body standing in column `x, y` rests on within its
+    /// step, when the step reaches `reach` cells up the box, if it is
+    /// higher than `over` cells: the floor [`Volume::gap`] finds where the
+    /// step's height is air, read down to `over` and no further, and with
+    /// no roof read. `None` off the box, where the step's height is solid,
+    /// which is a wall, and with no floor that high.
+    pub fn floor_over(&self, x: i32, y: i32, reach: f64, over: f64) -> Option<i32> {
+        if !self.over(x, y) {
+            return None;
+        }
+        let probe = self.probe(reach);
+        if self.solid([x, y, probe]) {
+            return None;
+        }
+        // A floor is the top of a cell, one over it: over `over` from the
+        // cell `over` is in up.
+        self.floor_under(x, y, probe, (over.floor() as i32).max(0))
+    }
+
+    /// The cell a step reaching `reach` cells up the box ends in: one
+    /// under the box at the lowest and one over it at the highest.
+    fn probe(&self, reach: f64) -> i32 {
+        (reach.floor() as i32).clamp(-1, self.size[2] as i32)
+    }
+
+    /// The floor under cell `probe` of column `x, y`: the top of the first
+    /// solid cell down from it, read to cell `lowest` and no further.
+    fn floor_under(&self, x: i32, y: i32, probe: i32, lowest: i32) -> Option<i32> {
+        (lowest..probe)
+            .rev()
+            .find(|&z| self.solid([x, y, z]))
+            .map(|z| z + 1)
     }
 
     /// Copies the cells of `span`, a box of this volume, into `out`, which
@@ -562,6 +596,32 @@ mod tests {
             })
         );
         assert_eq!(volume.gap(8, 0, reach), None);
+    }
+
+    #[test]
+    fn a_floor_over_a_height_is_the_gap_s_floor_within_the_step() {
+        let mut volume = Volume::new([8, 8, 16]);
+        // A step, a wall two high, a slab overhead and a ledge under it.
+        volume.set([1, 0, 0], Cell::solid(0));
+        volume.set([2, 0, 0], Cell::solid(0));
+        volume.set([2, 0, 1], Cell::solid(0));
+        volume.set([3, 0, 9], Cell::solid(0));
+        volume.set([3, 0, 4], Cell::solid(0));
+        let heights = (-4..40).map(|half| f64::from(half) * 0.5);
+        for x in 0..9 {
+            for reach in heights.clone() {
+                let within = volume.gap(x, 0, reach).and_then(|gap| gap.floor);
+                let within = within.filter(|&floor| f64::from(floor) <= reach);
+                for over in heights.clone() {
+                    let floor = within.filter(|&floor| f64::from(floor) > over);
+                    assert_eq!(
+                        volume.floor_over(x, 0, reach, over),
+                        floor,
+                        "{x} {reach} {over}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -1342,6 +1342,26 @@ impl Cells {
         })
     }
 
+    /// The highest floor a body with its feet `feet_m` over the datum
+    /// rests on within a step at a point of a seat, of the cells under its
+    /// width, if it is higher than `over_m`: metres over the datum, as
+    /// [`Cells::footings`] finds the floors, read down to `over_m` and no
+    /// further. `None` with none.
+    pub fn floor_over(
+        &self,
+        seat: Seat,
+        point: SurfacePoint,
+        feet_m: f64,
+        over_m: f64,
+    ) -> Option<f64> {
+        let site = &self.sites[self.site(seat)?];
+        let [reach, over] = [feet_m + STEP_M, over_m].map(|metres| metres / BLOCK_M);
+        (collision::columns(point))
+            .filter_map(|[x, y]| site.volumes.floor_over(x, y, reach, over))
+            .max()
+            .map(|floor| f64::from(floor) * BLOCK_M)
+    }
+
     /// Whether a cell stands in the way of something rooted at a column of a
     /// sector of the planet, `u` and `v` in blocks, between two heights in
     /// metres.
