@@ -125,46 +125,56 @@ describe('choices', () => {
 	const draft = { picture: 'custom' as const, trees: true, shrubs: true, flowers: true, animals: true, gpu: {} };
 
 	test('nothing moved is no choice, and a picture off the presets stays', () => {
-		expect(choices(now, draft, presets, 'kept')).toEqual([]);
-		expect(choices(presets.medium, { ...draft, picture: 'medium' }, presets, 'kept')).toEqual([]);
+		expect(choices(now, draft, presets, 'kept', true)).toEqual([]);
+		expect(choices(presets.medium, { ...draft, picture: 'medium' }, presets, 'kept', true)).toEqual([]);
 	});
 
 	test('a preset shown is what starts: answered over a kept picture that is not that preset, it is picked', () => {
 		const grassy = { ...presets.light, grass: true, resolution: 1 };
-		expect(choices(grassy, drafted('safe', grassy, presets, {}), presets, 'kept')).toEqual([
+		expect(choices(grassy, drafted('safe', grassy, presets, {}), presets, 'kept', true)).toEqual([
 			{ pick: 'light' },
 			{ choose: { ...presets.light, animals: false } }
 		]);
-		expect(choices(grassy, { ...drafted('weak', grassy, presets, {}), picture: 'light' }, presets, 'kept')).toEqual([{ pick: 'light' }]);
+		expect(choices(grassy, { ...drafted('weak', grassy, presets, {}), picture: 'light' }, presets, 'kept', false)).toEqual([{ pick: 'light' }]);
 	});
 
 	test('with no picture kept, the one it starts with is picked, so it is kept', () => {
-		expect(choices(presets.light, { ...draft, ...livesOf(presets.light), picture: 'light' }, presets, 'none')).toEqual([{ pick: 'light' }]);
+		expect(choices(presets.light, { ...draft, ...livesOf(presets.light), picture: 'light' }, presets, 'none', true)).toEqual([{ pick: 'light' }]);
 	});
 
 	test('after the engine refused the start, the picture is written anew, so one it could not read is not kept', () => {
-		expect(choices(presets.medium, { ...draft, picture: 'medium' }, presets, 'refused')).toEqual([{ pick: 'medium' }]);
-		expect(choices(now, draft, presets, 'refused')).toEqual([{ choose: now }]);
+		expect(choices(presets.medium, { ...draft, picture: 'medium' }, presets, 'refused', true)).toEqual([{ pick: 'medium' }]);
+		expect(choices(now, draft, presets, 'refused', true)).toEqual([{ choose: now }]);
 	});
 
 	test('a preset moved is picked, as the panel picks it', () => {
-		expect(choices(now, { ...draft, ...livesOf(presets.light), picture: 'light' }, presets, 'kept')).toEqual([{ pick: 'light' }]);
+		expect(choices(now, { ...draft, ...livesOf(presets.light), picture: 'light' }, presets, 'kept', true)).toEqual([{ pick: 'light' }]);
 	});
 
 	test('what lives, set, goes over the preset picked', () => {
-		expect(choices(now, { ...draft, picture: 'light', trees: false, shrubs: false, flowers: false }, presets, 'kept')).toEqual([
+		expect(choices(now, { ...draft, picture: 'light', trees: false, shrubs: false, flowers: false }, presets, 'kept', true)).toEqual([
 			{ pick: 'light' },
 			{ choose: { ...presets.light, trees: false } }
 		]);
-		expect(choices(now, { ...draft, picture: 'light', shrubs: false, flowers: false }, presets, 'kept')).toEqual([{ pick: 'light' }]);
+		expect(choices(now, { ...draft, picture: 'light', shrubs: false, flowers: false }, presets, 'kept', true)).toEqual([{ pick: 'light' }]);
 	});
 
 	test('what lives, set alone, goes over the picture as it is', () => {
-		expect(choices(now, { ...draft, flowers: false }, presets, 'kept')).toEqual([{ choose: { ...now, flowers: false } }]);
+		expect(choices(now, { ...draft, flowers: false }, presets, 'kept', true)).toEqual([{ choose: { ...now, flowers: false } }]);
 		const sparse = { ...presets.medium, shrubs: false };
-		expect(choices(sparse, { ...draft, picture: 'medium', shrubs: false }, presets, 'kept')).toEqual([]);
-		expect(choices(sparse, { ...draft, picture: 'medium', shrubs: false, animals: false }, presets, 'kept')).toEqual([
+		expect(choices(sparse, { ...draft, picture: 'medium', shrubs: false }, presets, 'kept', true)).toEqual([]);
+		expect(choices(sparse, { ...draft, picture: 'medium', shrubs: false, animals: false }, presets, 'kept', true)).toEqual([
 			{ choose: { ...sparse, animals: false } }
+		]);
+	});
+
+	test('with no life the dialog asks neither: they stay as kept, or as the preset picked gives them', () => {
+		const bare = { ...now, trees: false };
+		expect(choices(bare, { ...draft, trees: true, animals: false }, presets, 'kept', false)).toEqual([]);
+		expect(choices(bare, drafted('unsteady', bare, presets, {}), presets, 'kept', false)).toEqual([{ pick: 'light' }]);
+		expect(choices(bare, drafted('unsteady', bare, presets, {}), presets, 'kept', true)).toEqual([
+			{ pick: 'light' },
+			{ choose: { ...presets.light, animals: false } }
 		]);
 	});
 });

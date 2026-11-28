@@ -1,4 +1,4 @@
-import { toneMaps, type Effects, type Loudness, type Presets } from './protocol';
+import { lifeLine, toneMaps, type Effects, type Loudness, type Presets } from './protocol';
 
 /** The presets, lightest first: the order the panel offers them in. */
 export const presetNames = ['light', 'medium', 'high'] as const satisfies readonly (keyof Presets)[];
@@ -16,7 +16,12 @@ export function same(a: Effects, b: Effects): boolean {
 	return (Object.keys(b) as (keyof Effects)[]).every((key) => a[key] === b[key]);
 }
 
-/** The knobs of what lives, each a switch of what this machine draws. */
+/** Whether what is on says the world has life: its statement, or what `/api/world` said before the engine's welcome. */
+export function living(on: readonly { name: string }[]): boolean {
+	return on.some((said) => said.name === lifeLine);
+}
+
+/** The knobs of what lives: in a world with no life they switch nothing, so they show only while it has. */
 export const lifeKnobs = ['trees', 'shrubs', 'flowers', 'animals'] as const satisfies readonly (keyof Effects)[];
 export type LifeKnob = (typeof lifeKnobs)[number];
 export type Lives = Pick<Effects, LifeKnob>;
@@ -24,6 +29,11 @@ export type Lives = Pick<Effects, LifeKnob>;
 /** What of life a picture draws, alone. */
 export function livesOf(effects: Lives): Lives {
 	return { trees: effects.trees, shrubs: effects.shrubs, flowers: effects.flowers, animals: effects.animals };
+}
+
+/** Whether a knob shows: one of what lives only while the world has life. Hidden, it keeps its value. */
+export function shows(key: keyof Effects, life: boolean): boolean {
+	return life || !(lifeKnobs as readonly string[]).includes(key);
 }
 
 /**

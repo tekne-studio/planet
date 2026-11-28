@@ -129,11 +129,12 @@ export type Choice = { pick: PresetName } | { choose: Effects };
  * showed, kept as the panel keeps it: a preset picked when what starts is
  * not that preset, when no picture was kept, so what it starts with is
  * kept, or when the engine refused the start, so a kept picture it could
- * not read is written anew; then the trees, shrubs, flowers and animals
- * set over it when they differ. Custom is what starts, and stays;
- * refused, it is written anew.
+ * not read is written anew; then, while the world has life, the trees,
+ * shrubs, flowers and animals set over it when they differ. With none the
+ * dialog asks neither: they stay as kept, or as the preset picked gives
+ * them. Custom is what starts, and stays; refused, it is written anew.
  */
-export function choices(now: Effects, draft: Draft, presets: Presets, keptAs: 'kept' | 'none' | 'refused'): Choice[] {
+export function choices(now: Effects, draft: Draft, presets: Presets, keptAs: 'kept' | 'none' | 'refused', life: boolean): Choice[] {
 	const out: Choice[] = [];
 	let effects = now;
 	const { picture } = draft;
@@ -141,7 +142,7 @@ export function choices(now: Effects, draft: Draft, presets: Presets, keptAs: 'k
 		out.push({ pick: picture });
 		effects = presets[picture];
 	}
-	const set = { ...effects, ...livesOf(draft) };
+	const set = life ? { ...effects, ...livesOf(draft) } : effects;
 	if (!same(set, effects) || (picture === 'custom' && keptAs !== 'kept')) out.push({ choose: set });
 	return out;
 }

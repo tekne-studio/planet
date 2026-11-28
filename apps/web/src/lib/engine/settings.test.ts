@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { Effects, Presets } from './protocol';
-import { filled, gameChosen, gameDefaults, hiddenMarkers, loudnessDefaults, matching, presetName, readGame, readLoudness, readoutOn } from './settings';
+import { filled, gameChosen, gameDefaults, hiddenMarkers, living, loudnessDefaults, matching, presetName, readGame, readLoudness, readoutOn, shows } from './settings';
 
 const high: Effects = {
 	shadows: true,
@@ -45,6 +45,20 @@ describe('matching', () => {
 
 	test('a knob off every preset is custom', () => {
 		expect(matching({ ...high, haze: 2 }, presets)).toBeNull();
+	});
+});
+
+describe('life', () => {
+	test('the world has life while what is on says gaia', () => {
+		expect(living([{ name: 'chat' }, { name: 'gaia' }])).toBe(true);
+		expect(living([{ name: 'chat' }])).toBe(false);
+		expect(living([])).toBe(false);
+	});
+
+	test('trees, shrubs, flowers and animals show only while the world has life, every other knob always', () => {
+		const keys = Object.keys(high) as (keyof Effects)[];
+		expect(keys.filter((key) => !shows(key, false)).sort()).toEqual(['animals', 'flowers', 'shrubs', 'trees']);
+		expect(keys.filter((key) => !shows(key, true))).toEqual([]);
 	});
 });
 

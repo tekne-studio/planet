@@ -6,6 +6,7 @@
 	import { arrival, pass } from '$lib/door';
 	import Found from '$lib/engine/Found.svelte';
 	import Stage from '$lib/engine/Stage.svelte';
+	import { living } from '$lib/engine/settings';
 	import { servedField } from '$lib/fields';
 	import { t } from '$lib/i18n';
 	import { about, enter, found, Refused, socket, stands, switchPlugin, type About, type Entered, type Link } from '$lib/instance';
@@ -131,6 +132,7 @@
 		onsignin={signIn}
 		onswitch={switchIt}
 		version={world.version}
+		life={living(world.plugins)}
 	/>
 {:else if face === 'founding'}
 	<Found {avatar} version={world?.version} error={refused} {founding} onfound={foundWith} />

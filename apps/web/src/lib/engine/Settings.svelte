@@ -3,7 +3,7 @@
 	import { t } from '$lib/i18n';
 	import { toneMaps, type Effects, type Loudness, type Presets, type ToneMap } from './index';
 	import type { DayRefused } from './protocol';
-	import { loudnessDefaults, markerKinds, matching, presetNames, type Game, type Picture, type PresetName } from './settings';
+	import { loudnessDefaults, markerKinds, matching, presetNames, shows, type Game, type Picture, type PresetName } from './settings';
 
 	// Settings: one large panel in the middle of the screen, which the gear in the
 	// top right corner and the O key open, its sections in a list down its
@@ -59,10 +59,12 @@
 		plugins?: Switches;
 		/** The world's day, for one who may choose it: its admin. */
 		day?: Day;
+		/** Whether the world has life now: the knobs of what lives show only while it has. */
+		life: boolean;
 		onclose: () => void;
 	}
 
-	let { effects, presets, base, custom, onpicture, onchange, onmachine, fps, loudness, onloudness, game, ongame, plugins, day, onclose }: Props = $props();
+	let { effects, presets, base, custom, onpicture, onchange, onmachine, fps, loudness, onloudness, game, ongame, plugins, day, life, onclose }: Props = $props();
 
 	type Section = 'graphics' | 'sound' | 'game' | 'plugins' | 'language';
 	let section = $state<Section>('graphics');
@@ -97,7 +99,9 @@
 	}
 
 	// The knobs, in three groups: the picture, the sky and the water, and how
-	// far each kind of thing is drawn. `off` greys one whose effect is off.
+	// far each kind of thing is drawn. `off` greys one whose effect is off;
+	// those of what lives show only while the world has life (`shows`), and
+	// the plants' reaches are off with no life, as with no plant drawn.
 	// Flowers bloom in the grass: they wait on it.
 	type Range = { kind: 'range'; key: NumberKey; min: number; max: number; step?: number; format?: (n: number) => string };
 	type Knobbed = { label: string; off?: (e: Effects) => boolean } & (
@@ -112,8 +116,8 @@
 	const metres = (n: number) => t('engine.stats.metres', { n: n.toFixed(0) });
 	const decimals = (n: number) => n.toFixed(2);
 	const noClouds = (e: Effects) => !e.clouds;
-	const noPlants = (e: Effects) => !e.trees && !e.shrubs;
-	const noUndergrowth = (e: Effects) => !e.shrubs && !(e.flowers && e.grass);
+	const noPlants = (e: Effects) => !life || (!e.trees && !e.shrubs);
+	const noUndergrowth = (e: Effects) => !life || (!e.shrubs && !(e.flowers && e.grass));
 
 	const groups = $derived<{ name: string; title: string; knobs: Knobbed[] }[]>([
 		{
@@ -241,7 +245,7 @@
 							<section class="group">
 								<h3>{group.title}</h3>
 								<Knobs>
-									{#each group.knobs as knob (knob.key)}
+									{#each group.knobs.filter((knob) => shows(knob.key, life)) as knob (knob.key)}
 										<Knob
 											changed={!!defaults && effects[knob.key] !== defaults[knob.key]}
 											fallback={defaults ? shown(knob, defaults) : ''}

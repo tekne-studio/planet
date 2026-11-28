@@ -32,6 +32,7 @@
 		checkCartridge,
 		readCover,
 		isPluginEvent,
+		lifeLine,
 		loadEngine,
 		NAME_CHARS,
 		type Anchor,
@@ -56,7 +57,7 @@
 		type SessionStatus,
 		type Stick
 	} from './index';
-	import { filled, gameChosen, hiddenMarkers, loudnessDefaults, matching, presetName, readGame, readLoudness, readoutOn, type Game, type Picture, type PresetName } from './settings';
+	import { filled, gameChosen, hiddenMarkers, living, loudnessDefaults, matching, presetName, readGame, readLoudness, readoutOn, type Game, type Picture, type PresetName } from './settings';
 	import type { Facts } from './facts';
 	import { askGraphics, askMachine, classify, gpuKey, weak, type Graphics as Said, type Machine } from './machine';
 	import { choices, drafted, newGpu, opens, picked, pressing, readGpu, type Draft, type Gpu, type Last, type Start, type Why } from './start';
@@ -111,6 +112,12 @@
 		onready?: (generatorVersion: number) => void;
 		/** The engine's version, as the world serves it. */
 		version?: string;
+		/**
+		 * Whether the world has life, as the page read the world before the
+		 * start: what the dialog goes by until the world states it. Absent
+		 * where no world speaks, as in the founding's preview, which has none.
+		 */
+		life?: boolean;
 		/** The page's own top of the panel, when it has one. */
 		children?: Snippet;
 	}
@@ -130,6 +137,7 @@
 		onswitch,
 		onready,
 		version,
+		life = false,
 		children
 	}: Props = $props();
 
@@ -205,16 +213,19 @@
 
 	// Plugins: the engine says which are on, the ones the world speaks at the
 	// version this build does, and each of them gets a layer over the world
-	// and the seam under its own name.
-	let spoken = $state.raw<PluginOn[]>([]);
-	const mounted = $derived(plugins.filter((plugin) => spoken.some((on) => on.name === plugin.name)));
+	// and the seam under its own name. Null until it first says.
+	let spoken = $state.raw<PluginOn[] | null>(null);
+	const isOn = (name: string) => spoken?.some((on) => on.name === name) ?? false;
+	const mounted = $derived(plugins.filter((plugin) => isOn(plugin.name)));
+	/** Whether the world has life: as the page read it before the start, then as the world states it, live. */
+	const lifeOn = $derived(spoken ? living(spoken) : life);
 	/** The holder's words, for its controls. */
 	const holderWords = $derived(mounted.find((plugin) => plugin.name === holder)?.words);
 	/** A touch screen's pad stands in for the world's thumbs while the controls are lent, leaving among its buttons. */
 	const pad = $derived(touch.current && holder !== null);
 	// What a world's admin switches: the life of a world, a system of the
 	// core, then the plugins. The world says which are on, for both alike.
-	const switched: readonly { name: string; label: () => string }[] = [{ name: 'gaia', label: () => t('engine.life') }, ...plugins];
+	const switched: readonly { name: string; label: () => string }[] = [{ name: lifeLine, label: () => t('engine.life') }, ...plugins];
 
 	type Hear = (kind: string, event: Record<string, unknown>) => void;
 	const hearing = new Map<string, Set<Hear>>();
@@ -473,7 +484,7 @@
 		if (asked?.why === 'unsteady') forget('start');
 		if (presets && asked) {
 			const keptAs = asked.why === 'failed' ? 'refused' : pictureKept ? 'kept' : 'none';
-			for (const choice of choices(asked.now, draft, presets, keptAs)) {
+			for (const choice of choices(asked.now, draft, presets, keptAs, lifeOn)) {
 				if ('pick' in choice) pickPicture(choice.pick);
 				else choose(choice.choose);
 			}
@@ -780,6 +791,7 @@
 			{presets}
 			now={dialog.now}
 			draft={dialog.draft}
+			life={lifeOn}
 			{gpu}
 			running={dialog.running}
 			{facts}
@@ -961,10 +973,11 @@
 			onloudness={chooseLoudness}
 			game={{ ...game, readout }}
 			ongame={chooseGame}
+			life={lifeOn}
 			plugins={onswitch && link
 				? {
 						list: switched,
-						on: (name) => spoken.some((on) => on.name === name),
+						on: isOn,
 						busy: session !== 'online' || switching !== null,
 						onturn: turn
 					}

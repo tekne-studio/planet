@@ -310,6 +310,9 @@ export type PluginCommand = { type: `${string}.${string}`; [field: string]: unkn
 /** A plugin's event, as the plugin wrote it: `chat.said`. */
 export type PluginEvent = { type: `${string}.${string}`; [field: string]: unknown };
 
+/** The line of what is on that says a world has life: `gaia`, the core's system its admin switches beside the plugins. */
+export const lifeLine = 'gaia';
+
 /** A plugin that is on in this world, as the world's statement says it. */
 export interface PluginOn {
 	name: string;

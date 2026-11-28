@@ -12,13 +12,13 @@
 	// How this machine draws the world, asked before the engine starts and
 	// from Settings once it runs: a preset, or Custom where what starts is
 	// set off them all, what lives aside, so what it shows chosen is what
-	// starts; the trees, shrubs, flowers and animals, flowers only where the
-	// picture draws the grass they bloom in; and, folded, the adapter and
-	// the road. Before the start, one way forward, a choice always made: Esc
-	// and a click outside are its button. From Settings, a Cancel, which Esc
-	// and a click outside are too. Under it, what the machine says of
-	// itself, small, with a copy for whoever helps when the world does not
-	// run: the same list the readout shows.
+	// starts; the trees, shrubs, flowers and animals while the world has
+	// life, flowers only where the picture draws the grass they bloom in;
+	// and, folded, the adapter and the road. Before the start, one way
+	// forward, a choice always made: Esc and a click outside are its button.
+	// From Settings, a Cancel, which Esc and a click outside are too. Under
+	// it, what the machine says of itself, small, with a copy for whoever
+	// helps when the world does not run: the same list the readout shows.
 	interface Props {
 		/** Why it opened before the engine; null when Settings opened it. */
 		why: Why | null;
@@ -27,6 +27,8 @@
 		now: Effects;
 		/** What it opens on. */
 		draft: Draft;
+		/** Whether the world has life: what lives is asked only while it has, since with none it switches nothing. */
+		life: boolean;
 		/** The GPU kept: the engine takes another only as it starts. */
 		gpu: Gpu;
 		/** The engine runs: a new adapter or road reloads the page. */
@@ -41,7 +43,7 @@
 		oncancel: () => void;
 	}
 
-	let { why, presets, now, draft, gpu, running, facts, held, ondescribe, onanswer, oncancel }: Props = $props();
+	let { why, presets, now, draft, life, gpu, running, facts, held, ondescribe, onanswer, oncancel }: Props = $props();
 
 	// What it opens on, as a copy of its own: the page's draft holds its state.
 	// svelte-ignore state_referenced_locally
@@ -127,13 +129,15 @@
 			onselect={(picture) => (chosen = { ...chosen, picture, ...livesOf(drawn(picture)) })}
 		/>
 	</Field>
-	<div class="checks">
-		{#each lifeKnobs as knob (knob)}
-			<Checkbox checked={chosen[knob]} disabled={knob === 'flowers' && !drawn(chosen.picture).grass} onchange={(on) => (chosen[knob] = on)}>
-				{t(`engine.settings.${knob}`)}
-			</Checkbox>
-		{/each}
-	</div>
+	{#if life}
+		<div class="checks">
+			{#each lifeKnobs as knob (knob)}
+				<Checkbox checked={chosen[knob]} disabled={knob === 'flowers' && !drawn(chosen.picture).grass} onchange={(on) => (chosen[knob] = on)}>
+					{t(`engine.settings.${knob}`)}
+				</Checkbox>
+			{/each}
+		</div>
+	{/if}
 	<Fold title={t('engine.graphics.advanced')} open={why === 'failed' || newGpu({}, gpu)}>
 		<Field label={t('engine.graphics.power')}>
 			<Segmented
