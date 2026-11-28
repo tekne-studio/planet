@@ -334,17 +334,23 @@ impl Terrain {
     }
 
     /// Whether a patch casts into any of the shadow maps' layers drawn, one
-    /// a matrix, where `seen` reads its cascade.
+    /// a matrix, where `seen` reads its cascade: by its ground, and by its
+    /// foliage as painted while `foliage` casts.
     pub fn casts_into(
         &self,
         draw: &PatchDraw,
         camera: DVec3,
         matrices: &[glam::Mat4],
         seen: &crate::shadow::Seen,
+        foliage: bool,
     ) -> bool {
         self.patches.get(&draw.id).is_some_and(|p| {
             let center = relative(draw.body_center + p.origin, camera);
-            let radius_m = p.radius_m.max(p.plants_m);
+            let radius_m = if foliage {
+                p.radius_m.max(p.plants_m)
+            } else {
+                p.radius_m
+            };
             matrices.iter().enumerate().any(|(layer, &m)| {
                 crate::shadow::intersects(m, center, radius_m)
                     && seen.reaches(crate::shadow::cascade_of(layer), center, radius_m)

@@ -11,6 +11,8 @@
 	// (children carry the fields); without, it calls `onconfirm`. A dialog
 	// that walks a person through steps (sign in: the email, then the code)
 	// reads each action's result with `onresult` and says whether it is done.
+	// A dialog with one way forward, `oneWay`, has no cancel: Esc and a click
+	// outside are its button, so it is answered however it is left.
 	interface Props {
 		open?: boolean;
 		title: string;
@@ -26,17 +28,30 @@
 		 */
 		onresult?: (result: ActionResult) => boolean | Promise<boolean>;
 		onconfirm?: () => void | Promise<void>;
+		/** One way forward: no cancel, and Esc or a click outside confirms. */
+		oneWay?: boolean;
 		children: Snippet;
 	}
 
-	let { open = $bindable(false), title, confirmLabel, danger = false, action, onresult, onconfirm, children }: Props = $props();
+	let { open = $bindable(false), title, confirmLabel, danger = false, action, onresult, onconfirm, oneWay = false, children }: Props = $props();
 
 	let el: HTMLDialogElement | undefined = $state();
+	let form: HTMLFormElement | undefined = $state();
+
+	/** Esc or a click outside: the cancel, or the one way forward. */
+	function leave() {
+		if (oneWay) form?.requestSubmit();
+		else open = false;
+	}
 	let busy = $state(false);
 
 	$effect(() => {
 		if (!el) return;
-		if (open && !el.open) el.showModal();
+		if (open && !el.open) {
+			el.showModal();
+			// One way forward opens on it, so Enter answers, never on a choice.
+			if (oneWay) form?.querySelector<HTMLButtonElement>('button[type=submit]')?.focus();
+		}
 		if (!open && el.open) el.close();
 	});
 
@@ -56,7 +71,9 @@
 	<h2>{title}</h2>
 	<div class="body">{@render children()}</div>
 	<footer>
-		<Button type="button" variant="ghost" onclick={() => (open = false)}>{t('common.cancel')}</Button>
+		{#if !oneWay}
+			<Button type="button" variant="ghost" onclick={() => (open = false)}>{t('common.cancel')}</Button>
+		{/if}
 		<Button type="submit" variant={danger ? 'danger' : 'primary'} loading={busy}>{confirmLabel}</Button>
 	</footer>
 {/snippet}
@@ -64,12 +81,17 @@
 <dialog
 	bind:this={el}
 	onclose={() => (open = false)}
+	oncancel={(e) => {
+		e.preventDefault();
+		if (!busy) leave();
+	}}
 	onclick={(e) => {
-		if (e.target === el) open = false;
+		if (e.target === el && !busy) leave();
 	}}
 >
 	{#if action}
 		<form
+			bind:this={form}
 			class="box"
 			method="POST"
 			{action}
@@ -91,7 +113,7 @@
 			{@render content()}
 		</form>
 	{:else}
-		<form class="box" onsubmit={confirm}>
+		<form bind:this={form} class="box" onsubmit={confirm}>
 			{@render content()}
 		</form>
 	{/if}

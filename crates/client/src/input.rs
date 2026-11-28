@@ -148,7 +148,7 @@ impl KeyAsk {
 /// Input gathered by a shell since the last update.
 #[derive(Clone, Debug, Default)]
 pub struct Input {
-    held: [bool; 12],
+    held: [bool; HELD.len()],
     /// Keys that went down since the last update.
     pressed: Vec<Key>,
     /// The keys of a keyboard that are down, as the web names them: what a
@@ -224,6 +224,16 @@ impl Input {
 
     pub(crate) fn code_held(&self, code: &str) -> bool {
         self.codes_held.iter().any(|held| held == code)
+    }
+
+    /// The keys of a keyboard down right now, as the web names them.
+    pub fn codes_held(&self) -> &[String] {
+        &self.codes_held
+    }
+
+    /// The core's keys down right now.
+    pub fn keys_held(&self) -> impl Iterator<Item = Key> + '_ {
+        HELD.into_iter().filter(|&key| self.held(key))
     }
 
     /// `[right, forward]`, each `-1..=1`: the keys and the stick together.
@@ -313,28 +323,49 @@ pub(crate) struct Taken {
     pub inspected: bool,
 }
 
+/// The keys read held until they come up, each at its slot of
+/// `Input::held`. The others are heard only as they go down.
+const HELD: [Key; 12] = [
+    Key::Forward,
+    Key::Back,
+    Key::Left,
+    Key::Right,
+    Key::Up,
+    Key::Down,
+    Key::Sprint,
+    Key::Use,
+    Key::Act,
+    Key::Start,
+    Key::ButtonA,
+    Key::ButtonB,
+];
+
 fn held_slot(key: Key) -> Option<usize> {
-    match key {
-        Key::Forward => Some(0),
-        Key::Back => Some(1),
-        Key::Left => Some(2),
-        Key::Right => Some(3),
-        Key::Up => Some(4),
-        Key::Down => Some(5),
-        Key::Sprint => Some(6),
-        Key::Use => Some(7),
-        Key::Act => Some(8),
-        Key::Start => Some(9),
-        Key::ButtonA => Some(10),
-        Key::ButtonB => Some(11),
-        Key::Undo | Key::Redo | Key::Leave => None,
-        Key::ToggleMode | Key::NewSeed | Key::NextAvatar | Key::FirstPerson | Key::Whistle => None,
-    }
+    HELD.iter().position(|&held| held == key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a readout shows of a key that stays held: the core's keys and
+    /// the keyboard's, until they come up or focus is lost. A key heard
+    /// only as it goes down is never read held.
+    #[test]
+    fn what_is_held_is_read_back_until_let_go() {
+        for (slot, &key) in HELD.iter().enumerate() {
+            assert_eq!(held_slot(key), Some(slot), "{key:?} is listed once");
+        }
+        let mut input = Input::default();
+        input.key(Key::Forward, true);
+        input.key(Key::ToggleMode, true);
+        input.code("KeyW", Chord::default(), true);
+        assert_eq!(input.keys_held().collect::<Vec<_>>(), [Key::Forward]);
+        assert_eq!(input.codes_held(), ["KeyW"]);
+        input.release_all();
+        assert_eq!(input.keys_held().count(), 0);
+        assert!(input.codes_held().is_empty());
+    }
 
     #[test]
     fn losing_focus_lets_go_and_interrupts_once() {

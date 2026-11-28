@@ -290,6 +290,20 @@ pub struct Effects {
     pub shadows_fade: bool,
     pub grass: bool,
     pub clouds: bool,
+    /// Whether the trees are drawn: the plants that stand on a trunk. Off
+    /// on this machine, its own body walks through them.
+    pub trees: bool,
+    /// Whether the shrubs are drawn: the plants whose wood hides in their
+    /// leaves, the undergrowth, which stops no body.
+    pub shrubs: bool,
+    /// Whether flowers bloom in the grass, where it is drawn.
+    pub flowers: bool,
+    /// Whether the plants drawn cast into the sun's shadows, while it and
+    /// the trees are on.
+    pub foliage_shadows: bool,
+    /// Whether the free herds are drawn. Off, none is placed about the
+    /// body; an animal ridden and the pets still are.
+    pub animals: bool,
     /// What share of the view's pixels the world is drawn at, each way: 1
     /// is every pixel, a retina's included; 0.5 a quarter of the work, the
     /// picture sampled up to the view by the last stage.
@@ -331,8 +345,8 @@ pub struct Effects {
     /// How far foliage is drawn at all, metres; past it a wood is the
     /// colour its ground wears. Never short of the wood that stops a body.
     pub foliage_reach_m: f32,
-    /// The share of the undergrowth drawn, 0 to 1: the foliage that stops
-    /// no body ([`FoliageShape::undergrowth`]).
+    /// The share of the shrubs ([`FoliageShape::undergrowth`]) and of the
+    /// flowers drawn, 0 to 1, while each is on.
     pub undergrowth: f32,
     pub tone_map: ToneMap,
 }
@@ -345,6 +359,11 @@ impl Default for Effects {
             shadows_fade: true,
             grass: true,
             clouds: true,
+            trees: true,
+            shrubs: true,
+            flowers: true,
+            foliage_shadows: true,
+            animals: true,
             resolution: 1.0,
             cloud_cover: 0.5,
             cloud_density: 0.1,
@@ -371,9 +390,12 @@ impl Effects {
     /// The light picture, for a screen that pays several times more for a
     /// frame: a phone, a Pi. Shadows, grass, clouds and bloom off, the world
     /// drawn at half the pixels each way, pictures and models drawn half as
-    /// far, videos playing half as far, all foliage a card a mass and no
-    /// undergrowth. A UI offers it beside [`Effects::medium`] and
-    /// [`Effects::default`] as the presets, and starts a touch screen on it.
+    /// far, videos playing half as far, the trees a card a mass, and no
+    /// shrubs or flowers, half of them once turned on. It keeps the trees,
+    /// which stop a body, so the picture a weak machine starts on hides no
+    /// wall. A UI offers it beside
+    /// [`Effects::medium`] and [`Effects::default`] as the presets, and
+    /// starts a touch screen on it.
     pub fn light() -> Self {
         let high = Self::default();
         Self {
@@ -388,14 +410,19 @@ impl Effects {
             foliage_near_m: 0.0,
             foliage_mid_m: 0.0,
             foliage_reach_m: 250.0,
-            undergrowth: 0.0,
+            undergrowth: 0.5,
+            shrubs: false,
+            flowers: false,
+            foliage_shadows: false,
             ..high
         }
     }
 
     /// Between the two: every effect on, foliage drawn whole half as far,
-    /// half the undergrowth, and the shadows moving a step of the sun at a
-    /// time: three passes of the casters a frame for five.
+    /// half the shrubs and flowers, foliage casting no shadow, the costliest of
+    /// what this picture keeps since every plant is drawn again in each
+    /// cascade, and the shadows moving a step of the sun at a time: three
+    /// passes of the casters a frame for five.
     pub fn medium() -> Self {
         let high = Self::default();
         Self {
@@ -404,6 +431,7 @@ impl Effects {
             foliage_mid_m: 160.0,
             foliage_reach_m: 400.0,
             undergrowth: 0.5,
+            foliage_shadows: false,
             ..high
         }
     }

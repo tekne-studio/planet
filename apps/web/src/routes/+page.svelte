@@ -130,9 +130,10 @@
 		account={me.key !== ''}
 		onsignin={signIn}
 		onswitch={switchIt}
+		version={world.version}
 	/>
 {:else if face === 'founding'}
-	<Found {avatar} error={refused} {founding} onfound={foundWith} />
+	<Found {avatar} version={world?.version} error={refused} {founding} onfound={foundWith} />
 {:else}
 	{#snippet door()}
 		<Button onclick={signIn}>{t('door.signIn')}</Button>

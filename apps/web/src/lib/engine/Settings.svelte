@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Checkbox, Knob, Knobs, LangSwitch, Panel, Segmented, Select, Slider, Tabs, panelId } from '$lib/ds';
+	import { Button, Checkbox, Knob, Knobs, LangSwitch, Panel, Segmented, Select, Slider, Tabs, panelId } from '$lib/ds';
 	import { t } from '$lib/i18n';
 	import { toneMaps, type Effects, type Loudness, type Presets, type ToneMap } from './index';
 	import type { DayRefused } from './protocol';
@@ -9,13 +9,14 @@
 	// top right corner and the O key open, its sections in a list down its
 	// side. Graphics is how the picture is made: a preset, or Custom the
 	// moment a knob leaves it, every knob in sight with the way back to its
-	// value in the preset last picked. Sound is how loud each group of what
+	// value in the preset last picked, and the way to the graphics dialog,
+	// where this machine, its adapter and its road are. Sound is how loud each group of what
 	// is heard is, under everything and a mute. Game is what floats over the
-	// world: the place line and the markers, by kind. Plugins, for who may
-	// switch them, with the length of the world's day; and the language. A
-	// front end only: it shows what the engine said is in force and asks for
-	// changes, which the engine clamps and answers; the stage keeps the
-	// choices.
+	// world: where I am, the markers, by kind, and the readout. Plugins, for
+	// who may switch them, with the length of the world's day; and the
+	// language. A front end only: it shows what the engine said is in force
+	// and asks for changes, which the engine clamps and answers; the stage
+	// keeps the choices.
 	interface Switches {
 		list: readonly { name: string; label: () => string }[];
 		on: (name: string) => boolean;
@@ -45,6 +46,8 @@
 		custom: Effects | null;
 		onpicture: (picture: Picture) => void;
 		onchange: (effects: Effects) => void;
+		/** Opens the graphics dialog: this machine, the adapter and the road. */
+		onmachine: () => void;
 		/** Frames a second, as the engine last counted them. */
 		fps: number | undefined;
 		loudness: Loudness;
@@ -59,7 +62,7 @@
 		onclose: () => void;
 	}
 
-	let { effects, presets, base, custom, onpicture, onchange, fps, loudness, onloudness, game, ongame, plugins, day, onclose }: Props = $props();
+	let { effects, presets, base, custom, onpicture, onchange, onmachine, fps, loudness, onloudness, game, ongame, plugins, day, onclose }: Props = $props();
 
 	type Section = 'graphics' | 'sound' | 'game' | 'plugins' | 'language';
 	let section = $state<Section>('graphics');
@@ -95,6 +98,7 @@
 
 	// The knobs, in three groups: the picture, the sky and the water, and how
 	// far each kind of thing is drawn. `off` greys one whose effect is off.
+	// Flowers bloom in the grass: they wait on it.
 	type Range = { kind: 'range'; key: NumberKey; min: number; max: number; step?: number; format?: (n: number) => string };
 	type Knobbed = { label: string; off?: (e: Effects) => boolean } & (
 		| Range
@@ -108,6 +112,8 @@
 	const metres = (n: number) => t('engine.stats.metres', { n: n.toFixed(0) });
 	const decimals = (n: number) => n.toFixed(2);
 	const noClouds = (e: Effects) => !e.clouds;
+	const noPlants = (e: Effects) => !e.trees && !e.shrubs;
+	const noUndergrowth = (e: Effects) => !e.shrubs && !(e.flowers && e.grass);
 
 	const groups = $derived<{ name: string; title: string; knobs: Knobbed[] }[]>([
 		{
@@ -118,6 +124,10 @@
 				{ kind: 'check', key: 'shadows', label: t('engine.settings.shadows') },
 				{ kind: 'check', key: 'shadows_fade', label: t('engine.settings.shadowsFade'), off: (e) => !e.shadows },
 				{ kind: 'check', key: 'grass', label: t('engine.settings.grass') },
+				{ kind: 'check', key: 'trees', label: t('engine.settings.trees') },
+				{ kind: 'check', key: 'shrubs', label: t('engine.settings.shrubs') },
+				{ kind: 'check', key: 'flowers', label: t('engine.settings.flowers'), off: (e) => !e.grass },
+				{ kind: 'check', key: 'animals', label: t('engine.settings.animals') },
 				{ kind: 'range', key: 'exposure', label: t('engine.settings.exposure'), min: 0.1, max: 4 },
 				{ kind: 'range', key: 'bloom', label: t('engine.settings.bloom'), min: 0, max: 3 },
 				{
@@ -169,10 +179,10 @@
 					step: 16,
 					format: (n) => t('engine.settings.metresABlock', { n: n.toFixed(0) })
 				},
-				{ kind: 'range', key: 'foliage_near_m', label: t('engine.settings.plantsNear'), min: 0, max: 600, step: 10, format: metres },
-				{ kind: 'range', key: 'foliage_mid_m', label: t('engine.settings.plantsMid'), min: 0, max: 600, step: 10, format: metres },
-				{ kind: 'range', key: 'foliage_reach_m', label: t('engine.settings.plantsReach'), min: 128, max: 600, step: 8, format: metres },
-				{ kind: 'range', key: 'undergrowth', label: t('engine.settings.undergrowth'), min: 0, max: 1, step: 0.05, format: percent }
+				{ kind: 'range', key: 'foliage_near_m', label: t('engine.settings.plantsNear'), min: 0, max: 600, step: 10, format: metres, off: noPlants },
+				{ kind: 'range', key: 'foliage_mid_m', label: t('engine.settings.plantsMid'), min: 0, max: 600, step: 10, format: metres, off: noPlants },
+				{ kind: 'range', key: 'foliage_reach_m', label: t('engine.settings.plantsReach'), min: 128, max: 600, step: 8, format: metres, off: noPlants },
+				{ kind: 'range', key: 'undergrowth', label: t('engine.settings.undergrowth'), min: 0, max: 1, step: 0.05, format: percent, off: noUndergrowth }
 			]
 		}
 	]);
@@ -223,6 +233,7 @@
 					{#if fps !== undefined}
 						<span class="fps">{t('engine.settings.fps', { n: fps.toFixed(0) })}</span>
 					{/if}
+					<Button variant="ghost" onclick={onmachine}>{t('engine.settings.machine')}</Button>
 				</div>
 				{#if effects}
 					<div class="groups">
@@ -300,15 +311,24 @@
 					</Knobs>
 				</div>
 			{:else if section === 'game'}
-				<div class="rows">
-					<Checkbox checked={game.place} onchange={(place) => ongame({ ...game, place })}>{t('engine.settings.placeLine')}</Checkbox>
-				</div>
+				<section class="group">
+					<h3>{t('engine.settings.location')}</h3>
+					<div class="rows">
+						<Checkbox checked={game.place} onchange={(place) => ongame({ ...game, place })}>{t('engine.settings.placeLine')}</Checkbox>
+					</div>
+				</section>
 				<section class="group">
 					<h3>{t('engine.settings.markers')}</h3>
 					<div class="rows">
 						{#each markerKinds as kind (kind)}
 							<Checkbox checked={game[kind]} onchange={(on) => ongame({ ...game, [kind]: on })}>{t(`engine.settings.markers.${kind}`)}</Checkbox>
 						{/each}
+					</div>
+				</section>
+				<section class="group">
+					<h3>{t('engine.settings.debug')}</h3>
+					<div class="rows">
+						<Checkbox checked={game.readout} onchange={(readout) => ongame({ ...game, readout })}>{t('engine.settings.readout')}</Checkbox>
 					</div>
 				</section>
 			{:else if section === 'plugins' && (plugins || day)}

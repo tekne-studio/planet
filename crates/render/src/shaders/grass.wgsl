@@ -76,8 +76,8 @@ fn vs(in: Instance, @builtin(vertex_index) index: u32) -> Varying {
     let lateral = away-up*dot(away,up);
     let push = lateral/max(length(lateral),0.05)*influence*0.55;
     let bend = east*wind + forward*height*0.25 + push;
-    // A flower blooms if the undergrowth drawn keeps it, by a roll of its
-    // own; one it does not is grass.
+    // A flower blooms if the share of the flowers drawn keeps it, by a
+    // roll of its own; one it does not is grass.
     let kept = fract(in.color_angle.w * 7.31) < view.foliage.y;
     let flower = in.bloom.a > 0.0 && kept;
     let blade = index / 9u;

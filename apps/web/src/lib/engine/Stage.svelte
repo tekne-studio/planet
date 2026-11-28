@@ -4,13 +4,15 @@
 	import { assetUrl, isAsset, kindOf, upload } from '$lib/files';
 	import { t } from '$lib/i18n';
 	import { Refused, builds, type Link } from '$lib/instance';
-	import { keep, kept } from '$lib/kept';
+	import { forget, keep, keeps, kept } from '$lib/kept';
 	import { plugins, type Seam } from '$lib/plugins';
 	import { touch, visible } from '$lib/touch.svelte';
 	import type { Recipe } from '$lib/world';
 	import { onMount } from 'svelte';
 	import { replaceState } from '$app/navigation';
 	import EngineView from './EngineView.svelte';
+	import Graphics from './Graphics.svelte';
+	import Readout from './Readout.svelte';
 	import Help from './Help.svelte';
 	import Labels from './Labels.svelte';
 	import Waiting from './Waiting.svelte';
@@ -54,7 +56,12 @@
 		type SessionStatus,
 		type Stick
 	} from './index';
-	import { hiddenMarkers, loudnessDefaults, matching, presetName, readGame, readLoudness, type Game, type Picture, type PresetName } from './settings';
+	import { filled, gameChosen, hiddenMarkers, loudnessDefaults, matching, presetName, readGame, readLoudness, readoutOn, type Game, type Picture, type PresetName } from './settings';
+	import type { Facts } from './facts';
+	import { askGraphics, askMachine, classify, gpuKey, weak, type Graphics as Said, type Machine } from './machine';
+	import { choices, drafted, newGpu, opens, picked, pressing, readGpu, type Draft, type Gpu, type Last, type Start, type Why } from './start';
+	import { lastStart, Started } from './started.svelte';
+	import { answered, readFlags } from './flags';
 	import { who } from './who';
 
 	// The full viewport engine and what floats over it: what a world and the
@@ -102,12 +109,29 @@
 		onswitch?: (name: string, on: boolean) => Promise<void>;
 		/** Called once the engine reports which generator version it runs. */
 		onready?: (generatorVersion: number) => void;
+		/** The engine's version, as the world serves it. */
+		version?: string;
 		/** The page's own top of the panel, when it has one. */
 		children?: Snippet;
 	}
 
-	let { title, recipe, fieldPath, avatar, ownAvatar = false, name = '', link, level = null, key = '', account = false, onsignin, onswitch, onready, children }: Props =
-		$props();
+	let {
+		title,
+		recipe,
+		fieldPath,
+		avatar,
+		ownAvatar = false,
+		name = '',
+		link,
+		level = null,
+		key = '',
+		account = false,
+		onsignin,
+		onswitch,
+		onready,
+		version,
+		children
+	}: Props = $props();
 
 	// A visitor's name, edited where it is shown. The engine hears it at once,
 	// so the world does too, and this browser keeps it for the next visit.
@@ -336,9 +360,13 @@
 	// How the picture is made belongs to the machine, not to the account: a
 	// phone and a desktop want different answers. It stays in this browser:
 	// the effects asked, the preset last picked, which gives each knob its
-	// default, and the knobs as last set off the presets, which Custom
-	// returns to. Until a choice is kept, a touch screen is asked the light
-	// picture each visit, and any other screen what the engine starts with.
+	// default, the knobs as last set off the presets, which Custom returns
+	// to, and the GPU asked. Until a choice is kept, a touch screen and
+	// graphics that may be light start on the light picture, any other on
+	// High. Before the engine starts, the graphics dialog asks when the start
+	// calls for it (start.ts), and its answer is kept as the panel keeps it.
+	// The browser is asked of the graphics where they bear on the start or a
+	// list shows them, and of the rest of the machine only for a list.
 	/** What is asked of the engine: the kept choice, then the panel. */
 	let wanted = $state<Effects>();
 	/** What the engine says is in force. */
@@ -347,32 +375,157 @@
 	let presets = $state<Presets>();
 	let base = $state<PresetName>('high');
 	let custom = $state.raw<Effects | null>(null);
+	/** Whether a picture the engine reads is kept, by the panel or the dialog: until one is, what starts is the machine's default. */
+	let pictureKept = $state(false);
+	/** How the engine is asked for a GPU, as this browser keeps it. */
+	let gpu = $state<Gpu>(readGpu(kept('gpu')));
 
+	const flags = readFlags(location.search);
+	/** How the last start in this browser ended, as this page found it, read once. */
+	let last = $state<Last>('none');
+	const reading = lastStart();
+	/** What the browser said of the graphics, and of the rest of the machine: each asked once. */
+	let said = $state.raw<Said | null>(null);
+	let described = $state.raw<Machine | null>(null);
+	let asking: Promise<Said> | undefined;
+	let describing = false;
+	/** The graphics dialog, while it is open, over what starts or runs (`now`); `answer` goes on with a start waiting on it. */
+	let dialog = $state<{ why: Why | null; now: Effects; draft: Draft; running: boolean } | null>(null);
+	let answer: (() => void) | null = null;
+
+	/** How the engine starts, made once the page is mounted; a new one, on a fresh canvas, for each attempt. */
+	let start = $state<Promise<Start>>();
+	let started = $state.raw(new Started());
+	let attempt = $state(0);
 	onMount(() => {
-		wanted = parsed(kept('effects')) ?? undefined;
-		custom = parsed(kept('custom'));
-		loadEngine().then((engine) => {
-			presets = engine?.presets();
-			if (!presets) return;
-			if (!wanted && touch.current) wanted = presets.light;
-			const preset = wanted && matching(wanted, presets);
-			base = presetName(kept('preset')) ?? preset ?? (touch.current ? 'light' : 'high');
-			// A choice kept before Custom was kept is what Custom returns to.
-			if (wanted && !preset && !custom) custom = wanted;
-		});
+		start = prepare(false);
 	});
 
-	function parsed(text: string | null): Effects | null {
-		try {
-			return JSON.parse(text ?? 'null');
-		} catch {
-			return null;
-		}
+	/** What the browser says of the graphics, asked once, for the adapter and the road kept. */
+	function sayGraphics(): Promise<Said> {
+		return (asking ??= askGraphics(gpu).then((answer) => (said = answer)));
 	}
+
+	/** What the browser says of the rest of the machine, asked once a list shows it. */
+	function describe() {
+		void sayGraphics();
+		if (describing) return;
+		describing = true;
+		void askMachine().then((answer) => (described = answer));
+	}
+
+	/**
+	 * What the engine starts with: what this browser kept, asked first in the
+	 * graphics dialog when the engine refused it (`failed`), the last start
+	 * was never steady, the address says `safe`, or the graphics may be light
+	 * and were never asked of. A pressing dialog opens without waiting on
+	 * the graphics; a touch screen, which starts light, asks them nothing.
+	 */
+	async function prepare(failed: boolean): Promise<Start> {
+		const loading = loadEngine();
+		last = await reading;
+		const pressed = pressing({ failed, last, safe: flags.safe });
+		const asked = touch.current && !pressed ? null : sayGraphics();
+		presets = (await loading)?.presets();
+		if (!presets) return { ...gpu, paint: readout };
+		const graphics = pressed ? said : await asked;
+		const family = graphics && classify(graphics);
+		custom = filled(kept('custom'), presets, null);
+		const named = presetName(kept('preset'));
+		const light = touch.current || (family !== null && weak(family));
+		const keptEffects = filled(kept('effects'), presets, named);
+		pictureKept = keptEffects !== null;
+		const now = picked(presets, { effects: keptEffects, named }, light);
+		base = now.base;
+		wanted = now.effects;
+		// A choice kept before Custom was kept is what Custom returns to.
+		if (!matching(wanted, presets) && !custom) custom = wanted;
+		const why = opens({
+			failed,
+			last,
+			safe: flags.safe,
+			touch: touch.current,
+			family,
+			asked: graphics !== null && kept('asked') === gpuKey(graphics),
+			keeps: keeps()
+		});
+		if (why) await new Promise<void>((done) => openGraphics(why, done));
+		return { ...gpu, effects: wanted, paint: readout };
+	}
+
+	/** Opens the graphics dialog: before a start, `done` goes on with it; from Settings, it is left alone. */
+	function openGraphics(why: Why | null, done?: () => void) {
+		if (!presets || !wanted) return;
+		answer = done ?? null;
+		dialog = { why, now: wanted, draft: drafted(why, wanted, presets, gpu), running: !done };
+		void sayGraphics();
+	}
+
+	/**
+	 * The dialog answered: the picture kept as the panel keeps it, this GPU
+	 * asked of, the GPU kept, `safe` gone from the address, an unsteady last
+	 * start taken as answered, so only a new one asks again. A new GPU for an
+	 * engine that runs reloads the page; before a start, the start goes on.
+	 */
+	function answerGraphics(draft: Draft) {
+		const asked = dialog;
+		dialog = null;
+		if (asked?.why === 'unsteady') forget('start');
+		if (presets && asked) {
+			const keptAs = asked.why === 'failed' ? 'refused' : pictureKept ? 'kept' : 'none';
+			for (const choice of choices(asked.now, draft, presets, keptAs)) {
+				if ('pick' in choice) pickPicture(choice.pick);
+				else choose(choice.choose);
+			}
+		}
+		const moved = newGpu(gpu, draft.gpu);
+		if (moved) {
+			gpu = draft.gpu;
+			keep('gpu', JSON.stringify(draft.gpu));
+			// Another power may be another GPU: the one kept now is the one asked of.
+			asking = askGraphics(gpu).then((answer) => (said = answer));
+		}
+		const keyed = asking?.then((graphics) => keep('asked', gpuKey(graphics)));
+		if (flags.safe) replaceState(`${location.pathname}${answered(location.search)}${location.hash}`, {});
+		if (asked?.running && moved) return void keyed?.then(() => location.reload());
+		answer?.();
+		answer = null;
+	}
+
+	/**
+	 * The engine refused the start: the dialog says so with the failed start
+	 * still in its list, and the next start, once answered, is a fresh canvas.
+	 */
+	async function retry() {
+		const next = prepare(true);
+		await next;
+		started = new Started();
+		start = next;
+		attempt += 1;
+	}
+
+	/** Everything the page knows of the machine and its start: the dialog's list and the readout's. */
+	const facts = $derived<Facts>({
+		version: version ?? null,
+		host: location.host,
+		graphics: said,
+		machine: described,
+		last,
+		kept: {
+			picture: pictureKept && presets && wanted ? (matching(wanted, presets) ?? 'custom') : null,
+			effects: pictureKept ? (wanted ?? null) : null,
+			gpu: newGpu({}, gpu) ? gpu : null,
+			key: said ? gpuKey(said) : null
+		},
+		said: flags.said,
+		touch: touch.current,
+		start: started
+	});
 
 	/** A knob moved: the picture is Custom, and Custom is this. */
 	function choose(next: Effects) {
 		wanted = next;
+		pictureKept = true;
 		keep('effects', JSON.stringify(next));
 		if (presets && matching(next, presets)) return;
 		custom = next;
@@ -386,8 +539,9 @@
 		}
 		if (!presets) return;
 		base = picture;
-		keep('preset', picture);
 		wanted = presets[picture];
+		pictureKept = true;
+		keep('preset', picture);
 		keep('effects', JSON.stringify(wanted));
 	}
 
@@ -412,9 +566,16 @@
 	// hears the kept choice first.
 	const hidden = $derived(gameRead ? hiddenMarkers(game) : undefined);
 
+	/** What the address says of the readout for this visit, till the person turns it (`readoutOn`). */
+	let readoutSaid = $state<boolean | null>(flags.readout);
+	const readout = $derived(readoutOn(readoutSaid, game));
+	$effect(() => {
+		if (readout) describe();
+	});
+
 	function chooseGame(next: Game) {
-		game = next;
-		keep('game', JSON.stringify(next));
+		({ game, said: readoutSaid } = gameChosen(next, readoutSaid, game));
+		keep('game', JSON.stringify(game));
 	}
 
 	/** The panel open, if any: under the bar, or the help in its corner. */
@@ -438,7 +599,8 @@
 	// settings, unless typed into a field or the keys are lent to a plugin;
 	// opening them frees the pointer, for the panel to be used.
 	function onKey(event: KeyboardEvent) {
-		if (event.defaultPrevented) return;
+		// The graphics dialog has the keys while it is open.
+		if (event.defaultPrevented || dialog) return;
 		if (event.key === 'Escape' && opened) return show(null);
 		if (event.code !== 'KeyO' || event.repeat || event.ctrlKey || event.metaKey || event.altKey || holder || typing(event.target)) return;
 		toggle('settings');
@@ -587,21 +749,46 @@
 	style:bottom={visible.current && 'auto'}
 	style:height={visible.current && `${visible.current.height}px`}
 >
-	<EngineView
-		bind:this={view}
-		{recipe}
-		{fieldPath}
-		{mode}
-		{avatar}
-		name={myName}
-		{link}
-		stand={arrival}
-		effects={wanted}
-		{loudness}
-		clear={pad ? clear : null}
-		hiddenMarkers={hidden}
-		onevent={receive}
-	/>
+	{#if start}
+		{#key attempt}
+			<EngineView
+				bind:this={view}
+				{recipe}
+				{fieldPath}
+				{mode}
+				{avatar}
+				name={myName}
+				{link}
+				stand={arrival}
+				{start}
+				{started}
+				onfailed={retry}
+				effects={wanted}
+				{loudness}
+				clear={pad ? clear : null}
+				hiddenMarkers={hidden}
+				onevent={receive}
+			/>
+		{/key}
+	{/if}
+	{#if readout}
+		<Readout {facts} held={() => view?.held()} />
+	{/if}
+	{#if dialog && presets}
+		<Graphics
+			why={dialog.why}
+			{presets}
+			now={dialog.now}
+			draft={dialog.draft}
+			{gpu}
+			running={dialog.running}
+			{facts}
+			held={() => view?.held()}
+			ondescribe={describe}
+			onanswer={answerGraphics}
+			oncancel={() => (dialog = null)}
+		/>
+	{/if}
 	{#if link}
 		<Nametags {anchors} {peers} {me} />
 	{/if}
@@ -768,10 +955,11 @@
 			{custom}
 			onpicture={pickPicture}
 			onchange={choose}
+			onmachine={() => openGraphics(null)}
 			fps={stats?.fps}
 			loudness={loudness ?? loudnessDefaults}
 			onloudness={chooseLoudness}
-			{game}
+			game={{ ...game, readout }}
 			ongame={chooseGame}
 			plugins={onswitch && link
 				? {

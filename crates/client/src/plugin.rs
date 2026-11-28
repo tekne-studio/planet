@@ -273,7 +273,8 @@ pub(crate) struct Lent<'a> {
     pub generator: &'a Generator,
     pub cells: &'a mut Cells,
     pub parts: &'a mut Parts,
-    /// The trunks of the plants about the body, which stop it.
+    /// The trunks about the body as it meets them: none where this machine
+    /// draws no tree.
     pub trunks: &'a Trunks,
     pub history: &'a mut History,
     pub controller: &'a mut Controller,

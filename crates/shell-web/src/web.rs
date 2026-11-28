@@ -1,10 +1,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use client::{Chord, Client, Form, Input, Key, Outbound};
 use render::{Gpu, Renderer, View, surface_configuration, wgpu};
 
 use crate::keys;
+use crate::start::{Backend, Power, Start, Step};
 use crate::{audio, carts, moving, touch};
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, KeyboardEvent, MessageEvent, PointerEvent, WheelEvent};
@@ -149,6 +152,13 @@ pub(crate) struct State {
     input: Input,
     on_event: js_sys::Function,
     last_frame_ms: f64,
+    /// When the frame that last handed a picture to the screen began, on
+    /// the page's clock; 0 before the first. What the page reads of the
+    /// engine's own frames.
+    presented_ms: f64,
+    /// Set once the device, or the canvas's WebGL context, is lost: no
+    /// picture is handed after, whatever an acquire on it answers.
+    lost: Arc<AtomicBool>,
     /// The socket to a world server, while the page wants one.
     link: Option<Link>,
     /// Building, the right button is held: the pointer turns the camera.
@@ -171,7 +181,25 @@ pub(crate) struct State {
     pub(crate) audio: audio::Audio,
     /// Drawing through WebGL2, where a frame takes another road to the texture.
     pub(crate) webgl: bool,
+    /// The steps of the start still to say; none once the first frame drawn is said.
+    steps: Option<Steps>,
 }
+
+/// The steps of the start said once the loop runs: the first frame handed
+/// to the GPU, then the GPU done with it.
+struct Steps {
+    framed: bool,
+    /// The first frame drawn: [`NOT_DRAWN`], then when the GPU said it was
+    /// done with it, on the page's clock, as `f64` bits, then
+    /// [`DRAWN_SAID`] once the page was told. The GPU says so from a callback
+    /// that must be `Send`, so it cannot hold the state.
+    drawn: Arc<AtomicU64>,
+}
+
+/// The GPU has not said it drew the first frame.
+const NOT_DRAWN: u64 = 0;
+/// The first frame drawn was said to the page: nothing is left to say.
+const DRAWN_SAID: u64 = u64::MAX;
 
 /// Pixels the pointer may move between the secondary button going down and
 /// up for it to be a tap and not a drag.
@@ -185,26 +213,55 @@ const FILES: &str = "/files";
 
 #[wasm_bindgen]
 impl Engine {
-    /// Rejects when the browser offers neither WebGPU nor WebGL2.
+    /// Rejects when the browser offers neither WebGPU nor WebGL2, or the
+    /// start is not one the engine reads. `start` is JSON, empty for every
+    /// default (`start::Start` says what it holds).
     pub async fn create(
         canvas: HtmlCanvasElement,
         on_event: js_sys::Function,
+        start: &str,
     ) -> Result<Engine, JsError> {
-        let instance = wgpu::Instance::default();
+        let start = Start::read(start).map_err(|e| JsError::new(&e))?;
+        let tell = |step: Step| say(start.paint, &on_event, step);
+        let instance = match start.backend {
+            Backend::WebGpu => wgpu::Instance::default(),
+            Backend::WebGl2 => wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::GL,
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            }),
+        };
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|e| JsError::new(&e.to_string()))?;
-        let gpu = Gpu::new(&instance, Some(&surface))
+        let power = match start.power {
+            Power::High => wgpu::PowerPreference::HighPerformance,
+            Power::Low => wgpu::PowerPreference::LowPower,
+        };
+        let adapter = Gpu::adapter(&instance, Some(&surface), power)
             .await
             .map_err(|e| JsError::new(&e))?;
+        tell(adapter_step(&adapter)).await;
+        let gpu = Gpu::open(adapter).await.map_err(|e| JsError::new(&e))?;
+        let lost = Arc::new(AtomicBool::new(false));
+        let told = lost.clone();
+        gpu.device
+            .set_device_lost_callback(move |_, _| told.store(true, Ordering::Relaxed));
+        tell(Step::Device {
+            about: about(&gpu.device),
+        })
+        .await;
         let config = surface_configuration(&surface, &gpu.adapter, canvas.width(), canvas.height());
         surface.configure(&gpu.device, &config);
         let renderer = Renderer::new(&gpu, config.format);
+        tell(Step::Pipelines).await;
         let webgl = gpu.adapter.get_info().backend == wgpu::Backend::Gl;
 
         // A placeholder world until the UI sends the recipe it wants.
         let mut client =
             Client::new(client::Recipe::new(1)).map_err(|e| JsError::new(&e.to_string()))?;
+        if let Some(effects) = start.effects {
+            client.command(client::Command::SetEffects { effects });
+        }
         // What this version carries, off until a world says which are on.
         for plugin in plugins_client::all() {
             client.plug(plugin);
@@ -219,6 +276,8 @@ impl Engine {
             input: Input::default(),
             on_event,
             last_frame_ms: now_ms(),
+            presented_ms: 0.0,
+            lost: lost.clone(),
             link: None,
             looking: false,
             files: FILES.to_owned(),
@@ -229,9 +288,16 @@ impl Engine {
             carts: carts::Carts::default(),
             audio: audio::Audio::default(),
             webgl,
+            steps: Some(Steps {
+                framed: false,
+                drawn: Arc::new(AtomicU64::new(NOT_DRAWN)),
+            }),
         }));
         let alive = Rc::new(RefCell::new(true));
-        let listeners = listen(&canvas, &state);
+        let mut listeners = listen(&canvas, &state);
+        listeners.push(Listener::add(&canvas, "webglcontextlost", move |_| {
+            lost.store(true, Ordering::Relaxed);
+        }));
         run(state.clone(), alive.clone());
         Ok(Engine {
             state,
@@ -313,6 +379,34 @@ impl Engine {
             state.audio.unlock();
         }
         press(&mut state, code, Chord::default(), down, false);
+    }
+
+    /// What the engine holds down right now, as JSON: the keys of the
+    /// keyboard by the names the web gives them (`codes`), the core's keys
+    /// (`keys`), the stick (`[right, forward]`), and whether the person is
+    /// `away`. What a readout shows of a key that stays held.
+    pub fn held(&self) -> String {
+        let state = self.state.borrow();
+        let keys: Vec<String> = state
+            .input
+            .keys_held()
+            .map(|key| format!("{key:?}"))
+            .collect();
+        serde_json::json!({
+            "codes": state.input.codes_held(),
+            "keys": keys,
+            "stick": state.input.stick,
+            "away": state.client.is_away(),
+        })
+        .to_string()
+    }
+
+    /// When the engine last handed a picture to the screen, the start of
+    /// that frame on the page's clock; 0 before the first. A frame that
+    /// finds no surface, or whose device or WebGL context is lost, hands
+    /// none: the page measures the engine's frames by it, never its own.
+    pub fn presented_ms(&self) -> f64 {
+        self.state.borrow().presented_ms
     }
 
     /// The ground a field world is shaped by. Sent before the recipe that
@@ -670,6 +764,9 @@ impl State {
             events.push(JsValue::from_str(&stick));
         }
 
+        if self.lost.load(Ordering::Relaxed) {
+            return events;
+        }
         use wgpu::CurrentSurfaceTexture::{Lost, Outdated, Suboptimal, Success};
         let texture = match self.surface.get_current_texture() {
             Success(texture) | Suboptimal(texture) => texture,
@@ -691,8 +788,109 @@ impl State {
         };
         self.renderer.render(&frame, &[view]);
         self.gpu.queue.present(texture);
+        self.presented_ms = now;
+        if let Some(steps) = &mut self.steps {
+            steps.said(&self.gpu.queue, [width, height], ratio, &mut events);
+            if steps.framed && steps.drawn.load(Ordering::Relaxed) == DRAWN_SAID {
+                self.steps = None;
+            }
+        }
         events
     }
+}
+
+impl Steps {
+    /// Once a frame while there is a step left to say: the first frame
+    /// handed over, then, a frame after the GPU said so, the first drawn.
+    fn said(
+        &mut self,
+        queue: &wgpu::Queue,
+        [width, height]: [u32; 2],
+        ratio: f64,
+        events: &mut Vec<JsValue>,
+    ) {
+        if !self.framed {
+            self.framed = true;
+            let step = Step::Frame {
+                width,
+                height,
+                ratio,
+            };
+            events.push(JsValue::from_str(&step.said(now_ms())));
+            let drawn = self.drawn.clone();
+            queue.on_submitted_work_done(move || {
+                // Never NOT_DRAWN's bits: a time of zero would read as no word.
+                drawn.store(now_ms().max(f64::MIN_POSITIVE).to_bits(), Ordering::Relaxed);
+            });
+            return;
+        }
+        let bits = self.drawn.load(Ordering::Relaxed);
+        if bits != NOT_DRAWN && bits != DRAWN_SAID {
+            events.push(JsValue::from_str(&Step::Drawn.said(f64::from_bits(bits))));
+            self.drawn.store(DRAWN_SAID, Ordering::Relaxed);
+        }
+    }
+}
+
+/// What the adapter says of itself, as the start's first step.
+fn adapter_step(adapter: &wgpu::Adapter) -> Step {
+    let info = adapter.get_info();
+    let limits = adapter.limits();
+    Step::Adapter {
+        name: info.name,
+        backend: match info.backend {
+            wgpu::Backend::Gl => Backend::WebGl2,
+            _ => Backend::WebGpu,
+        },
+        texture_px: limits.max_texture_dimension_2d,
+        buffer_mib: limits.max_buffer_size >> 20,
+    }
+}
+
+/// What WebGPU says of the adapter (`GPUDevice.adapterInfo`), read off the
+/// device since wgpu's own adapter info is blank on the web: vendor,
+/// architecture, device and description, those it does not hide. Nothing
+/// through WebGL2, whose adapter said its name already.
+fn about(device: &wgpu::Device) -> Vec<String> {
+    let Some(info) = device
+        .as_webgpu()
+        .and_then(|device| js_sys::Reflect::get(device, &"adapterInfo".into()).ok())
+    else {
+        return Vec::new();
+    };
+    ["vendor", "architecture", "device", "description"]
+        .into_iter()
+        .filter_map(|key| js_sys::Reflect::get(&info, &key.into()).ok()?.as_string())
+        .filter(|said| !said.is_empty())
+        .collect()
+}
+
+/// Says a step of the start and, when the page asked, lets it paint
+/// before the next: a step that never ends then shows as the last one said.
+async fn say(paint: bool, on_event: &js_sys::Function, step: Step) {
+    let json = JsValue::from_str(&step.said(now_ms()));
+    if let Err(error) = on_event.call1(&JsValue::NULL, &json) {
+        log::error!("event handler threw: {error:?}");
+    }
+    if paint {
+        painted().await;
+    }
+}
+
+/// Resolves once the page has painted: a timeout queued from an animation
+/// frame runs after that frame's paint.
+async fn painted() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        let later = window.clone();
+        let after = Closure::once_into_js(move || {
+            let _ = later.set_timeout_with_callback(resolve.unchecked_ref());
+        });
+        let _ = window.request_animation_frame(after.unchecked_ref());
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
 /// The loop closure holds a handle to itself so it can reschedule.

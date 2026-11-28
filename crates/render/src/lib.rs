@@ -100,8 +100,8 @@ struct ViewUniform {
     /// `x`: how far off its line the lens sees at the pane's rim, radians.
     lens: [f32; 4],
     /// `x`: how far foliage is drawn, metres. `y`: the share of the
-    /// undergrowth drawn. `z`: how deep the band it grows over at the edge
-    /// of it is, metres.
+    /// flowers drawn, none with them off. `z`: how deep the band it grows
+    /// over at the edge of it is, metres.
     foliage: [f32; 4],
 }
 
@@ -606,6 +606,11 @@ impl Renderer {
         });
 
         let layers = shadow::drawn(frame);
+        // Plants switched off are skipped here too, so they go the frame
+        // they are switched off, before the streamer has built its patches
+        // bare. Their shadows follow the trees.
+        let foliage_drawn = frame.effects.trees || frame.effects.shrubs;
+        let foliage_casts = frame.effects.trees && frame.effects.foliage_shadows;
         let casting = shadows.then(|| {
             let matrices = shadow::matrices(frame, camera);
             let drawn = &matrices[..layers];
@@ -615,7 +620,10 @@ impl Renderer {
                 .shadow_patches
                 .iter()
                 .copied()
-                .filter(|draw| self.terrain.casts_into(draw, camera.position, drawn, &seen))
+                .filter(|draw| {
+                    self.terrain
+                        .casts_into(draw, camera.position, drawn, &seen, foliage_casts)
+                })
                 .collect();
             let casters = resources.casters.write(
                 &self.device,
@@ -634,15 +642,19 @@ impl Renderer {
             &mut resources.foliage,
             &frame.effects,
             self.terrain
-                .foliage(&resources.patches, &drawn, frame.effects.foliage_reach_m),
-            casting.as_ref().map(|(matrices, casters, seen)| {
-                let reach_m = frame.effects.foliage_reach_m;
-                (
-                    self.terrain.foliage(&resources.casters, casters, reach_m),
-                    &matrices[..layers],
-                    seen,
-                )
-            }),
+                .foliage(&resources.patches, &drawn, frame.effects.foliage_reach_m)
+                .filter(|_| foliage_drawn),
+            casting
+                .as_ref()
+                .filter(|_| foliage_casts)
+                .map(|(matrices, casters, seen)| {
+                    let reach_m = frame.effects.foliage_reach_m;
+                    (
+                        self.terrain.foliage(&resources.casters, casters, reach_m),
+                        &matrices[..layers],
+                        seen,
+                    )
+                }),
             measure.as_ref().and_then(|measure| measure.clock),
         );
 
@@ -974,12 +986,12 @@ impl Renderer {
             ],
             foliage: {
                 let reach = frame.effects.foliage_reach_m.max(0.0);
-                [
-                    reach,
-                    frame.effects.undergrowth,
-                    reach * foliage::GROWING,
-                    0.0,
-                ]
+                let flowers = if frame.effects.flowers {
+                    frame.effects.undergrowth
+                } else {
+                    0.0
+                };
+                [reach, flowers, reach * foliage::GROWING, 0.0]
             },
             bloom: {
                 // The threshold is of exposed light, as in a lens.

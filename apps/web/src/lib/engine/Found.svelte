@@ -23,6 +23,7 @@
 		type Shape
 	} from '$lib/world';
 	import Stage from './Stage.svelte';
+	import { flagsIn } from './flags';
 
 	// The founding of a world. Its admin walks candidate planets in the
 	// offline preview and freezes the one on the screen. The seed, the
@@ -38,9 +39,11 @@
 		/** A founding is on its way. */
 		founding?: boolean;
 		onfound: (recipe: Recipe) => void;
+		/** The engine's version, as the world serves it. */
+		version?: string;
 	}
 
-	let { avatar, error = '', founding = false, onfound }: Props = $props();
+	let { avatar, error = '', founding = false, onfound, version }: Props = $props();
 
 	// The grounds this version has, read from their sidecars once. A recipe
 	// names ground by the id read here, never by one typed or pasted: a world
@@ -70,7 +73,7 @@
 	$effect(() => {
 		if (seed) return;
 		const next = normalizeSeed(query.get('seed')) ?? randomSeed();
-		goto(`/?seed=${next}`, { replaceState: true, keepFocus: true, noScroll: true });
+		goto(carrying(new URLSearchParams({ seed: next })), { replaceState: true, keepFocus: true, noScroll: true });
 	});
 
 	// What is typed in the field; the seed in the address is what is shown.
@@ -125,6 +128,13 @@
 				if (value !== knob.fallback) next.set(knob.key, value.toFixed(knob.places));
 			}
 		}
+		return carrying(next);
+	}
+
+	/** `next` with the address's flags: how this machine draws the planets it walks stays as the seed changes. */
+	function carrying(next: URLSearchParams): string {
+		// The bar's own address: Stage cleans it by `replaceState`, which `page.url` never hears.
+		for (const [name, value] of flagsIn(location.search)) next.append(name, value);
 		return `/?${next}`;
 	}
 
@@ -153,9 +163,9 @@
 </script>
 
 {#if grounds && seed && touch.current}
-	<Stage title={t('found.title')} {recipe} {fieldPath} {avatar} onready={(version) => (generatorVersion = version)} />
+	<Stage title={t('found.title')} {recipe} {fieldPath} {avatar} {version} onready={(generator) => (generatorVersion = generator)} />
 {:else if grounds && seed}
-	<Stage title={t('found.title')} {recipe} {fieldPath} {avatar} onready={(version) => (generatorVersion = version)}>
+	<Stage title={t('found.title')} {recipe} {fieldPath} {avatar} {version} onready={(generator) => (generatorVersion = generator)}>
 		<p>{t('found.lede')}</p>
 		<form onsubmit={regenerate}>
 			<Stack>

@@ -42,6 +42,16 @@ export interface Effects {
 	shadows_fade: boolean;
 	grass: boolean;
 	clouds: boolean;
+	/** Whether the trees are drawn, the plants that stand on a trunk; off on this machine, its own body walks through them. */
+	trees: boolean;
+	/** Whether the shrubs are drawn, the plants whose wood hides in their leaves, which stop no body. */
+	shrubs: boolean;
+	/** Whether flowers bloom in the grass, where it is drawn. */
+	flowers: boolean;
+	/** Whether the plants drawn cast into the sun's shadows, while it and the trees are on. */
+	foliage_shadows: boolean;
+	/** Whether the herds nobody rides are drawn; a ridden animal and the pets always are. */
+	animals: boolean;
 	/** The share of the view's pixels the world is drawn at, each way, 0.25 to 1. */
 	resolution: number;
 	cloud_cover: number;
@@ -65,7 +75,7 @@ export interface Effects {
 	foliage_mid_m: number;
 	/** How far plants are drawn at all, metres; past it a wood is its ground's colour. */
 	foliage_reach_m: number;
-	/** The share of the flowers and shrubs drawn, 0 to 1. */
+	/** The share of the flowers and shrubs drawn, 0 to 1, while each is on. */
 	undergrowth: number;
 	tone_map: ToneMap;
 }
@@ -349,6 +359,29 @@ export interface Waiting {
 	remains_s: number;
 }
 
+/**
+ * A step of the engine's start, reached: the adapter the browser gave, its
+ * device open, the renderer's pipelines made, the first frame handed to the
+ * GPU, the GPU done with it. Said at every start.
+ */
+export type StartStep =
+	| {
+			step: 'adapter';
+			/** As the browser says it; empty where it hides it. */
+			name: string;
+			backend: 'webgpu' | 'webgl2';
+			/** The largest side of a 2D texture, texels. */
+			texture_px: number;
+			/** The largest buffer, MiB. */
+			buffer_mib: number;
+	  }
+	/** What WebGPU says of the adapter once a device is open: vendor, architecture, device, description. */
+	| { step: 'device'; about: string[] }
+	| { step: 'pipelines' }
+	/** The canvas's size, pixels, and the screen's pixels to a CSS pixel. */
+	| { step: 'frame'; width: number; height: number; ratio: number }
+	| { step: 'drawn' };
+
 /** A stick a finger holds on the canvas, in CSS pixels from its top left. */
 export interface Stick {
 	/** Its centre, which follows the finger pulled past the reach. */
@@ -363,6 +396,8 @@ export type EngineEvent =
 	| { type: 'ready'; generator_version: number }
 	/** The web shell's own, not the client's: a stick awake, whenever it moves, and null once it goes. */
 	| { type: 'stick'; stick: Stick | null }
+	/** The web shell's own: a step of the start, `ms` on the page's clock (`performance.now()`). */
+	| ({ type: 'start'; ms: number } & StartStep)
 	/** The link to the world server, whenever it changes. */
 	/** `level` is null until a world has spoken; its last word stands through a dropped link. */
 	| { type: 'session'; status: SessionStatus; session: number | null; level: Level | null }
@@ -458,6 +493,7 @@ export type EngineEvent =
 const CORE_EVENTS = {
 	ready: true,
 	stick: true,
+	start: true,
 	recipe_changed: true,
 	rejected: true,
 	settled: true,

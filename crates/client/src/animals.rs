@@ -558,6 +558,10 @@ pub(crate) struct Animals {
     /// Each region within reach of the view or holding an animal drawn,
     /// with its herd, or none where it holds none.
     herds: HashMap<Region, Option<Placed>>,
+    /// The herds nobody rides go undrawn on this machine: none is placed.
+    /// What is ridden, a peer's mount too, and the pets still are, since
+    /// one is its rider's body and the others a person's own.
+    herds_off: bool,
     /// Each animal under a rider, by who rides it: `None` is this client's
     /// body, a peer is its session.
     ridden: HashMap<Option<u32>, Body>,
@@ -823,6 +827,11 @@ impl Animals {
         self.ridden.get(&who).map_or(0.0, |body| body.animal.bank())
     }
 
+    /// Whether the herds nobody rides are drawn on this machine.
+    pub(crate) fn draw_herds(&mut self, on: bool) {
+        self.herds_off = !on;
+    }
+
     /// The boxes of every animal drawn this frame, appended to `out`.
     pub(crate) fn boxes(&self, out: &mut Vec<scene::BoxPart>) {
         let drawn = self.ridden.values().chain(self.left.values());
@@ -871,7 +880,7 @@ impl Animals {
         self.walk_home(dt, now_s, bodies, generator, &ground);
         // Free herds wait on the volumes near: first placed, they already
         // know what is built.
-        let near = near.filter(|_| built.cells.come());
+        let near = near.filter(|_| !self.herds_off && built.cells.come());
         let in_view = near.map_or_else(Vec::new, |near| Self::in_view(near, generator));
         self.roam(dt, now_s, &in_view, near, generator, &ground);
         self.hear(near, generator, &ground);
@@ -1978,6 +1987,57 @@ mod tests {
 
     const HORSE_HERD: (usize, usize) = fauna::horse::HORSE.herding.size;
 
+    /// A machine that draws no herds places none about its body, and still
+    /// draws the animal a peer rides: it is that rider's body, whatever
+    /// this machine draws of the herds. Drawn again, the herds come back.
+    #[test]
+    fn herds_switched_off_leave_a_ridden_animal_drawn() {
+        let generator = Generator::new(worldgen::Recipe::new(1)).unwrap();
+        let spawn = crate::spawn_point(&generator);
+        let (cells, parts) = (crate::Cells::default(), crate::parts::Parts::default());
+        let trunks = crate::Trunks::default();
+        let built = || Built {
+            cells: &cells,
+            parts: &parts,
+            trunks: &trunks,
+        };
+        let free = Bodies {
+            riders: &[],
+            on_foot: &[],
+        };
+        let mut animals = Animals::default();
+        animals.update(1.0 / 60.0, 1.0, Some(spawn), free, &generator, built());
+        let horse = animals.near()[0];
+        assert!(animals.near().len() >= HORSE_HERD.0);
+
+        animals.draw_herds(false);
+        let peer = [Rider {
+            who: Some(7),
+            number: horse.number,
+            at: horse.at,
+            facing: horse.heading,
+            speed_mps: 0.0,
+            balk_s: None,
+            aloft: None,
+            leaps: false,
+            wings: false,
+        }];
+        let ridden = Bodies {
+            riders: &peer,
+            on_foot: &[],
+        };
+        animals.update(1.0 / 60.0, 1.1, Some(spawn), ridden, &generator, built());
+        let drawn: Vec<u64> = animals.near().iter().map(|near| near.number).collect();
+        assert_eq!(drawn, [horse.number], "only the ridden is drawn");
+        let mut boxes = Vec::new();
+        animals.boxes(&mut boxes);
+        assert!(!boxes.is_empty(), "the ridden horse is drawn");
+
+        animals.draw_herds(true);
+        animals.update(1.0 / 60.0, 1.2, Some(spawn), ridden, &generator, built());
+        assert!(animals.near().len() >= HORSE_HERD.0);
+    }
+
     /// A pet the world kept at no place, an old row, is no pet: its animal
     /// is drawn with its herd, as wild.
     #[test]
@@ -2614,8 +2674,23 @@ mod tests {
 
         /// A frame of `wish`: where each hoof set down stands, world space.
         fn ride(&mut self, world: &World, wish: crate::controller::Wish) -> Vec<DVec3> {
+            self.ride_meeting(world, &world.trunks, wish)
+        }
+
+        /// A frame of `wish` on a machine whose body meets `own` of the
+        /// world's trunks, the horse every one.
+        fn ride_meeting(
+            &mut self,
+            world: &World,
+            own: &crate::Trunks,
+            wish: crate::controller::Wish,
+        ) -> Vec<DVec3> {
             let controller = &mut self.controller;
-            controller.update(1.0 / 60.0, wish, &world.generator, world.built());
+            let built = Built {
+                trunks: own,
+                ..world.built()
+            };
+            controller.update(1.0 / 60.0, wish, &world.generator, built);
             let rider = [Rider {
                 who: None,
                 number: self.number,
@@ -2718,6 +2793,79 @@ mod tests {
                 assert!(left_m > 2.0, "{case}: walked {left_m} m turning");
             }
         }
+    }
+
+    /// A rider whose machine draws no trees rides into a trunk's column and
+    /// steps down there. The body stands beside its horse, off the wood;
+    /// the horse, which meets every trunk, stands on the trunk's top, waits
+    /// there while the body is near, and walks home off it once it goes.
+    #[test]
+    fn a_horse_left_in_a_trunk_by_a_rider_with_no_trees_stands_on_its_top() {
+        use crate::controller::Wish;
+        let mut world = World::new();
+        let (plant, trunks, _) = crate::trunks::tests::a_tree(&world.generator);
+        world.trunks = trunks;
+        let number = a_horse(&world);
+        let generator = &world.generator;
+        let (grid, radius_m) = (generator.sphere().blocks(), generator.sphere().radius_m());
+        let root = plant.root.column;
+        let top_m = world.trunks.top_of(root).unwrap();
+        let none = world.trunks.drawn(false);
+        let from = SurfacePoint::new(
+            root.sector,
+            f64::from(root.u) - 4.5,
+            f64::from(root.v) + 0.5,
+        );
+        let mut riding = Riding::new(&world, number, from, None);
+        let ahead = Wish {
+            movement: [0.0, 1.0],
+            ..Wish::default()
+        };
+        let mut over_root = false;
+        for _ in 0..300 {
+            riding.ride_meeting(&world, none, ahead);
+            over_root = grid.column_of(riding.controller.point()) == root;
+            if over_root {
+                break;
+            }
+        }
+        assert!(over_root, "ridden into the trunk's column");
+        let off = Built {
+            trunks: none,
+            ..world.built()
+        };
+        riding.controller.step_off(generator, off);
+        let body = riding.controller.point();
+        assert_eq!(
+            world.trunks.top_of(grid.column_of(body)),
+            None,
+            "the body stands off the wood"
+        );
+
+        let horse = |animals: &Animals| animals.left[&number].animal.position();
+        let mut on_foot = vec![riding.controller.drawn_position()];
+        for frame in 0..900 {
+            if frame == 300 {
+                on_foot.clear();
+            }
+            riding.now_s += 1.0 / 60.0;
+            let bodies = Bodies {
+                riders: &[],
+                on_foot: &on_foot,
+            };
+            world.step(&mut riding.animals, riding.now_s, body, bodies);
+            let on_m = horse(&riding.animals).length() - radius_m;
+            if frame < 300 {
+                assert!(
+                    (on_m - top_m).abs() < 0.05,
+                    "frame {frame}: the horse stands on the top, at {on_m}"
+                );
+            }
+        }
+        let home = horse(&riding.animals);
+        let column = grid.column_of(grid.surface_point(home.to_array()));
+        assert_ne!(column, root, "the horse walks home off the top");
+        assert!(home.length() - radius_m < top_m - 5.0, "the horse is down");
     }
 
     /// A world with a floor laid over the plot [`crate::Cells::floor`]

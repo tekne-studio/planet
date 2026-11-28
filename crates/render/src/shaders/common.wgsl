@@ -58,8 +58,9 @@ struct View {
     through_clip_from_relative: mat4x4<f32>,
     // x: how far off its line the lens sees at the pane's rim, radians.
     lens: vec4<f32>,
-    // x: how far foliage is drawn, metres. y: the share of the undergrowth
-    // drawn. z: how deep the band it grows over at the edge of it is.
+    // x: how far foliage is drawn, metres. y: the share of the flowers
+    // drawn, none with them off. z: how deep the band it grows over at the
+    // edge of it is.
     foliage: vec4<f32>,
 }
 

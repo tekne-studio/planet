@@ -8,6 +8,7 @@
 		Dial,
 		Dialog,
 		Field,
+		Fold,
 		Icon,
 		IconButton,
 		Palette,
@@ -23,6 +24,7 @@
 		Page,
 		PageHeader,
 		Pager,
+		Pairs,
 		Panel,
 		Ring,
 		Segmented,
@@ -109,7 +111,13 @@
 	let loading = $state(false);
 	let confirming = $state(false);
 	let deleting = $state(false);
+	let choosing = $state(false);
 	let outcome = $state('');
+	const pictures = [
+		{ value: 'light', label: 'Light' },
+		{ value: 'high', label: 'High' }
+	] as const;
+	let picture = $state<(typeof pictures)[number]['value']>('light');
 
 	function wait(ms: number): Promise<void> {
 		return new Promise((resolve) => setTimeout(resolve, ms));
@@ -519,6 +527,7 @@
 			<div class="row">
 				<Button variant="ghost" onclick={() => (confirming = true)}>Confirm</Button>
 				<Button variant="danger" onclick={() => (deleting = true)}>Delete</Button>
+				<Button variant="ghost" onclick={() => (choosing = true)}>One way</Button>
 				{#if outcome}<span class="muted">{outcome}</span>{/if}
 			</div>
 			<Dialog
@@ -544,6 +553,34 @@
 			>
 				<p>Destructive actions always confirm here. With <code>action</code> the box posts to a form action instead.</p>
 			</Dialog>
+			<Dialog
+				bind:open={choosing}
+				title="Graphics"
+				confirmLabel="Start"
+				oneWay
+				onconfirm={() => {
+					outcome = `Started ${picture}.`;
+				}}
+			>
+				<p>One way forward, a choice always made: no cancel, and Esc or a click outside is the button.</p>
+				<Segmented options={pictures} value={picture} label="Picture" onselect={(value) => (picture = value)} />
+			</Dialog>
+		</section>
+
+		<section>
+			<h2>Fold and Pairs</h2>
+			<Fold title="About this machine">
+				<Pairs
+					pairs={[
+						{ label: 'Browser', value: 'Google Chrome 131.0.6778.86' },
+						{ label: 'WebGL2', value: 'ANGLE (AMD, AMD Radeon(TM) Graphics (0x00001638) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+						{ label: 'Screen', value: '1536 × 864 px at 1.25' }
+					]}
+				/>
+			</Fold>
+			<div class="ground ground--sun">
+				<Pairs onWorld pairs={[{ label: 'Frame', value: '16.7 ms, longest 33 ms' }]} />
+			</div>
 		</section>
 
 		<section>

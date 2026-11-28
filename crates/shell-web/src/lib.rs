@@ -22,6 +22,8 @@ mod keys;
 #[cfg(target_arch = "wasm32")]
 mod moving;
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+mod start;
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod touch;
 #[cfg(target_arch = "wasm32")]
 mod web;

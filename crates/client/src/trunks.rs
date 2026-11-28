@@ -7,6 +7,7 @@
 //! [`Rooting::grows`].
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use gaia::flora::Flora;
 use protocol::Body;
@@ -132,6 +133,20 @@ impl Trunks {
                     },
                 )
         })
+    }
+
+    /// These trunks as this machine's own body meets them: all of them
+    /// while it draws the trees, else none, since a wall nobody sees is
+    /// worse than a walk through a tree a peer sees.
+    pub fn drawn(&self, trees: bool) -> &Trunks {
+        static NONE: LazyLock<Trunks> = LazyLock::new(Trunks::default);
+        if trees { self } else { &NONE }
+    }
+
+    /// The top of the trunk in a column, metres over the datum, if one stands there.
+    #[cfg(test)]
+    pub(crate) fn top_of(&self, column: Column) -> Option<f64> {
+        self.columns.get(&column).map(|(span, _)| span[1])
     }
 
     /// Whether a trunk is kept on a body: only ever the planet.
@@ -301,6 +316,79 @@ pub(crate) mod tests {
             high > f64::from(root.u) + 2.0,
             "a high flyer ends at {high}"
         );
+    }
+
+    /// A body whose machine draws no trees walks into a trunk's column and
+    /// stands there as they are drawn again: the first frame that meets the
+    /// trunk sets it on the top, from the ground in one step, and it walks
+    /// off the top every way, down to the ground.
+    #[test]
+    fn a_body_in_a_trunk_as_its_trees_come_back_is_set_on_its_top_and_walks_off() {
+        let generator = Generator::new(Recipe::new(1)).unwrap();
+        let (plant, trunks, _) = a_tree(&generator);
+        let (grid, radius_m) = (generator.sphere().blocks(), generator.sphere().radius_m());
+        let root = plant.root.column;
+        let ground_m = f64::from(plant.root.h + 1) * BLOCK_M;
+        let top_m = trunks.columns[&root].0[1];
+        let (cells, parts) = (Cells::default(), Parts::default());
+        let built = |trunks| Built {
+            cells: &cells,
+            parts: &parts,
+            trunks,
+        };
+        let from = SurfacePoint::new(
+            root.sector,
+            f64::from(root.u) - 4.5,
+            f64::from(root.v) + 0.5,
+        );
+        let mut controller = Controller::spawn(from, &generator);
+        controller.stand_at(None, &generator);
+        controller.set_pitch(0.0);
+        let along = grid.tangents(from).du;
+        controller.face(topology::bearing_deg(grid.direction(from), along).unwrap());
+        let walk = |movement| Wish {
+            movement,
+            ..Wish::default()
+        };
+        for _ in 0..300 {
+            if grid.column_of(controller.point()) == root {
+                break;
+            }
+            let none = built(trunks.drawn(false));
+            controller.update(1.0 / 60.0, walk([0.0, 1.0]), &generator, none);
+        }
+        assert_eq!(
+            grid.column_of(controller.point()),
+            root,
+            "walked into the trunk"
+        );
+        let feet = |controller: &Controller| controller.position().length() - radius_m;
+        let in_m = feet(&controller);
+        assert!(
+            (in_m - ground_m).abs() < 0.5,
+            "it stands in the wood, at {in_m}"
+        );
+
+        controller.update(1.0 / 60.0, Wish::default(), &generator, built(&trunks));
+        let on_m = feet(&controller);
+        assert!(
+            (on_m - top_m).abs() < 1e-6,
+            "the trees back, it is on the top, at {on_m}"
+        );
+        for ways in [[0.0, 1.0], [1.0, 0.0], [0.0, -1.0], [-1.0, 0.0]] {
+            let mut walker = controller.clone();
+            for _ in 0..120 {
+                walker.update(1.0 / 60.0, walk(ways), &generator, built(&trunks));
+            }
+            let (gone_m, down_m) = (
+                (walker.position() - controller.position()).length(),
+                feet(&walker),
+            );
+            assert!(
+                gone_m > 5.0 && down_m < ground_m + 2.0,
+                "{ways:?}: {gone_m} m off, at {down_m}"
+            );
+        }
     }
 
     /// A plant and its trunk answer what is built over them alike: an open

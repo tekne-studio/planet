@@ -7,6 +7,7 @@
 import { parseEvent, type Board, type Command, type EngineEvent, type Loudness, type PluginCommand, type PluginEvent, type Presets } from './protocol';
 import { hostEmulator, partUrl } from './emulator';
 import { rehosted } from './rehosted';
+import type { Start } from './start';
 
 export * from './protocol';
 
@@ -26,7 +27,23 @@ export interface Engine {
 	/** Opens the link to a world server at a socket URL, the key included. */
 	connect(url: string): void;
 	disconnect(): void;
+	/** What the engine holds down right now. */
+	held(): Held;
+	/** When the engine last handed a picture to the screen, on the page's clock; 0 before the first. */
+	presented(): number;
 	free(): void;
+}
+
+/** What the engine holds down right now: what a readout shows of a key that stays held. */
+export interface Held {
+	/** The keys of the keyboard, by the names the web gives them (`KeyW`). */
+	codes: string[];
+	/** The core's keys (`Forward`, `Up`). */
+	keys: string[];
+	/** Where a stick points, `[right, forward]`. */
+	stick: [number, number];
+	/** Whether the engine was last told the person is away. */
+	away: boolean;
 }
 
 /** A part of the canvas, CSS pixels from its top left: `[left, top, right, bottom]`. */
@@ -34,8 +51,8 @@ export type Clear = readonly [number, number, number, number];
 
 /** A loaded engine module, ready to bind to a canvas. */
 export interface EngineModule {
-	/** Rejects when the browser cannot give the engine a GPU surface. */
-	create(canvas: HTMLCanvasElement, onevent: (event: EngineEvent | PluginEvent) => void): Promise<Engine>;
+	/** Rejects when the browser cannot give the engine a GPU surface. `start` is how it is asked to start; empty, every default. */
+	create(canvas: HTMLCanvasElement, onevent: (event: EngineEvent | PluginEvent) => void, start?: Start): Promise<Engine>;
 	/** Why a 3D model's file is over what a world draws of one, or `''` within it. */
 	weigh(bytes: Uint8Array): string;
 	/** The light, the medium and the high picture, as the engine defines them. */
@@ -74,11 +91,13 @@ interface RawEngine {
 	set_games(make: (context: AudioContext) => Promise<AudioWorkletNode>): void;
 	connect(url: string): void;
 	disconnect(): void;
+	held(): string;
+	presented_ms(): number;
 	free(): void;
 }
 interface RawModule {
 	default(): Promise<unknown>;
-	Engine: { create(canvas: HTMLCanvasElement, onEvent: (json: string) => void): Promise<RawEngine> };
+	Engine: { create(canvas: HTMLCanvasElement, onEvent: (json: string) => void, start: string): Promise<RawEngine> };
 	weigh_glb(bytes: Uint8Array): string;
 	presets(): string;
 	voices(): string;
@@ -125,11 +144,15 @@ async function load(): Promise<EngineModule | null> {
 	const raw = await build();
 	await raw.default();
 	return {
-		async create(canvas, onevent) {
-			const engine = await raw.Engine.create(canvas, (json) => {
-				const event = parseEvent(json);
-				if (event) onevent(event);
-			});
+		async create(canvas, onevent, start = {}) {
+			const engine = await raw.Engine.create(
+				canvas,
+				(json) => {
+					const event = parseEvent(json);
+					if (event) onevent(event);
+				},
+				JSON.stringify(start)
+			);
 			// The cabinets' games run in a worker of their own, made the first
 			// time one is in view.
 			engine.set_carts(() => new Worker(new URL('./cartridges.worker.ts', import.meta.url), { type: 'module' }));
@@ -143,6 +166,8 @@ async function load(): Promise<EngineModule | null> {
 				set_clear: (clear) => engine.set_clear(clear ? new Float64Array(clear) : undefined),
 				connect: (url) => engine.connect(url),
 				disconnect: () => engine.disconnect(),
+				held: () => JSON.parse(engine.held()) as Held,
+				presented: () => engine.presented_ms(),
 				free: () => engine.free()
 			};
 		},

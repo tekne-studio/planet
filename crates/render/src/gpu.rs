@@ -9,14 +9,25 @@ pub struct Gpu {
 
 impl Gpu {
     /// With a `surface` the adapter is one that can present to it; without,
-    /// any adapter will do (headless).
+    /// any adapter will do (headless). The fastest adapter there is.
     pub async fn new(
         instance: &wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
     ) -> Result<Gpu, String> {
+        let adapter = Self::adapter(instance, surface, wgpu::PowerPreference::HighPerformance);
+        Self::open(adapter.await?).await
+    }
+
+    /// The first step of [`Gpu::new`], on its own for a shell that says each
+    /// step as it is reached: the adapter `power` prefers.
+    pub async fn adapter(
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        power: wgpu::PowerPreference,
+    ) -> Result<wgpu::Adapter, String> {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: power,
                 compatible_surface: surface,
                 force_fallback_adapter: false,
                 apply_limit_buckets: false,
@@ -24,7 +35,11 @@ impl Gpu {
             .await
             .map_err(|error| format!("no compatible GPU adapter: {error}"))?;
         log::info!("adapter: {:?}", adapter.get_info());
+        Ok(adapter)
+    }
 
+    /// The second step: the adapter's device and queue.
+    pub async fn open(adapter: wgpu::Adapter) -> Result<Gpu, String> {
         // The renderer needs nothing beyond what WebGL2 offers, so the floor
         // is the downlevel defaults, raised to what this adapter has.
         let required_limits =

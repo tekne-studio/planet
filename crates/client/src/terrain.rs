@@ -243,8 +243,8 @@ pub struct Terrain {
     /// root it is painted, blocks, once the renderer holds it.
     painted: Vec<Option<f32>>,
     /// Depths short of the finest whose patches carry their plants, for
-    /// the reach they are drawn to.
-    afar: u32,
+    /// the reach they are drawn to; none while no foliage is drawn.
+    afar: Option<u32>,
 }
 
 impl Terrain {
@@ -258,7 +258,7 @@ impl Terrain {
             casters: Vec::new(),
             settled: false,
             painted: Vec::new(),
-            afar: afar(body, Effects::default().foliage_reach_m),
+            afar: Some(afar(body, Effects::default().foliage_reach_m)),
         }
     }
 
@@ -291,11 +291,11 @@ impl Terrain {
         }
     }
 
-    /// How far plants are drawn, metres: a patch carries its plants only
-    /// where some of them would be drawn grown, and the patches built again
-    /// where that changes.
-    pub fn set_reach(&mut self, reach_m: f32) {
-        let afar = afar(self.body, reach_m);
+    /// How far plants are drawn, metres, or `None` for none drawn: a patch
+    /// carries its plants only where some of them would be drawn grown,
+    /// and the patches built again where that changes.
+    pub fn set_reach(&mut self, reach_m: Option<f32>) {
+        let afar = reach_m.map(|reach_m| afar(self.body, reach_m));
         if afar != self.afar {
             self.afar = afar;
             self.replant();
@@ -675,9 +675,10 @@ fn afar(body: Body, reach_m: f32) -> u32 {
 }
 
 /// Whether a node carries the plants rooted in it: on a body that grows
-/// them, the finest block by block and the next `afar` depths.
-fn plants(node: Node, afar: u32) -> bool {
-    node.body.has_plants() && node.depth + afar >= node.body.max_depth()
+/// them, the finest block by block and the next `afar` depths; none
+/// without.
+fn plants(node: Node, afar: Option<u32>) -> bool {
+    afar.is_some_and(|afar| node.body.has_plants() && node.depth + afar >= node.body.max_depth())
 }
 
 /// The ground of a node at its grid of samples, row by row, each with
@@ -707,7 +708,7 @@ fn build(
     generator: &Generator,
     flora: Option<&Flora>,
     node: Node,
-    afar: u32,
+    afar: Option<u32>,
     cover: Cover,
 ) -> TerrainMesh {
     let body = node.body;
@@ -937,7 +938,7 @@ mod tests {
                 &self.generator,
                 Some(&self.flora),
                 node,
-                PLANTS_AFAR,
+                Some(PLANTS_AFAR),
                 &nothing,
             )
         }
@@ -957,6 +958,25 @@ mod tests {
             );
             ((mesh.origin + ground.as_dvec3()).length(), normal)
         }
+    }
+
+    /// With no foliage drawn a patch of a wood carries no plant, is built
+    /// bare and wears the wood's colour, as it does past the foliage drawn.
+    #[test]
+    fn with_no_foliage_drawn_a_wood_is_built_bare() {
+        let planet = Planet::new(1);
+        let wood = topology::place(planet.body.grid(), "0-9AR0000")
+            .unwrap()
+            .column;
+        let node = planet.node(wood, planet.body.max_depth());
+        let nothing = |_: Sector, _: [f64; 2], _: [f64; 2]| false;
+        let carried = |afar| build(&planet.generator, Some(&planet.flora), node, afar, &nothing);
+        let drawn = carried(Some(PLANTS_AFAR));
+        assert!(!drawn.foliage.is_empty() && !drawn.bare);
+        let none = carried(None);
+        assert!(none.foliage.is_empty() && none.bare);
+        assert_eq!(none.vertices.len(), drawn.vertices.len());
+        assert!(!plants(node, None));
     }
 
     /// A coarse patch stands a plant only where the ground it draws there
@@ -1263,7 +1283,7 @@ mod tests {
         for effects in [Effects::light(), Effects::medium(), Effects::default()] {
             let reach_m = f64::from(effects.foliage_reach_m);
             let mut terrain = Terrain::new(planet.body);
-            terrain.set_reach(effects.foliage_reach_m);
+            terrain.set_reach(Some(effects.foliage_reach_m));
             let mut meshes: HashMap<PatchId, TerrainMesh> = HashMap::new();
             // Each shape's points as painted, blocks about its root: every
             // mass's middle and every corner of its wood.

@@ -206,7 +206,9 @@ pub struct Client {
     /// Whether what grows is drawn and stands: the world's life, as
     /// [`Client::tend`] last found it.
     living: bool,
-    /// The trunks of the plants about the body, which stop it.
+    /// The trunks of the plants about the body while the world has life,
+    /// whatever this machine draws: they stop the animals and the pets, and
+    /// this body while its trees are drawn ([`Trunks::drawn`]).
     trunks: Trunks,
     /// Every change a hand made here, in order, of whatever owner, to take
     /// back and put back as one list.
@@ -523,7 +525,11 @@ impl Client {
             undergrowth: sane(effects.undergrowth, 0.0, 1.0, usual.undergrowth),
             ..effects
         };
-        self.terrain.set_reach(self.effects.foliage_reach_m);
+        // A patch carries its plants while any it holds is drawn.
+        let plants = self.effects.trees || self.effects.shrubs;
+        self.terrain
+            .set_reach(plants.then_some(self.effects.foliage_reach_m));
+        self.animals.draw_herds(self.effects.animals);
         self.events.push(Event::EffectsChanged {
             effects: self.effects,
         });
@@ -1219,7 +1225,7 @@ impl Client {
             generator: &self.generator,
             cells: &mut self.cells,
             parts: &mut self.parts,
-            trunks: &self.trunks,
+            trunks: self.trunks.drawn(self.effects.trees),
             history: &mut self.history,
             controller: &mut self.controller,
             level: self.level,
@@ -2346,13 +2352,15 @@ impl Client {
         self.controller.set_drawn_footprint(footprint_m);
         self.cells.orbit(moon);
         self.parts.orbit(moon);
+        // The trunks about the body, whatever this machine draws: the
+        // animals and the pets meet them all the same.
+        let (seat, point) = self.controller.over(&self.generator);
+        let flora = self.flora.as_ref().filter(|_| self.living);
+        self.trunks.around(&self.generator, flora, seat, point);
         // A body in a passage is the passage's: it stands where it fell in,
         // and never walks out the far side of a ring it crossed. A body whose
         // controls are lent stands as it does there.
         if self.passage.is_none() && !self.controls_lent() {
-            let (seat, point) = self.controller.over(&self.generator);
-            let flora = self.flora.as_ref().filter(|_| self.living);
-            self.trunks.around(&self.generator, flora, seat, point);
             self.controller.update(
                 dt,
                 wish,
@@ -2360,7 +2368,7 @@ impl Client {
                 Built {
                     cells: &self.cells,
                     parts: &self.parts,
-                    trunks: &self.trunks,
+                    trunks: self.trunks.drawn(self.effects.trees),
                 },
             );
         }
@@ -2641,6 +2649,11 @@ impl Client {
     pub fn away(&mut self, away: bool) {
         self.away = away;
         self.carts.away(away, &self.live);
+    }
+
+    /// Whether the shell last said the person is away.
+    pub fn is_away(&self) -> bool {
+        self.away
     }
 
     /// The frame as it would look once streaming caught up. Blocks until every
@@ -3434,7 +3447,7 @@ impl Client {
             let built = Built {
                 cells: &self.cells,
                 parts: &self.parts,
-                trunks: &self.trunks,
+                trunks: self.trunks.drawn(self.effects.trees),
             };
             let said = |why: Refused| match why {
                 Refused::Flightless => "what the body rides does not fly here".to_string(),
@@ -3500,7 +3513,7 @@ impl Client {
         let built = Built {
             cells: &self.cells,
             parts: &self.parts,
-            trunks: &self.trunks,
+            trunks: self.trunks.drawn(self.effects.trees),
         };
         self.controller.step_off(&self.generator, built);
     }

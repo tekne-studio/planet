@@ -284,7 +284,7 @@ impl Foliage {
     }
 
     /// An instance of a patch around the camera, whole, and its shape; none
-    /// for undergrowth `reach` thins out.
+    /// for a tree with the trees off, or undergrowth `reach` thins out.
     fn instance(
         &self,
         center: Vec3,
@@ -292,7 +292,11 @@ impl Foliage {
         reach: &Reach,
     ) -> Option<(&Shape, Instance)> {
         let shape = self.shapes.get(placed.shape as usize)?.as_ref()?;
-        if shape.undergrowth && placed.seed >= reach.undergrowth {
+        let kept = match shape.undergrowth {
+            true => placed.seed < reach.undergrowth,
+            false => reach.trees,
+        };
+        if !kept {
             return None;
         }
         let instance = Instance {
@@ -464,10 +468,14 @@ fn key(shape: u32, form: usize) -> u32 {
     shape * FOLIAGE_FORMS as u32 + form as u32
 }
 
-/// How far each form of foliage is drawn: what [`Effects`] asks, ordered.
+/// How far each form of foliage is drawn, and which of it: what
+/// [`Effects`] asks, ordered.
 struct Reach {
     /// Where each form ends, metres from the eye, the last the reach.
     ends: [f32; FOLIAGE_FORMS],
+    /// Whether the trees are drawn, and the share of the undergrowth, none
+    /// with the shrubs off.
+    trees: bool,
     undergrowth: f32,
 }
 
@@ -477,7 +485,12 @@ impl Reach {
         let mid = effects.foliage_mid_m.clamp(0.0, reach);
         Reach {
             ends: [effects.foliage_near_m.clamp(0.0, mid), mid, reach],
-            undergrowth: effects.undergrowth,
+            trees: effects.trees,
+            undergrowth: if effects.shrubs {
+                effects.undergrowth
+            } else {
+                0.0
+            },
         }
     }
 

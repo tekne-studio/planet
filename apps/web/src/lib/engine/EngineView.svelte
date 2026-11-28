@@ -23,6 +23,9 @@
 		type PluginCommand,
 		type PluginEvent
 	} from './index';
+	import { offersARoad } from './machine';
+	import type { Start } from './start';
+	import type { Started } from './started.svelte';
 
 	// Owns the canvas lifecycle: create on mount, free on destroy. The engine
 	// runs its own frame loop, input listeners and resize tracking; this
@@ -69,9 +72,21 @@
 		 */
 		link?: Link;
 		onevent?: (event: EngineEvent | PluginEvent) => void;
+		/** How the engine starts, once the page knows: the engine is made when it resolves, and fails when it rejects. */
+		start: Promise<Start>;
+		/** This start, told each step the engine reaches. */
+		started: Started;
+		/** The engine refused the start, on a browser that offers more than one way to try. */
+		onfailed?: () => void;
 	}
 
-	let { recipe, fieldPath, mode, avatar, name = '', effects, loudness, clear = null, hiddenMarkers, stand, link, onevent }: Props = $props();
+	let { recipe, fieldPath, mode, avatar, name = '', effects, loudness, clear = null, hiddenMarkers, stand, link, onevent, start, started, onfailed }: Props =
+		$props();
+
+	/** What the engine holds down now, once it runs. */
+	export function held() {
+		return engine?.held();
+	}
 
 	/**
 	 * A command with no prop of its own: a line said, a place gone to. Dropped
@@ -99,8 +114,8 @@
 		if (document.pointerLockElement === canvas) document.exitPointerLock();
 	}
 
-	/** The engine's own life, before any world is asked of it. */
-	type Phase = 'loading' | 'ready' | 'missing' | 'unsupported' | 'failed';
+	/** The engine's own life, before any world is asked of it: `asking` once it refused to start and the page asks again. */
+	type Phase = 'loading' | 'ready' | 'missing' | 'unsupported' | 'failed' | 'asking';
 	/** What the veil says while it is down, and `running` once it lifts. */
 	type Status = Exclude<Phase, 'ready'> | 'shaping' | 'entering' | 'outdated' | 'unshaped' | 'damaged' | 'refused' | 'running';
 
@@ -155,6 +170,10 @@
 									? 'entering'
 									: 'running'
 	);
+	// The last step of a start: the veil lifted.
+	$effect(() => {
+		if (status === 'running') untrack(() => started.shown());
+	});
 	/** The word of the wait, while something is on its way. */
 	const wait = $derived(
 		status === 'loading' ? t('engine.loading') : status === 'shaping' ? t('engine.shaping') : status === 'entering' ? t('engine.entering') : undefined
@@ -206,6 +225,7 @@
 	function receive(event: EngineEvent | PluginEvent) {
 		// A plugin's event is its panel's to read: the view passes it on.
 		if (isPluginEvent(event)) return onevent?.(event);
+		if (event.type === 'start') return started.hear(event);
 		if (event.type === 'recipe_changed') {
 			engineRecipe = JSON.stringify(event.recipe);
 			// Whether the engine now stands in the world the page wanted. The
@@ -288,6 +308,8 @@
 	onMount(() => {
 		let destroyed = false;
 		let created: Engine | undefined;
+		// This view's start: the page hands the next attempt a view of its own.
+		const watched = started;
 
 		(async () => {
 			const module = await loadEngine();
@@ -296,10 +318,22 @@
 				phase = 'missing';
 				return;
 			}
+			const loaded = performance.now();
 			try {
-				created = await module.create(canvas, receive);
-			} catch {
-				phase = 'gpu' in navigator ? 'failed' : 'unsupported';
+				const starting = await start;
+				if (destroyed) return;
+				watched.begin(loaded, () => created?.presented() ?? 0);
+				created = await module.create(canvas, receive, starting);
+			} catch (error) {
+				watched.fail(error);
+				// A browser with a road to a GPU can be asked again another way, and the
+				// page that asks says why itself; one with no road, never.
+				if (!offersARoad()) phase = 'unsupported';
+				else if (!onfailed) phase = 'failed';
+				else {
+					phase = 'asking';
+					onfailed();
+				}
 				return;
 			}
 			if (destroyed) {
@@ -312,6 +346,7 @@
 
 		return () => {
 			destroyed = true;
+			watched.stop();
 			linked = false;
 			clearTimeout(retry);
 			engine = undefined;
