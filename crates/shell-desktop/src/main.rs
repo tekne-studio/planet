@@ -8,7 +8,7 @@
 //!             [--day MIN] [--altitude M] [--pitch DEG] [--boom M] [--walk S] [--at U,V] [--moon M]
 //!             [--command JSON]... [--drag X0,Y0,X1,Y1]... [--ride] [--fly S [--against-sun]]
 //!             [--yaw DEG] [--animals DIR | --wings DIR [--against-sun] [--look SEED]
-//!             | --saddle DIR | --herd DIR | --takeoff DIR | --leap DIR | --deck DIR
+//!             | --saddle DIR | --herd DIR | --takeoff DIR | --leap DIR | --perch DIR | --deck DIR
 //!             | --clouds DIR | --shadows DIR | --flora DIR]
 //! planet cart FILE.wasm [--seed N] [--scale N]
 //! planet cabinet-template FILE.png
@@ -25,6 +25,7 @@ mod flora;
 mod herd;
 mod leap;
 mod moving;
+mod perch;
 mod play;
 mod saddle;
 mod shadows;

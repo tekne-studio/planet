@@ -197,6 +197,9 @@ pub fn run(shot: Shot) -> Result<(), String> {
     if let Some(dir) = &shot.leap {
         return crate::leap::run(&mut client, shot.size, dir);
     }
+    if let Some(dir) = &shot.perch {
+        return crate::perch::run(&mut client, shot.size, dir);
+    }
     if let Some(dir) = &shot.deck {
         return crate::deck::run(&mut client, shot.size, shot.boom_m, dir);
     }

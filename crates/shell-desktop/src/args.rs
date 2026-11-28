@@ -79,6 +79,9 @@ pub struct Shot {
     pub takeoff: Option<PathBuf>,
     /// Where the frames of a ridden horse's jumps go: `crate::leap`.
     pub leap: Option<PathBuf>,
+    /// Where the frames of a pegasus brought down on a tree go:
+    /// `crate::perch`.
+    pub perch: Option<PathBuf>,
     /// Where the frames of a pegasus left on a deck go: `crate::deck`.
     pub deck: Option<PathBuf>,
     /// Where the pictures of a pegasus flown to the clouds go:
@@ -150,6 +153,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
         herd: None,
         takeoff: None,
         leap: None,
+        perch: None,
         deck: None,
         clouds: None,
         flora: None,
@@ -235,6 +239,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Invocation, String> {
             "--herd" if is_shot => shot.herd = Some(PathBuf::from(value()?)),
             "--takeoff" if is_shot => shot.takeoff = Some(PathBuf::from(value()?)),
             "--leap" if is_shot => shot.leap = Some(PathBuf::from(value()?)),
+            "--perch" if is_shot => shot.perch = Some(PathBuf::from(value()?)),
             "--deck" if is_shot => shot.deck = Some(PathBuf::from(value()?)),
             "--clouds" if is_shot => shot.clouds = Some(PathBuf::from(value()?)),
             "--flora" if is_shot => shot.flora = Some(PathBuf::from(value()?)),
